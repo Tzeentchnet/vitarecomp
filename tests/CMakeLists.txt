@@ -93,4 +93,74 @@ if(VITARECOMP_BUILD_GPU)
         target_compile_options(test_gpu_c_abi PRIVATE -UNDEBUG)
     endif()
     add_test(NAME gpu-c-abi COMMAND test_gpu_c_abi)
+
+    if(WIN32 AND VITARECOMP_VULKAN_BACKEND_FOUND AND
+       TARGET Vitarecomp::DXC)
+        set(_vulkan_shader_source
+            ${CMAKE_CURRENT_SOURCE_DIR}/shaders/vulkan_conformance.hlsl)
+        set(_vulkan_vertex_spirv
+            ${CMAKE_CURRENT_BINARY_DIR}/vulkan_conformance_vs.spv)
+        set(_vulkan_pixel_spirv
+            ${CMAKE_CURRENT_BINARY_DIR}/vulkan_conformance_ps.spv)
+        add_custom_command(
+            OUTPUT ${_vulkan_vertex_spirv}
+            COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+                -spirv
+                -fspv-target-env=vulkan1.3
+                -fvk-use-dx-layout
+                -Ges
+                -WX
+                -T vs_6_0
+                -E main
+                -D VITARECOMP_VERTEX_SHADER=1
+                -Fo ${_vulkan_vertex_spirv}
+                ${_vulkan_shader_source}
+            DEPENDS ${_vulkan_shader_source}
+            VERBATIM
+            COMMENT "Compiling conformance vertex HLSL with pinned DXC"
+        )
+        add_custom_command(
+            OUTPUT ${_vulkan_pixel_spirv}
+            COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+                -spirv
+                -fspv-target-env=vulkan1.3
+                -fvk-use-dx-layout
+                -Ges
+                -WX
+                -T ps_6_0
+                -E main
+                -Fo ${_vulkan_pixel_spirv}
+                ${_vulkan_shader_source}
+            DEPENDS ${_vulkan_shader_source}
+            VERBATIM
+            COMMENT "Compiling conformance pixel HLSL with pinned DXC"
+        )
+        add_executable(test_vulkan_conformance
+            test_vulkan_conformance.cpp
+            ${_vulkan_vertex_spirv}
+            ${_vulkan_pixel_spirv}
+        )
+        target_link_libraries(test_vulkan_conformance PRIVATE
+            vitarecomp::gpu
+            user32
+        )
+        target_compile_features(test_vulkan_conformance PRIVATE cxx_std_20)
+        vitarecomp_project_warnings(test_vulkan_conformance)
+        if(MSVC)
+            target_compile_options(test_vulkan_conformance PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(test_vulkan_conformance PRIVATE -UNDEBUG)
+        endif()
+        add_test(
+            NAME vulkan-conformance
+            COMMAND test_vulkan_conformance
+                ${_vulkan_vertex_spirv}
+                ${_vulkan_pixel_spirv}
+        )
+        set_tests_properties(vulkan-conformance PROPERTIES
+            SKIP_RETURN_CODE 77
+            TIMEOUT 120
+            LABELS "gpu;vulkan;integration"
+        )
+    endif()
 endif()

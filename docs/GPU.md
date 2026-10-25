@@ -3,10 +3,78 @@
 `include/vitarecomp/gpu.h` is the stable C boundary between a recompiled title
 host and the C++20 renderer implementation. The contract is backend-neutral;
 Direct3D 12 and Vulkan are the only production backend identities. This
-foundation intentionally does not pretend that either backend is implemented:
-enumeration reports both identities and their availability, and requesting an
-unavailable backend returns `VITA_GPU_ERROR_BACKEND_UNAVAILABLE`. There is no
-automatic selection or fallback.
+branch implements the Windows Vulkan identity as the production backend.
+Direct3D 12 remains an unavailable identity. Enumeration reports both
+identities and their actual availability, and requesting an unavailable
+backend returns `VITA_GPU_ERROR_BACKEND_UNAVAILABLE`. There is no automatic
+selection and no DX12, null, or mock fallback.
+
+## Windows Vulkan backend
+
+`VITA_GPU_BACKEND_VULKAN` is registered as `vulkan` when CMake finds Vulkan
+headers on Windows. The built library does not import `vulkan-1.dll`: it loads
+the system loader and resolves entry points at runtime. A missing loader, an
+installed loader with no ICD, or no compatible physical device therefore
+remains a structured unavailable result instead of preventing process startup.
+
+The backend requires Vulkan 1.3, a unified graphics/compute/transfer queue,
+`VK_KHR_swapchain`, timeline semaphores, synchronization2, and dynamic
+rendering. These are the native operations used to implement version 1 of the
+contract rather than optional performance features. Adapter enumeration
+reports device type, PCI identifiers, UUID/LUID data when exposed, memory
+heaps, limits, and feature-derived capability flags.
+
+Implemented native paths include:
+
+- Win32 surfaces; exact color-format selection; FIFO, immediate, and mailbox
+  selection with FIFO fallback; swapchain images and views; per-frame acquire
+  and render-finished semaphores and in-flight fences;
+- explicit resize plus out-of-date/suboptimal recreation while preserving
+  borrowed image identity; minimized windows return `INVALID_STATE` until
+  restored instead of spinning or selecting another backend;
+- buffers and images with Vulkan memory-requirement queries and explicit
+  allocation/binding, host uploads, staging uploads, and host-visible
+  readback. The backend intentionally uses no heavyweight allocator because
+  the contract does not yet need suballocation policy;
+- samplers, color/depth views, descriptor layouts/pools/sets, SPIR-V shader
+  modules, graphics and compute pipelines, dynamic rendering, draw/dispatch,
+  copies, push constants, and debug labels;
+- synchronization2 barriers derived from contract stage/access/state values,
+  image layouts, command encoding and validation, timeline-fence submission,
+  CPU waits, presentation, and deterministic reverse-order destruction.
+
+CPU-visible optimal images, non-2D attachment views, arbitrary custom sampler
+border colors, packed depth-stencil upload/readback, 3D-image readback,
+sampled depth-stencil aspect selection, multi-mip storage-image bindings,
+contract v1 stencil operations, direct in-process HLSL compilation,
+multi-submit presentation of one acquired image, and external debug-capture
+integration return `VITA_GPU_ERROR_UNSUPPORTED`; none report success without
+implementing the operation. Use a readback object for capture.
+
+When requested and installed, `VK_LAYER_KHRONOS_validation` and
+`VK_EXT_debug_utils` are enabled. Error-severity validation callbacks become a
+sticky backend error, so conformance cannot pass after a high-severity
+validation message. Debug utils are enabled independently when available for
+object names and command labels.
+
+Configure a Debug build with an installed Vulkan SDK and the pinned DXC:
+
+```powershell
+$env:VULKAN_SDK = 'C:\VulkanSDK\1.4.363.0'
+cmake -S . -B build -G 'Visual Studio 17 2022' -A x64 `
+  -DVITARECOMP_DXC_ROOT=C:\tools\dxc `
+  -DVITARECOMP_DXC_REQUIRED=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+`VITARECOMP_ENABLE_VULKAN=OFF` disables the backend. The
+`vulkan-conformance` CTest opens a real Win32 window, selects `vulkan`, compiles
+the checked-in framework HLSL to SPIR-V with the exact pinned DXC, clears and
+draws a triangle, presents multiple frames, validates readback, minimizes and
+restores, resizes/recreates, and repeats device startup/shutdown. It uses
+CTest's skip return code only when loader/ICD availability probing says Vulkan
+is unavailable.
 
 ## ABI and ownership
 
@@ -142,16 +210,20 @@ or the matching `Microsoft.Direct3D.DXC` package. The repository does not
 mirror, download, or execute an installer.
 
 CMake searches `VITARECOMP_DXC_ROOT`, the environment variable of the same
-name, and then `PATH`. It accepts an executable only when `dxc --version`
-reports the exact pin and exposes it as `Vitarecomp::DXC`. Discovery never
-downloads a tool. The contract and mock tests do not need DXC. A production
-shader/backend build can set `-DVITARECOMP_DXC_REQUIRED=ON` to make a missing
-or mismatched compiler a configure error.
+name, and then `PATH` (including `bin/x64` under an explicit root). It accepts
+an executable only when `dxc --version` reports the exact pin and exposes it
+as `Vitarecomp::DXC`. Discovery never downloads a tool. Contract tests do not
+need DXC; Vulkan conformance is added only when the exact compiler is present.
+A production shader/backend build can set
+`-DVITARECOMP_DXC_REQUIRED=ON` to make a missing or mismatched compiler a
+configure error.
 
 ## Readback and capture
 
 Readback storage is explicitly sized and populated by recorded buffer or
 texture copy commands. Mapping returns a typed byte pointer, byte count, and
-row/slice pitches; the readback must be unmapped before destruction. Debug
-capture is an explicit begin/end scope and reports `UNSUPPORTED` when the
-selected backend has no capture integration.
+row/slice pitches; the readback must be unmapped before destruction. Vulkan
+implements buffer and image readback, including swapchain capture when the
+surface exposes transfer-source usage. Debug capture is an explicit begin/end
+scope and reports `UNSUPPORTED` because external tools such as RenderDoc own
+that integration.

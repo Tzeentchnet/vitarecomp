@@ -287,9 +287,10 @@ reverse-engineering. With thanks to:
 
 ## Renderer contract
 
-The stable C renderer ABI and its Direct3D 12/Vulkan mappings, ownership and
-queue rules, structured errors, shared-HLSL contract, and pinned DXC discovery
-policy are documented in [docs/GPU.md](docs/GPU.md).
+The stable C renderer ABI and production Windows Vulkan backend, including
+adapter/swapchain/resource/command support, ownership and queue rules,
+structured errors, validation-layer conformance, shared-HLSL contract, and
+pinned DXC discovery policy are documented in [docs/GPU.md](docs/GPU.md).
 
 ## Legal
 

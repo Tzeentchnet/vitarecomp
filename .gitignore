@@ -1,4 +1,6 @@
 build/
+build-*/
+build-tools/
 out/
 *.obj
 *.exe

@@ -31,6 +31,8 @@ int main(void) {
     CHECK(vita_gpu_backend_from_name("test-only-null", &backend, &error) ==
           VITA_GPU_ERROR_INVALID_ARGUMENT);
 
+    vita_gpu_backend_info vulkan_info =
+        VITA_GPU_INIT(vita_gpu_backend_info);
     for (uint32_t index = 0; index < vita_gpu_backend_count(); ++index) {
         vita_gpu_backend_info info = VITA_GPU_INIT(vita_gpu_backend_info);
         CHECK(vita_gpu_get_backend_info(index, &info, &error) ==
@@ -38,8 +40,14 @@ int main(void) {
         CHECK(info.backend == (index == 0 ? VITA_GPU_BACKEND_DX12
                                          : VITA_GPU_BACKEND_VULKAN));
         CHECK(strcmp(info.name, index == 0 ? "dx12" : "vulkan") == 0);
-        CHECK(info.available == VITA_GPU_FALSE);
-        CHECK(info.unavailable_reason[0] != '\0');
+        if (index == 0) {
+            CHECK(info.available == VITA_GPU_FALSE);
+            CHECK(info.unavailable_reason[0] != '\0');
+        } else {
+            vulkan_info = info;
+            CHECK(info.available == VITA_GPU_TRUE ||
+                  info.unavailable_reason[0] != '\0');
+        }
     }
 
     {
@@ -56,10 +64,27 @@ int main(void) {
         CHECK(strstr(error.message, "no fallback") != NULL);
 
         desc.backend = VITA_GPU_BACKEND_VULKAN;
-        CHECK(vita_gpu_create_device(&desc, &device, &error) ==
-              VITA_GPU_ERROR_BACKEND_UNAVAILABLE);
-        CHECK(error.backend == VITA_GPU_BACKEND_VULKAN);
-        CHECK(strstr(error.message, "no fallback") != NULL);
+        if (vulkan_info.available == VITA_GPU_TRUE) {
+            uint32_t adapter_count = 0;
+            vita_gpu_device_capabilities capabilities =
+                VITA_GPU_INIT(vita_gpu_device_capabilities);
+            CHECK(vita_gpu_adapter_count(
+                      VITA_GPU_BACKEND_VULKAN, &adapter_count, &error) ==
+                  VITA_GPU_SUCCESS);
+            CHECK(adapter_count > 0);
+            CHECK(vita_gpu_create_device(&desc, &device, &error) ==
+                  VITA_GPU_SUCCESS);
+            CHECK(device.value != 0);
+            CHECK(vita_gpu_device_get_capabilities(
+                      device, &capabilities, &error) == VITA_GPU_SUCCESS);
+            CHECK((capabilities.flags & VITA_GPU_CAPABILITY_GRAPHICS) != 0);
+            CHECK(vita_gpu_destroy_device(device, &error) ==
+                  VITA_GPU_SUCCESS);
+        } else {
+            CHECK(vita_gpu_create_device(&desc, &device, &error) ==
+                  VITA_GPU_ERROR_BACKEND_UNAVAILABLE);
+            CHECK(error.backend == VITA_GPU_BACKEND_VULKAN);
+        }
     }
 
     {

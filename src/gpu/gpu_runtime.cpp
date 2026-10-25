@@ -2351,6 +2351,7 @@ Status DeviceCore::command_begin_render_pass(
         }
         BackendColorAttachment translated;
         translated.target = target->native;
+        translated.state = texture_state;
         translated.load_op = attachment.load_op;
         translated.store_op = attachment.store_op;
         std::copy(std::begin(attachment.clear_color),
@@ -2407,6 +2408,7 @@ Status DeviceCore::command_begin_render_pass(
         }
         command.depth = BackendDepthAttachment{
             target->native,
+            texture_state,
             attachment.depth_load_op,
             attachment.depth_store_op,
             attachment.stencil_load_op,
@@ -3055,7 +3057,8 @@ Status DeviceCore::command_copy_texture_readback(
         return status;
     }
     record->recorded.commands.emplace_back(CopyTextureReadbackCommand{
-        source->native, desc.mip_level, desc.array_layer, destination->native,
+        source->native, source_state, desc.mip_level, desc.array_layer,
+        destination->native,
         desc.destination_offset, desc.row_pitch, desc.slice_pitch});
     return Status::success();
 }

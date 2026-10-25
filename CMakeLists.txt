@@ -61,6 +61,9 @@ target_include_directories(vitarecomp PUBLIC
 # tests so the runtime, generated code, and recompiler remain C-only.
 
 option(VITARECOMP_BUILD_GPU "Build the renderer-neutral GPU contract" ON)
+option(VITARECOMP_ENABLE_VULKAN
+    "Build the Windows Vulkan production backend when headers are available"
+    ON)
 
 function(vitarecomp_project_warnings target)
     if(MSVC)
@@ -95,6 +98,28 @@ if(VITARECOMP_BUILD_GPU)
 
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/VitarecompDxc.cmake)
     vitarecomp_find_dxc()
+
+    if(WIN32 AND VITARECOMP_ENABLE_VULKAN)
+        find_package(Vulkan 1.3 QUIET)
+        if(Vulkan_FOUND)
+            set(VITARECOMP_VULKAN_BACKEND_FOUND TRUE)
+            target_sources(vitarecomp_gpu PRIVATE
+                src/gpu/vulkan_backend.cpp
+            )
+            target_include_directories(vitarecomp_gpu SYSTEM PRIVATE
+                ${Vulkan_INCLUDE_DIRS}
+            )
+            target_compile_definitions(vitarecomp_gpu PRIVATE
+                VITA_GPU_HAS_VULKAN_BACKEND
+            )
+            target_link_libraries(vitarecomp_gpu PRIVATE user32)
+            message(STATUS
+                "vitarecomp: Windows Vulkan production backend enabled")
+        else()
+            message(STATUS
+                "vitarecomp: Vulkan 1.3 headers not found; Vulkan backend unavailable")
+        endif()
+    endif()
 endif()
 
 # --- the recompiler -----------------------------------------------------------

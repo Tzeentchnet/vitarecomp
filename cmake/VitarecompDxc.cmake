@@ -21,7 +21,7 @@ function(vitarecomp_find_dxc)
         HINTS
             "${VITARECOMP_DXC_ROOT}"
             "$ENV{VITARECOMP_DXC_ROOT}"
-        PATH_SUFFIXES bin
+        PATH_SUFFIXES bin bin/x64
         DOC "Pinned DirectX Shader Compiler executable")
 
     set(_dxc_accepted FALSE)
@@ -36,14 +36,18 @@ function(vitarecomp_find_dxc)
             ERROR_STRIP_TRAILING_WHITESPACE
         )
         set(_dxc_output "${_dxc_stdout}\n${_dxc_stderr}")
-        string(REGEX MATCH
+        string(REGEX MATCHALL
             "[0-9]+\\.[0-9]+\\.[0-9]+(\\.[0-9]+)?"
-            _dxc_version
+            _dxc_versions
             "${_dxc_output}"
         )
-        if(_dxc_result EQUAL 0 AND
-           _dxc_version STREQUAL VITARECOMP_DXC_PINNED_VERSION)
+        list(FIND _dxc_versions
+            "${VITARECOMP_DXC_PINNED_VERSION}" _dxc_pinned_position)
+        if(_dxc_result EQUAL 0 AND _dxc_pinned_position GREATER_EQUAL 0)
             set(_dxc_accepted TRUE)
+            set(_dxc_version "${VITARECOMP_DXC_PINNED_VERSION}")
+        else()
+            list(JOIN _dxc_versions ", " _dxc_version)
         endif()
     endif()
 
