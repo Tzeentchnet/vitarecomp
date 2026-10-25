@@ -61,6 +61,10 @@ target_include_directories(vitarecomp PUBLIC
 # tests so the runtime, generated code, and recompiler remain C-only.
 
 option(VITARECOMP_BUILD_GPU "Build the renderer-neutral GPU contract" ON)
+option(VITARECOMP_ENABLE_DX12
+    "Build the production DirectX 12 backend on Windows" ON)
+option(VITARECOMP_BUILD_DX12_CONFORMANCE
+    "Build the Win32 DX12 shader/presentation conformance executable" OFF)
 
 function(vitarecomp_project_warnings target)
     if(MSVC)
@@ -71,6 +75,12 @@ function(vitarecomp_project_warnings target)
         )
     endif()
 endfunction()
+
+if(VITARECOMP_BUILD_DX12_CONFORMANCE AND NOT VITARECOMP_BUILD_GPU)
+    message(FATAL_ERROR
+        "VITARECOMP_BUILD_DX12_CONFORMANCE requires "
+        "VITARECOMP_BUILD_GPU=ON")
+endif()
 
 if(VITARECOMP_BUILD_GPU)
     add_library(vitarecomp_gpu STATIC
@@ -95,6 +105,25 @@ if(VITARECOMP_BUILD_GPU)
 
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/VitarecompDxc.cmake)
     vitarecomp_find_dxc()
+
+    if(WIN32 AND VITARECOMP_ENABLE_DX12)
+        target_sources(vitarecomp_gpu PRIVATE
+            src/gpu/dx12_backend.cpp
+        )
+        target_compile_definitions(vitarecomp_gpu PRIVATE
+            VITA_GPU_HAS_DX12_BACKEND
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+        )
+        target_link_libraries(vitarecomp_gpu PRIVATE
+            d3d12
+            dxgi
+        )
+    elseif(VITARECOMP_BUILD_DX12_CONFORMANCE)
+        message(FATAL_ERROR
+            "VITARECOMP_BUILD_DX12_CONFORMANCE requires Windows and "
+            "VITARECOMP_ENABLE_DX12=ON")
+    endif()
 endif()
 
 # --- the recompiler -----------------------------------------------------------

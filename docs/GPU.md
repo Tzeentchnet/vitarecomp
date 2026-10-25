@@ -2,11 +2,13 @@
 
 `include/vitarecomp/gpu.h` is the stable C boundary between a recompiled title
 host and the C++20 renderer implementation. The contract is backend-neutral;
-Direct3D 12 and Vulkan are the only production backend identities. This
-foundation intentionally does not pretend that either backend is implemented:
-enumeration reports both identities and their availability, and requesting an
-unavailable backend returns `VITA_GPU_ERROR_BACKEND_UNAVAILABLE`. There is no
-automatic selection or fallback.
+Direct3D 12 and Vulkan are the only production backend identities. On Windows,
+the production registry contains the real `dx12` backend when
+`VITARECOMP_ENABLE_DX12=ON` (the default). Vulkan remains unavailable until a
+production implementation is linked. Requesting an unavailable backend returns
+`VITA_GPU_ERROR_BACKEND_UNAVAILABLE`; there is no automatic backend or null/mock
+fallback. See [DX12.md](DX12.md) for native behavior, supported operations, and
+the WARP conformance workflow.
 
 ## ABI and ownership
 
@@ -142,11 +144,19 @@ or the matching `Microsoft.Direct3D.DXC` package. The repository does not
 mirror, download, or execute an installer.
 
 CMake searches `VITARECOMP_DXC_ROOT`, the environment variable of the same
-name, and then `PATH`. It accepts an executable only when `dxc --version`
-reports the exact pin and exposes it as `Vitarecomp::DXC`. Discovery never
-downloads a tool. The contract and mock tests do not need DXC. A production
-shader/backend build can set `-DVITARECOMP_DXC_REQUIRED=ON` to make a missing
-or mismatched compiler a configure error.
+name, its `bin/x64` and `bin` children, and then `PATH`. It accepts an
+executable only when `dxc --version` reports the exact pin and exposes it as
+`Vitarecomp::DXC`. Discovery never downloads a tool. The contract, DX12
+backend, and WARP buffer test do not need DXC. Enabling
+`VITARECOMP_BUILD_DX12_CONFORMANCE` requires the exact compiler and gives an
+actionable configure error if it is absent or mismatched. Other production
+shader builds can set `-DVITARECOMP_DXC_REQUIRED=ON` for the same policy.
+
+The DX12 backend accepts DXIL binary modules. Runtime HLSL module creation
+returns `VITA_GPU_ERROR_SHADER_COMPILER_UNAVAILABLE`; applications compile the
+same HLSL request with the pinned compiler and cache it by
+`vita_gpu_shader_request_key`. The conformance executable demonstrates this
+deterministic build-time path without committing generated shader binaries.
 
 ## Readback and capture
 

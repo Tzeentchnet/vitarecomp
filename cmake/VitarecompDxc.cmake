@@ -21,7 +21,7 @@ function(vitarecomp_find_dxc)
         HINTS
             "${VITARECOMP_DXC_ROOT}"
             "$ENV{VITARECOMP_DXC_ROOT}"
-        PATH_SUFFIXES bin
+        PATH_SUFFIXES bin/x64 bin
         DOC "Pinned DirectX Shader Compiler executable")
 
     set(_dxc_accepted FALSE)
