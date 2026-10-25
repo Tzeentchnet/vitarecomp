@@ -188,7 +188,7 @@ foreach ($relative in $textQualityFiles) {
     if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) {
         throw "Text file does not end with a newline: '$relative'."
     }
-    if ($text -match '(?m)[ `t]+$') {
+    if ($text -match '(?m)[ \t]+$') {
         throw "Text file contains trailing whitespace: '$relative'."
     }
 }
