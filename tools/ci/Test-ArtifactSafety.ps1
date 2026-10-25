@@ -115,7 +115,7 @@ foreach ($entry in $entries) {
             '(?i)(?:^|/)(?:work\.bin|eboot\.bin)$|' +
             '\.(?:zip|7z|rar|vpk|pkg|self|elf|velf|suprx|skprx|' +
             'psarc|rif|rap|key|keys|pem|p12|pfx)$|' +
-            '(?:^|/)(?:generated|generated-title|recompiled|' +
+            '^(?:generated|generated-title|recompiled|' +
             'recomp-output|private-data|dumps?|decrypted|extracted)(?:/|$)|' +
             '(?:^|/)src/game/(?:generated|recompiled)(?:/|$)'
         )
