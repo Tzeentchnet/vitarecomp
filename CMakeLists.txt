@@ -1,9 +1,10 @@
 ﻿# vitarecomp â€” a static-recompilation toolkit for PlayStation Vita games.
 #
-# This file builds two things:
+# This file builds three things:
 #   1. the `vitarecomp` runtime static library â€” what recompiled game code links
 #      against (CPU state, memory, semantic helpers)
 #   2. `armrecomp` â€” the tool that turns a Vita module into C
+#   3. `vitarecomp_gpu` - the optional renderer-neutral C ABI and C++20 core
 #
 # A game repo consumes this repo as a git submodule and does:
 #     add_subdirectory(vitarecomp)
@@ -17,10 +18,13 @@
 # opt-in and the container parser reports compression without needing it.)
 
 cmake_minimum_required(VERSION 3.16)
-project(vitarecomp C)
+project(vitarecomp LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(MSVC)
     add_compile_options(/W3)
@@ -50,6 +54,48 @@ add_library(vitarecomp STATIC
 target_include_directories(vitarecomp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+# --- renderer-neutral GPU contract ------------------------------------------
+#
+# The public surface is C. C++20 is confined to this target and its contract
+# tests so the runtime, generated code, and recompiler remain C-only.
+
+option(VITARECOMP_BUILD_GPU "Build the renderer-neutral GPU contract" ON)
+
+function(vitarecomp_project_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /WX /permissive-)
+    else()
+        target_compile_options(${target} PRIVATE
+            -Wall -Wextra -Wpedantic -Werror
+        )
+    endif()
+endfunction()
+
+if(VITARECOMP_BUILD_GPU)
+    add_library(vitarecomp_gpu STATIC
+        src/gpu/backend_registry.cpp
+        src/gpu/gpu_api.cpp
+        src/gpu/gpu_runtime.cpp
+        src/gpu/gpu_validation.cpp
+        src/gpu/shader_contract.cpp
+    )
+
+    add_library(vitarecomp::gpu ALIAS vitarecomp_gpu)
+
+    target_include_directories(vitarecomp_gpu
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu
+    )
+    target_compile_features(vitarecomp_gpu PRIVATE cxx_std_20)
+    target_compile_definitions(vitarecomp_gpu PRIVATE VITA_GPU_BUILD)
+    vitarecomp_project_warnings(vitarecomp_gpu)
+
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/VitarecompDxc.cmake)
+    vitarecomp_find_dxc()
+endif()
 
 # --- the recompiler -----------------------------------------------------------
 

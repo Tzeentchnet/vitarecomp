@@ -1,0 +1,252 @@
+{
+  "schemaVersion": 1,
+  "license": "GPL-2.0-or-later",
+  "provenance": {
+    "snapshotDate": "2026-10-25",
+    "sourceBase": "ee50eb8644b4184996047f04406486281586935b",
+    "sourceHead": "c505989f8c03dcae922fe93f09b0d30dac21c230",
+    "includesUncommittedSnapshotFixes": true,
+    "dataClassification": "synthetic instruction encodings, addresses, state, and memory only"
+  },
+  "registryVectors": [
+    {
+      "id": "deterministic-non-overlapping-images",
+      "status": "deferred",
+      "inputs": [
+        { "name": "zeta", "begin": "0x00003000", "endExclusive": "0x00003400" },
+        { "name": "alpha", "begin": "0x00001000", "endExclusive": "0x00001800" },
+        { "name": "middle", "begin": "0x00002000", "endExclusive": "0x00002400" }
+      ],
+      "expectedOrder": ["alpha", "middle", "zeta"],
+      "expectedResult": "accept",
+      "integrationPoints": [
+        "tools/armrecomp/main.c",
+        "tools/armrecomp/module.h"
+      ]
+    },
+    {
+      "id": "reject-overlapping-images",
+      "status": "deferred",
+      "inputs": [
+        { "name": "left", "begin": "0x00001000", "endExclusive": "0x00001800" },
+        { "name": "right", "begin": "0x00001700", "endExclusive": "0x00002000" }
+      ],
+      "expectedResult": "reject",
+      "expectedDiagnosticFields": ["left", "right", "overlapBegin", "overlapEndExclusive"],
+      "integrationPoints": [
+        "tools/armrecomp/main.c",
+        "tools/armrecomp/module.h"
+      ]
+    },
+    {
+      "id": "arm-thumb-same-aligned-address",
+      "status": "deferred-pending-canonical-cpu-selection",
+      "entries": [
+        { "address": "0x00001000", "instructionSet": "arm" },
+        { "address": "0x00001000", "instructionSet": "thumb" }
+      ],
+      "expectedResult": "two-distinct-keys",
+      "integrationPoints": [
+        "tools/armrecomp/analyze.c",
+        "tools/armrecomp/emit.c",
+        "include/vitarecomp/dispatch.h",
+        "src/dispatch.c"
+      ]
+    },
+    {
+      "id": "strict-missing-thumb-target",
+      "status": "executed-in-trace-diagnostic-test",
+      "source": "0x00001000",
+      "rawDestination": "0x00002001",
+      "expectedAddress": "0x00002000",
+      "expectedInstructionSet": "thumb",
+      "expectedResult": "named-missing-target",
+      "integrationPoints": [
+        "include/vitarecomp/dispatch.h",
+        "src/dispatch.c",
+        "src/trap.c"
+      ]
+    }
+  ],
+  "semanticVectors": [
+    {
+      "id": "a32-blne-predicate-false",
+      "status": "deferred-pending-canonical-cpu-selection",
+      "instructionSet": "arm",
+      "codeBytesLittleEndian": ["02", "00", "00", "1b"],
+      "initial": { "z": 1, "lr": "0x11111111" },
+      "expected": {
+        "pcAction": "fallthrough-by-4",
+        "lr": "0x11111111",
+        "exception": "none"
+      },
+      "integrationPoint": "tools/armrecomp/emit.c:emit_insn"
+    },
+    {
+      "id": "a32-blx-lr-capture-before-link",
+      "status": "deferred-pending-canonical-cpu-selection",
+      "instructionSet": "arm",
+      "codeBytesLittleEndian": ["3e", "ff", "2f", "e1"],
+      "initial": { "lr": "0x00002001" },
+      "expected": {
+        "rawDestination": "0x00002001",
+        "destinationInstructionSet": "thumb",
+        "lrAction": "current-address-plus-4"
+      },
+      "integrationPoint": "tools/armrecomp/emit.c:emit_insn"
+    },
+    {
+      "id": "a32-bxne-lr-predicate-false",
+      "status": "deferred-pending-canonical-cpu-selection",
+      "instructionSet": "arm",
+      "codeBytesLittleEndian": ["1e", "ff", "2f", "11"],
+      "initial": { "z": 1, "lr": "0x00002001" },
+      "expected": { "pcAction": "fallthrough-by-4", "dispatch": false },
+      "integrationPoint": "tools/armrecomp/emit.c:emit_insn"
+    },
+    {
+      "id": "a32-bxne-register-predicate-false",
+      "status": "deferred-pending-canonical-cpu-selection",
+      "instructionSet": "arm",
+      "codeBytesLittleEndian": ["13", "ff", "2f", "11"],
+      "initial": { "z": 1, "r3": "0x00003001" },
+      "expected": { "pcAction": "fallthrough-by-4", "dispatch": false },
+      "integrationPoint": "tools/armrecomp/emit.c:emit_insn"
+    },
+    {
+      "id": "a32-svcne-predicate-false",
+      "status": "deferred-pending-canonical-cpu-selection",
+      "instructionSet": "arm",
+      "codeBytesLittleEndian": ["07", "00", "00", "1f"],
+      "initial": { "z": 1 },
+      "expected": { "pcAction": "fallthrough-by-4", "supervisorCall": false },
+      "integrationPoint": "tools/armrecomp/emit.c:emit_insn"
+    },
+    {
+      "id": "thumb-tbb-halfword-aligned-pc",
+      "status": "deferred",
+      "instructionSet": "thumb",
+      "instructionAddress": "0x0000100e",
+      "codeBytesLittleEndian": ["df", "e8", "01", "f0"],
+      "initial": { "r1": 0 },
+      "tableByteAtAlignedPc": 1,
+      "expected": {
+        "tableBase": "0x00001010",
+        "destination": "0x00001012"
+      },
+      "integrationPoints": [
+        "tools/armrecomp/decode.c",
+        "tools/armrecomp/analyze.c",
+        "tools/armrecomp/emit.c"
+      ]
+    },
+    {
+      "id": "thumb-vst1-single-lane-rejected",
+      "status": "deferred",
+      "instructionSet": "thumb",
+      "codeBytesLittleEndian": ["80", "f9", "0d", "00"],
+      "expected": { "result": "unsupported-lane-form", "memoryWrites": 0 },
+      "integrationPoints": [
+        "tools/armrecomp/decode.c",
+        "tools/armrecomp/emit.c"
+      ]
+    },
+    {
+      "id": "thumb-it-eq-immediate-move",
+      "status": "deferred",
+      "instructionSet": "thumb",
+      "codeBytesLittleEndian": ["08", "bf", "05", "20", "70", "47"],
+      "cases": [
+        { "initialZ": 1, "initialR0": "0x11111111", "expectedR0": "0x00000005" },
+        { "initialZ": 0, "initialR0": "0x11111111", "expectedR0": "0x11111111" }
+      ],
+      "expectedFlags": "unchanged",
+      "integrationPoint": "tools/armrecomp/emit.c:emit_insn"
+    },
+    {
+      "id": "thumb-wide-ldm-no-writeback",
+      "status": "deferred",
+      "instructionSet": "thumb",
+      "codeBytesLittleEndian": ["90", "e8", "1e", "00"],
+      "initial": { "r0": "0x00004000" },
+      "memoryWords": [
+        "0x11111111",
+        "0x22222222",
+        "0x33333333",
+        "0x44444444"
+      ],
+      "expected": {
+        "r0": "0x00004000",
+        "r1": "0x11111111",
+        "r2": "0x22222222",
+        "r3": "0x33333333",
+        "r4": "0x44444444"
+      },
+      "integrationPoint": "tools/armrecomp/emit.c:emit_insn"
+    },
+    {
+      "id": "fpscr-fz-flushes-positive-subnormal-before-compare",
+      "status": "deferred",
+      "operation": "vcmp.f32",
+      "initial": {
+        "leftBits": "0x00000001",
+        "rightBits": "0x00000000",
+        "fpscr": "0x01000000"
+      },
+      "expected": {
+        "comparison": "equal",
+        "nzcv": "0x60000000"
+      },
+      "integrationPoints": [
+        "include/vitarecomp/vfp.h",
+        "src/vfp.c"
+      ]
+    },
+    {
+      "id": "fpscr-no-fz-preserves-positive-subnormal",
+      "status": "deferred",
+      "operation": "vcmp.f32",
+      "initial": {
+        "leftBits": "0x00000001",
+        "rightBits": "0x00000000",
+        "fpscr": "0x00000000"
+      },
+      "expected": {
+        "comparison": "greater",
+        "nzcv": "0x20000000"
+      },
+      "integrationPoints": [
+        "include/vitarecomp/vfp.h",
+        "src/vfp.c"
+      ]
+    }
+  ],
+  "memoryAndMonitorVectors": [
+    {
+      "id": "checked-straddling-read",
+      "status": "executed-in-test-prior-aot",
+      "region": { "base": "0x00001000", "size": 16 },
+      "operation": { "kind": "read32", "address": "0x0000100e" },
+      "expected": { "value": "0x00000000", "badAccessDelta": 1 }
+    },
+    {
+      "id": "ordinary-write-invalidates-other-core",
+      "status": "deferred-pending-canonical-cpu-selection",
+      "steps": [
+        { "core": 0, "operation": "ldrex32", "address": "0x00004000" },
+        { "core": 1, "operation": "write32", "address": "0x00004000", "value": "0x22222222" },
+        { "core": 0, "operation": "strex32", "address": "0x00004000", "value": "0x33333333" }
+      ],
+      "expected": {
+        "strexStatus": 1,
+        "finalValue": "0x22222222",
+        "serialization": "invalidation-and-write-under-one-monitor-lock"
+      },
+      "integrationPoints": [
+        "include/vitarecomp/mem.h",
+        "src/mem.c",
+        "future canonical thread/CPU owner"
+      ]
+    }
+  ]
+}

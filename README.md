@@ -178,6 +178,7 @@ because a module reaches firmware through pointers as well as through `BL` and
 | **[HLE](docs/HLE.md)** | The firmware surface, measured, and the order of work |
 | **[Lessons](docs/LESSONS.md)** | Corrections and bugs found by running rather than reasoning: `MOVT`, the wrong dominant-instruction-set metric, the SIMD undercount, the PS3-layout SELF header |
 | **[Roadmap](docs/ROADMAP.md)** | The six phases, checked off against what actually runs |
+| **[Prior AOT migration](docs/PRIOR_AOT_MIGRATION.md)** | Canonical test adaptations, retained correctness contracts, machine-readable vectors, and exact deferred integration points |
 
 ## Getting Started
 
@@ -284,6 +285,12 @@ reverse-engineering. With thanks to:
   on the SELF format, the module info structures and the NID scheme is what
   makes any of this tractable.
 
+## Renderer contract
+
+The stable C renderer ABI and its Direct3D 12/Vulkan mappings, ownership and
+queue rules, structured errors, shared-HLSL contract, and pinned DXC discovery
+policy are documented in [docs/GPU.md](docs/GPU.md).
+
 ## Legal
 
 This project contains no proprietary Sony code, encryption keys, or copyrighted
@@ -294,5 +301,19 @@ now and later.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Independent, non-commercial preservation work; not
-affiliated with or endorsed by Sony Interactive Entertainment.
+This fork is a mixed-provenance combined work. Material inherited from
+`sp00nznet/vitarecomp` through
+`6ed4a5c59045706292c8ec03dfe5207ecc4033a4` remains available under the MIT
+License; its verbatim terms are in [LICENSES/MIT.txt](LICENSES/MIT.txt).
+Modifications and additions first authored for this fork are licensed under
+GPL-2.0-or-later, and the modified combined distribution is provided under
+GPL-2.0-or-later as a whole. This does not revoke or replace the upstream MIT
+grant.
+
+See [LICENSE](LICENSE), [NOTICE](NOTICE),
+[LICENSES/GPL-2.0-or-later.txt](LICENSES/GPL-2.0-or-later.txt), and
+[docs/PROVENANCE.md](docs/PROVENANCE.md) for the complete terms and source
+history.
+
+Independent, non-commercial preservation work; not affiliated with or
+endorsed by Sony Interactive Entertainment.

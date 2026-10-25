@@ -1,0 +1,38 @@
+vitarecomp licensing and provenance notice
+
+This distribution is based on sp00nznet/vitarecomp:
+
+    https://github.com/sp00nznet/vitarecomp
+    Starting commit: 6ed4a5c59045706292c8ec03dfe5207ecc4033a4
+
+The inherited source code and documentation through that commit are:
+
+    Copyright (c) 2026 sp00nznet
+    Licensed under the MIT License
+
+The exact upstream license is preserved in LICENSES/MIT.txt. The upstream
+material has not lost its MIT license.
+
+Unless a file carries a different notice, modifications and additions first
+authored for the Tzeentchnet fork after the starting commit are copyright
+their respective contributors and are free software: you can redistribute
+them and/or modify them under the terms of the GNU General Public License as
+published by the Free Software Foundation, either version 2 of the License, or
+(at your option) any later version.
+
+Those modifications and additions are distributed in the hope that they will
+be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+Public License for more details.
+
+The modified combined distribution is provided under GPL-2.0-or-later as a
+whole. This GPL distribution notice does not revoke or supersede the MIT grant
+for identifiable upstream material. Preserve both notices when redistributing
+that material as part of this fork.
+
+The complete GPL text is in LICENSES/GPL-2.0-or-later.txt. Detailed provenance
+and the import ledger are in docs/PROVENANCE.md.
+
+At this foundation point, no code or assets from Shiz0id/vitarecomp,
+soyjxck/vitarecomp, Vita3K, any game, or generated title output have been
+incorporated.

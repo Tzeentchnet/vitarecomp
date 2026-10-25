@@ -1,21 +1,22 @@
-MIT License
+vitarecomp licensing
 
-Copyright (c) 2026 sp00nznet
+This repository is a combined work with compatible license layers.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+The material inherited from sp00nznet/vitarecomp through commit
+6ed4a5c59045706292c8ec03dfe5207ecc4033a4 remains licensed under the MIT
+License. Its verbatim license is in LICENSES/MIT.txt. Nothing in this
+repository withdraws, replaces, or restricts the MIT permissions granted by
+the upstream copyright holder for that material.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Unless a file says otherwise, modifications and additions first authored for
+the Tzeentchnet fork after that starting commit are licensed under the GNU
+General Public License, version 2 or (at your option) any later version
+(GPL-2.0-or-later). The complete license text is in
+LICENSES/GPL-2.0-or-later.txt.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+The modified combined distribution is provided under GPL-2.0-or-later as a
+whole, while the inherited upstream portions continue to be available under
+their MIT terms. Redistributors must retain the applicable copyright and
+license notices.
+
+See NOTICE and docs/PROVENANCE.md for attribution, scope, and source history.
