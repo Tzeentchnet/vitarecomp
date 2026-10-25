@@ -26,6 +26,7 @@
 #ifndef VITARECOMP_HLE_H
 #define VITARECOMP_HLE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /* Give the guest heap a region to allocate from. The runtime cannot pick this
@@ -33,10 +34,36 @@
  * and its stack, which is the host's decision. `malloc` traps until this is
  * called, rather than quietly allocating over something. */
 void vita_heap_init(uint32_t base, uint32_t size);
+void vita_heap_shutdown(void);
 
-/* Bytes handed out and the high-water mark, for telling "the program leaks"
- * from "the heap was too small". */
+uint32_t vita_heap_alloc(uint32_t size, uint32_t alignment);
+int vita_heap_free(uint32_t address);
+uint32_t vita_heap_realloc(uint32_t address, uint32_t size);
+
+/* Live bytes, total capacity and peak live bytes. */
 uint32_t vita_heap_used(void);
 uint32_t vita_heap_size(void);
+uint32_t vita_heap_peak(void);
+
+typedef void (*vita_hle_fn)(void);
+
+typedef struct vita_hle_import {
+    uint32_t library_nid;
+    uint32_t function_nid;
+    const char *library_name;
+    const char *function_name;
+    vita_hle_fn function;
+} vita_hle_import;
+
+int vita_hle_register(const vita_hle_import *imports, size_t count);
+void vita_hle_registry_reset(void);
+int vita_hle_dispatch_import(uint32_t stub_address, uint32_t library_nid,
+                             uint32_t function_nid,
+                             const char *library_name,
+                             const char *function_name);
+int vita_hle_unimplemented(uint32_t stub_address, uint32_t library_nid,
+                           uint32_t function_nid,
+                           const char *library_name,
+                           const char *function_name);
 
 #endif /* VITARECOMP_HLE_H */

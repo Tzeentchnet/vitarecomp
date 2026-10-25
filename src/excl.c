@@ -9,7 +9,6 @@
 
 #if defined(_MSC_VER)
 #include <intrin.h>
-#include <windows.h>
 static volatile long g_memory_lock;
 #else
 static int g_memory_lock;
@@ -24,7 +23,7 @@ static VITA_TLS uint8_t g_monitor_size;
 void vita_memory_lock(void) {
 #if defined(_MSC_VER)
     while (_InterlockedCompareExchange(&g_memory_lock, 1, 0) != 0) {
-        YieldProcessor();
+        _mm_pause();
     }
 #else
     while (__atomic_exchange_n(&g_memory_lock, 1, __ATOMIC_ACQUIRE) != 0) {
@@ -49,10 +48,18 @@ static int valid_size(uint32_t size) {
     return size == 1 || size == 2 || size == 4 || size == 8;
 }
 
+static void note_bad_exclusive(void) {
+#if defined(_MSC_VER)
+    (void)_InterlockedIncrement((volatile long *)&vita_mem_bad_access);
+#else
+    (void)__atomic_add_fetch(&vita_mem_bad_access, 1u, __ATOMIC_RELAXED);
+#endif
+}
+
 uint64_t vita_ldrex(uint32_t addr, uint32_t size) {
     uint64_t value = 0;
     if (!valid_size(size) || (addr & (size - 1u)) != 0) {
-        vita_mem_bad_access++;
+        note_bad_exclusive();
         g_monitor_size = 0;
         return 0;
     }
@@ -102,7 +109,7 @@ void vita_clrex(void) {
 
 void vita_barrier(void) {
 #if defined(_MSC_VER)
-    MemoryBarrier();
+    __faststorefence();
 #else
     __atomic_thread_fence(__ATOMIC_SEQ_CST);
 #endif

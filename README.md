@@ -106,9 +106,10 @@ Stage-by-stage detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Status
 
-**Phases 1–5 complete, phase 6 (HLE) in progress.** The full pipeline runs end
-to end — SELF → ELF → decode → discover → emit → compile → link → run — with no
-key material anywhere in it.
+**Phases 1–5 and the standalone phase-6 runtime foundation are complete; HLE
+expansion remains in progress.** The full pipeline runs end to end — SELF →
+ELF → decode → discover → emit → compile → link → run — with no key material
+anywhere in it.
 
 | Phase | What | Status |
 |---|---|---|
@@ -117,7 +118,7 @@ key material anywhere in it.
 | **3 — Decoder** | ARMv7-A + Thumb-2, width determination, control flow, IT blocks, NEON/VFP classed; `armrecomp cover` over 16 modules | ✅ Complete |
 | **4 — Discovery** | `.sce_module_info`, import/export tables, SCE relocations, recursive descent with distinct ARM/Thumb keys, MOVW/MOVT pointers, jump tables, tail targets, and pointer-shape recovery over code and data | ✅ Complete |
 | **5 — Emitter** | ARM → readable C, literal folding, run-time dispatch, measured NEON/VFP forms, reachability filtering, partitioned output, and deterministic reports. **Generated C compiles with MSVC `/W4 /WX`** | ✅ Complete |
-| **6 — Runtime & HLE** | Runtime landed; NID resolution 519/524 (99.0%); imports bound so every firmware call traps *by name*. `sceGxm` / `sceKernel` / `SceLibc` bodies outstanding | 🔨 In progress |
+| **6 — Runtime & HLE** | Checked guest memory, TLS CPU state, scheduler/threading, allocators, libc/libm, import registry, I/O/FIOS2, ULT synchronization, VFS/PSARC, diagnostics, shutdown/restart, and explicit unsupported results are implemented. Guest `sceGxm`/GXP, media, input, UI/savedata, networking/NP, full ULT fibers, true asynchronous I/O, and title-specific compatibility remain deferred | 🔨 Foundation complete; expansion in progress |
 
 The selected CPU baseline preserves the upstream generated-C ABI while
 integrating the audited downstream analyzer/emitter topics. On a redacted
@@ -142,6 +143,8 @@ Method, trade-offs, and provenance are documented in
 | **[Corpus](docs/CORPUS.md)** | The 15 measured modules, the plaintext finding, the `ET_SCE_EXEC` → `ET_SCE_RELEXEC` era split and why it makes the launch window the hard case |
 | **[Decryption](docs/DECRYPT.md)** | The SELF container, what is encrypted and what is not, and why the QA corpus needs no keys |
 | **[HLE](docs/HLE.md)** | The firmware surface, measured, and the order of work |
+| **[GPU contract](docs/GPU.md)** | Renderer-neutral ownership, production DX12/Vulkan behavior, shader contract, and combined validation |
+| **[DX12](docs/DX12.md)** | Native Direct3D 12 behavior, validation requirements, WARP, and conformance |
 | **[Lessons](docs/LESSONS.md)** | Corrections and bugs found by running rather than reasoning: `MOVT`, the wrong dominant-instruction-set metric, the SIMD undercount, the PS3-layout SELF header |
 | **[Roadmap](docs/ROADMAP.md)** | The six phases, checked off against what actually runs |
 | **[Prior AOT migration](docs/PRIOR_AOT_MIGRATION.md)** | Canonical test adaptations, retained correctness contracts, machine-readable vectors, and exact deferred integration points |

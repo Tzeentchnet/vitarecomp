@@ -284,7 +284,7 @@ void vita_trace_fn(uint32_t addr);
  * which hands the baton over at once instead of burning the slice. */
 #define VITA_SLICE 20000
 
-extern int32_t vita_slice;
+extern VITA_TLS int32_t vita_slice;
 void vita_slice_end(void);
 void vita_spin_wait(uint32_t addr);
 

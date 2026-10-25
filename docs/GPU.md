@@ -248,29 +248,31 @@ that integration.
 
 ## Validation checkpoint
 
-Renderer integration commit
-`b1754cd5464604c70f39253d63b8c6163da20012` was revalidated after merging it
-onto CPU baseline `5c4aa9c7ae1b04c3c832ee399a89c5d853a34df3`. A fresh
-Visual Studio 2022 Debug build used `/W4 /WX /permissive- /bigobj`, found the
-exact pinned DXC, enabled both production registrations, and passed the full
-16/16 CTest suite.
+The renderer integration at
+`b1754cd5464604c70f39253d63b8c6163da20012` was revalidated in the combined
+CPU, DX12, Vulkan, and runtime/HLE mainline. Fresh Visual Studio 2022 Debug and
+RelWithDebInfo builds used `/W4 /WX /permissive- /bigobj`, found pinned DXC
+`1.8.2505.32`, enabled both production registrations, and each passed all
+17 CTests.
 
 The graphics portion passed:
 
 - DX12 WARP buffer upload/copy/readback/shutdown;
-- WARP and available hardware presentation conformance, each for three
-  complete device lifecycles and four frames per lifecycle, including
-  minimize/restore and resize;
+- WARP presentation conformance for three complete lifecycles and four frames
+  per lifecycle, with stable FNV-1a `0xe09ef26b14eba1c3`;
+- available-hardware DX12 presentation conformance on an NVIDIA GeForce RTX
+  5070 for the same three-by-four matrix, with stable FNV-1a
+  `0x9752d43c0a4e9cdf`;
 - Vulkan conformance for two complete device lifecycles with validation
   enabled, including presentation, resize, swapchain recreation, and
-  deterministic readback;
+  deterministic readback; both NVIDIA and AMD adapters were enumerated;
 - an invalid-ICD Vulkan request that remained unavailable instead of falling
   back to DX12; and
-- configure-time rejection of an installed DXC whose reported version did not
-  match `1.8.2505.32`.
+- the full GPU contract and C ABI suites in both build configurations.
 
 No Vulkan error-severity validation callback or other high-severity graphics
 message was reported. Windows Graphics Tools was not installed on the
 validation host, so DX12 conformance reported its documented debug-layer
-warning and ran without an info queue; applications that explicitly request
-DX12 validation still fail rather than silently disabling it.
+warning and ran without an info queue; no DX12 high-severity message was
+emitted, but info-queue coverage was unavailable. Applications that explicitly
+request DX12 validation still fail rather than silently disabling it.

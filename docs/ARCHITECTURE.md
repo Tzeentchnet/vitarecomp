@@ -341,3 +341,70 @@ Every helper exists because the obvious C is **wrong**, not merely verbose:
 
 All of it is pinned by `tests/test_runtime.c`, with the expected values derived
 from the architecture's definition rather than from what the code returns.
+
+### Runtime/HLE ownership
+
+`vita_runtime_init` receives one backed guest-memory range and disjoint heap,
+sysmem, and kernel arenas within it. Guest-address translation uses
+subtraction-based bounds checks so `address + length` cannot wrap into a valid
+range. Generated code retains `vita_mem_ptr` for ABI compatibility; HLE code
+uses the checked copy/string/atomic interfaces and reports explicit failures.
+
+ARM registers, flags, VFP state, tracing state, and the scheduling slice are
+host thread-local. Shared runtime state is protected independently. The
+scheduler gives exactly one guest thread the execution baton at a time and
+saves/restores the guest register image on each handoff. A virtual clock can
+advance by a configured read step and by explicit waits, making timeout and
+slice tests deterministic.
+
+The major ownership boundaries are:
+
+| Owner | State |
+|---|---|
+| runtime | lifecycle, diagnostics, counters, clock and exit requests |
+| memory | guest backing range and checked/exclusive writes |
+| scheduler/thread manager | host workers, guest TLS, stacks and sync objects |
+| HLE registry | immutable copied import metadata and dispatch functions |
+| VFS | canonical directory/PSARC mounts and open handles |
+| native host (future) | window/devices/presentation and mount configuration |
+
+Callbacks cross these boundaries only after the owning lock is released.
+Guest callbacks run through the generated dispatch table while that guest
+thread holds the scheduler baton. Runtime diagnostics and exit hooks likewise
+run outside the runtime-state mutex. TLS teardown receives the scheduler-owned
+slot directly; it does not call back through scheduler initialization while
+the scheduler boot mutex is held.
+
+### Imports and unsupported behavior
+
+The generated static import stubs remain supported. A host may additionally
+register imports dynamically by `(library NID, function NID)` or by
+`(library name, function name)`. Dispatch copies diagnostic names while holding
+the registry lock, releases the lock, and only then invokes HLE code. Missing
+imports emit a structured diagnostic and return `VITA_ERROR_UNIMPLEMENTED`;
+there is no generic success fallback.
+
+### Host filesystem and archives
+
+The public VFS is the only path from guest names to host files. It forces
+`app0:` read-only, canonicalizes existing targets (or the existing parent for
+creation), and verifies containment after resolving symlinks/reparse points.
+Directory and PSARC mounts share file, directory, stat, seek, and enumeration
+operations. PSARC parsing bounds the header, TOC, block table, manifest,
+packed spans, and archive offsets before allocation or I/O.
+
+SceIofilemgr is layered on the VFS. FIOS2 adds completed-operation handles,
+overlays, and archive mount handles but uses the same path resolver. Its
+asynchronous API is currently a deterministic synchronous backend.
+
+### Shutdown contract
+
+The native host must stop requesting new guest work and join or otherwise
+quiesce executing guest workers before `vita_runtime_shutdown`. Arbitrarily
+cancelling generated C at a host instruction boundary is not safe. Shutdown
+then runs registered C++ destructors, closes FIOS/I/O/VFS handles, releases
+thread TLS and stacks, clears synchronization/callback tables, resets
+allocators/imports/memory/clock, and supports a fresh initialization.
+
+Shutdown is idempotent. Tests cover live-handle cleanup, main and worker TLS
+teardown, destructor dispatch, counter convergence, and runtime restart.

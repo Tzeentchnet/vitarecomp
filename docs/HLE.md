@@ -16,6 +16,102 @@ resolved 519 of 524 imported functions (99.0%)
 
 **519 of 524 resolved.** That is the HLE work list, derived rather than guessed.
 
+## Standalone runtime boundary
+
+The runtime is a title-neutral library. It owns guest memory, CPU/TLS state,
+the guest scheduler, synchronization objects, import dispatch, allocators,
+clock state, and the VFS. A future native host owns process setup, the window,
+devices, presentation, and policy. The only host-facing hooks in this layer are
+the diagnostic and exit callbacks in `runtime.h`, the minimal `host.h`
+contract, and mounts explicitly supplied through `vfs.h`.
+
+`app0:` is always read-only, even when a host accidentally requests a writable
+mount. Other mounts opt into write access. Guest paths are normalized beneath
+their mount and reject parent traversal, extra drive separators, control
+characters, host absolute paths, and symlink/reparse escapes. PSARC archives
+are read-only mounts and use the same normalized namespace.
+
+## Implemented foundation
+
+The implemented, synthetic-test-covered categories are:
+
+- checked guest ranges, copies, moves, fills, bounded strings, atomics, and
+  exclusive-monitor invalidation;
+- thread-local ARM/VFP state, deterministic baton scheduling, thread/TLS
+  lifecycle, mutexes, semaphores, conditions, event flags, message pipes, and
+  callbacks;
+- reusable/coalescing libc heap, mspace, sysmem blocks, runtime stacks, and
+  per-thread kernel TLS storage;
+- NID/library and name/library HLE registration with structured diagnostics;
+  a missing import returns `VITA_ERROR_UNIMPLEMENTED`, sets the guest error
+  result, and never reports success;
+- SceLibc/SceLibm forwarding with checked guest boundaries, C++ guards and
+  exit destructors, SceIofilemgr, synchronous FIOS2 operations/overlays/archive
+  mounts, and the ULT synchronization subset;
+- directory and read-only PSARC mounts, file/directory/stat/seek operations,
+  virtual or host clocks, lifecycle counters, restart, and clean shutdown.
+
+FIOS2 asynchronous entry points currently execute synchronously and return a
+completed operation handle whose result remains queryable until deletion. ULT
+implements the synchronization/storage subset, not its fiber scheduler.
+
+## Explicitly deferred
+
+The production DX12/Vulkan renderer contract is available to a native host,
+but the guest firmware bridge to it is not. Deferred HLE categories are:
+
+- SceGxm guest ABI, GXP parsing/reflection and shader translation, scene/draw
+  semantics, display queues, and guest-to-host resource mapping;
+- audio, codecs, video playback, camera, microphone, and other media devices;
+- controller, touch, motion/sensor, keyboard, and IME input;
+- common dialogs, savedata UI/policy, trophies, app utilities, and commerce;
+- networking, HTTP/SSL, NP/sign-in, matchmaking, and online services;
+- the ULT fiber scheduler and genuinely asynchronous FIOS2 execution (the
+  implemented synchronization and completed-operation subsets remain);
+- power, location, near/adhoc, and other device/platform services; and
+- title-specific patches, timing exceptions, and compatibility behavior.
+
+Unsupported APIs must use `vita_hle_unimplemented` (or a documented firmware
+error) rather than a zero/success placeholder. Vita3K may be compared as a
+separate behavioral oracle; it is not linked, vendored, or required at
+runtime.
+
+## Combined validation checkpoint
+
+The runtime foundation at
+`91c91ea1c6d291ba3fcd53dca3ba9c843be36d10` was merged with the CPU and
+DX12/Vulkan mainline rooted at
+`eb49fca7e2074771a0a84a0c5a6f2b5b7c5d1d46`. Visual Studio 2022 Debug and
+RelWithDebInfo builds retained `/W4 /WX /permissive-`; each configuration
+passed all 17 CTests, including all three public homebrew
+extract/emit/repeat/compile fixtures. The focused runtime, foundation,
+prior-AOT, and strict-dispatch set passed 4/4, as did the supported MSVC
+AddressSanitizer set.
+
+The shutdown regression initializes main-thread TLS before teardown. It would
+deadlock if teardown reacquired scheduler initialization while holding the
+scheduler boot lock. Teardown instead releases the scheduler-owned TLS slot
+directly. Scheduler handover callbacks, guest callbacks, diagnostics, and exit
+hooks are likewise invoked only after their owning lock is released. All
+framework test executables route MSVC assertion/abort reporting to stderr and
+disable interactive crash UI.
+
+## Extension rules
+
+1. Derive an API from a public prototype/NID and record provenance.
+2. Validate every guest pointer, range, string, size calculation, and output
+   before touching host memory. Preserve the raw generated-code ABI only where
+   compatibility requires it.
+3. Keep shared host state synchronized, but release internal locks before
+   diagnostics, exit hooks, or guest callbacks. Do not solve an ownership bug
+   by making a mutex recursive.
+4. Route filesystem access through the VFS; never embed host paths or
+   title-specific mount assumptions.
+5. Add a synthetic success case, boundary/failure cases, and shutdown/restart
+   coverage. An unsupported call must fail explicitly.
+6. Keep optional emulators and proprietary fixtures out of the dependency and
+   test graph.
+
 ## Why the database is loaded, not vendored
 
 `vita-headers` is MIT, so bundling it would be permitted. It is loaded from a
@@ -116,12 +212,12 @@ separate process and compared against. No code copied, linked, or vendored.
    an unimplemented import is a named trap rather than an unresolved symbol.
 2. **The shallow 92.** State setters, texture accessors, memory mapping — bulk
    but not depth.
-3. **`SceLibc` / `SceLibm` (96 functions).** Largely forwardable to the host C
-   library.
+3. **`SceLibc` / `SceLibm` and the runtime foundation.** Implemented with
+   checked guest boundaries; additional imports remain incremental.
 4. **GXP reflection.** Bounded once the container format is mapped.
 5. **The pipeline.** `BeginScene`/`Draw`/`EndScene` against a host graphics API.
-6. **GXP shader translation.** The compiler. Last, because everything above can
-   be built and tested against a stub that returns a fixed shader.
+6. **GXP shader translation.** The compiler. Last; until implemented, shader
+   creation must fail explicitly rather than returning a success-shaped object.
 
 ## What a single-player bring-up does not need
 

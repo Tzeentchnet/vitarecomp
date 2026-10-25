@@ -12,9 +12,14 @@
  */
 
 #include "vitarecomp/hle.h"
+#include "vitarecomp/dispatch.h"
 #include "vitarecomp/recomp_rt.h"
+#include "vitarecomp/runtime.h"
+#include "sched.h"
 
+#include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 
 /* --- the guest/host boundary ------------------------------------------------ */
 
@@ -45,41 +50,148 @@ static uint32_t gstrlen(uint32_t addr, const char *who) {
     return (uint32_t)((const uint8_t *)nul - p);
 }
 
-/* --- C++ runtime and CRT init ------------------------------------------------
- *
- * The first firmware the module touches, before any of its own code runs. All
- * of these are bookkeeping for a dynamic-linking and multi-threading world
- * that a statically recompiled single module does not have, which is why they
- * are so short — they are correct as no-ops, not stubbed as ones.
- */
+/* --- C++ runtime and CRT init ------------------------------------------------ */
+
+typedef struct atexit_record {
+    uint32_t function;
+    uint32_t argument;
+    uint32_t dso;
+    int active;
+} atexit_record;
+
+static once_flag g_atexit_once = ONCE_FLAG_INIT;
+static mtx_t g_atexit_lock;
+static atexit_record *g_atexit_records;
+static size_t g_atexit_count;
+static size_t g_atexit_capacity;
+
+static void atexit_once(void) {
+    (void)mtx_init(&g_atexit_lock, mtx_plain);
+}
+
+static int register_atexit(uint32_t function, uint32_t argument,
+                           uint32_t dso) {
+    const atexit_record record = { function, argument, dso, 1 };
+    if (!function) return -1;
+    call_once(&g_atexit_once, atexit_once);
+    mtx_lock(&g_atexit_lock);
+    if (g_atexit_count == g_atexit_capacity) {
+        if (g_atexit_capacity >
+            SIZE_MAX / 2 / sizeof(*g_atexit_records)) {
+            mtx_unlock(&g_atexit_lock);
+            return -1;
+        }
+        size_t capacity = g_atexit_capacity ? g_atexit_capacity * 2 : 16;
+        atexit_record *records =
+            (atexit_record *)realloc(g_atexit_records,
+                                     capacity * sizeof(*records));
+        if (!records) {
+            mtx_unlock(&g_atexit_lock);
+            return -1;
+        }
+        g_atexit_records = records;
+        g_atexit_capacity = capacity;
+    }
+    g_atexit_records[g_atexit_count++] = record;
+    mtx_unlock(&g_atexit_lock);
+    return 0;
+}
+
+void vita_libc_finalize(uint32_t dso) {
+    call_once(&g_atexit_once, atexit_once);
+    for (;;) {
+        atexit_record record = { 0 };
+        mtx_lock(&g_atexit_lock);
+        for (size_t i = g_atexit_count; i; --i) {
+            atexit_record *candidate = &g_atexit_records[i - 1];
+            if (!candidate->active || (dso && candidate->dso != dso))
+                continue;
+            record = *candidate;
+            candidate->active = 0;
+            break;
+        }
+        mtx_unlock(&g_atexit_lock);
+        if (!record.active) break;
+        r0 = record.argument;
+        vita_dispatch(vita_last_pc, record.function);
+    }
+}
+
+void vita_libc_reset(void) {
+    call_once(&g_atexit_once, atexit_once);
+    mtx_lock(&g_atexit_lock);
+    free(g_atexit_records);
+    g_atexit_records = NULL;
+    g_atexit_count = 0;
+    g_atexit_capacity = 0;
+    mtx_unlock(&g_atexit_lock);
+}
 
 /* Records the DSO handle used to key static destructors. There is one module
  * and it never unloads, so there is nothing to key. */
 void vita_hle___cxa_set_dso_handle_main(void) { }
 
-/* Register a destructor to run at exit. Nothing here runs exit — the host
- * stops the program — so registration succeeds and the list is never walked.
- * Returning nonzero would make the C++ runtime treat static construction as
- * having failed. */
-void vita_hle___cxa_atexit(void)   { r0 = 0; }
-void vita_hle___aeabi_atexit(void) { r0 = 0; }
+void vita_hle___cxa_atexit(void) {
+    r0 = (uint32_t)register_atexit(r0, r1, r2);
+}
+void vita_hle___aeabi_atexit(void) {
+    r0 = (uint32_t)register_atexit(r1, r0, r2);
+}
+void vita_hle___cxa_finalize(void) {
+    vita_libc_finalize(r0);
+}
 
-/* Guards for function-local static initialisation. The guard object's first
- * byte is "initialised"; acquire returns nonzero when the caller should run
- * the constructor.
- *
- * ponytail: single-threaded, so no contention state and no waiting. Two
- * recompiled threads reaching the same static would both construct it; revisit
- * when sceKernel threads land. */
+/* Guards for function-local static initialisation. Word value 2 is the
+ * in-progress state; bit zero is the ABI's completed byte. */
 void vita_hle___cxa_guard_acquire(void) {
-    r0 = vita_read8(r0) ? 0u : 1u;
+    uint32_t address = r0;
+    if (!vita_mem_ptr(address, 4)) {
+        vita_trap_unimpl(address, 4, "__cxa_guard_acquire: bad guard");
+        r0 = 0;
+        return;
+    }
+    for (;;) {
+        uint32_t state = vita_read32(address);
+        if (state & 1u) {
+            r0 = 0;
+            return;
+        }
+        if (state == 0) {
+            uint32_t observed = 0;
+            if (vita_mem_compare_exchange32(address, 0, 2, &observed) ==
+                VITA_OK) {
+                r0 = 1;
+                return;
+            }
+        }
+        (void)vita_sched_block(VW_MUTEX, address, 0);
+    }
 }
 void vita_hle___cxa_guard_release(void) {
-    vita_write8(r0, 1);
+    uint32_t address = r0;
+    if (!vita_mem_ptr(address, 4)) {
+        vita_trap_unimpl(address, 4, "__cxa_guard_release: bad guard");
+        return;
+    }
+    vita_write32(address, 1);
+    vita_sched_wake(VW_MUTEX, address, 1);
+}
+void vita_hle___cxa_guard_abort(void) {
+    uint32_t address = r0;
+    if (!vita_mem_ptr(address, 4)) {
+        vita_trap_unimpl(address, 4, "__cxa_guard_abort: bad guard");
+        return;
+    }
+    vita_write32(address, 0);
+    vita_sched_wake(VW_MUTEX, address, 1);
 }
 
-/* Thread-local storage registration for the module. No TLS, one thread. */
-void vita_hle__sceLdTlsRegisterModuleInfo(void) { r0 = 0; }
+/* Static module TLS is configured by the native host through vita_tls_init.
+ * The loader-private registration structure is not interpreted here. */
+void vita_hle__sceLdTlsRegisterModuleInfo(void) {
+    (void)vita_hle_unimplemented(vita_last_pc, 0, 0,
+                                 "SceLibc", "_sceLdTlsRegisterModuleInfo");
+}
 
 /* --- errno -------------------------------------------------------------------
  *
@@ -88,74 +200,272 @@ void vita_hle__sceLdTlsRegisterModuleInfo(void) { r0 = 0; }
  * be a host int. It is carved out of the heap on first use for that reason.
  */
 
-static uint32_t g_errno_slot;
+static VITA_TLS uint32_t g_errno_slot;
 
-void vita_hle__sceLibcErrnoLoc(void) { r0 = g_errno_slot; }
-
-/* --- the guest heap ----------------------------------------------------------
- *
- * ponytail: a bump allocator. `free` is a no-op and `realloc` always copies to
- * fresh space, so a program that churns allocations will exhaust the region
- * even though its live set is small. That is the known ceiling, and it is the
- * right first move: C++ static initialisation allocates once and holds, which
- * is exactly the phase this needs to get through. Replace with a real free
- * list when a run dies on exhaustion rather than before.
- */
-
-static uint32_t g_heap_base, g_heap_size, g_heap_used;
-
-void vita_heap_init(uint32_t base, uint32_t size) {
-    g_heap_base = base;
-    g_heap_size = size;
-    g_heap_used = 0;
-    /* One word up front, so errno has somewhere to live before any malloc. */
-    if (size >= 4) { g_errno_slot = base; g_heap_used = 4; }
+void vita_hle__sceLibcErrnoLoc(void) {
+    if (!g_errno_slot) {
+        g_errno_slot = vita_heap_alloc(4, 4);
+        if (g_errno_slot) vita_write32(g_errno_slot, 0);
+    }
+    r0 = g_errno_slot;
 }
 
-uint32_t vita_heap_used(void) { return g_heap_used; }
-uint32_t vita_heap_size(void) { return g_heap_size; }
+/* --- the guest heap ---------------------------------------------------------- */
 
-static uint32_t heap_alloc(uint32_t n) {
-    if (!g_heap_size) { vita_trap_unimpl(0, n, "malloc before vita_heap_init"); return 0; }
+typedef struct heap_chunk {
+    uint32_t address;
+    uint32_t size;
+    int used;
+} heap_chunk;
 
-    /* Align the OFFSET, not just the size. Rounding sizes up keeps the cursor
-     * aligned only while every reservation does the same, and the errno slot
-     * does not — it is one word. Aligning here does not care who moved the
-     * cursor or by how much. */
-    uint32_t at_off = (g_heap_used + 7u) & ~7u;
-    uint32_t size   = (n + 7u) & ~7u;
-    if (size < n || at_off < g_heap_used) return 0;         /* either add wrapped */
-    if (at_off > g_heap_size || size > g_heap_size - at_off) {
-        vita_trap_unimpl(g_heap_used, n, "guest heap exhausted");
+static once_flag g_heap_once = ONCE_FLAG_INIT;
+static mtx_t g_heap_lock;
+static heap_chunk *g_heap_chunks;
+static uint32_t g_heap_chunk_count, g_heap_chunk_capacity;
+static uint32_t g_heap_base, g_heap_size, g_heap_used, g_heap_peak;
+
+static void heap_once(void) {
+    (void)mtx_init(&g_heap_lock, mtx_plain);
+}
+
+static int heap_insert(uint32_t at, heap_chunk value) {
+    if (g_heap_chunk_count == g_heap_chunk_capacity) {
+        uint32_t capacity = g_heap_chunk_capacity
+                          ? g_heap_chunk_capacity * 2u : 64u;
+        if (capacity < g_heap_chunk_capacity ||
+            capacity > UINT32_MAX / sizeof(heap_chunk))
+            return 0;
+        heap_chunk *chunks = (heap_chunk *)realloc(
+            g_heap_chunks, (size_t)capacity * sizeof(heap_chunk));
+        if (!chunks) return 0;
+        g_heap_chunks = chunks;
+        g_heap_chunk_capacity = capacity;
+    }
+    memmove(g_heap_chunks + at + 1, g_heap_chunks + at,
+            (size_t)(g_heap_chunk_count - at) * sizeof(heap_chunk));
+    g_heap_chunks[at] = value;
+    g_heap_chunk_count++;
+    return 1;
+}
+
+static void heap_erase(uint32_t at) {
+    memmove(g_heap_chunks + at, g_heap_chunks + at + 1,
+            (size_t)(g_heap_chunk_count - at - 1) * sizeof(heap_chunk));
+    g_heap_chunk_count--;
+}
+
+void vita_heap_init(uint32_t base, uint32_t size) {
+    call_once(&g_heap_once, heap_once);
+    mtx_lock(&g_heap_lock);
+    free(g_heap_chunks);
+    g_heap_chunks = NULL;
+    g_heap_chunk_count = 0;
+    g_heap_chunk_capacity = 0;
+    g_heap_base = 0;
+    g_heap_size = 0;
+    g_heap_used = 0;
+    g_heap_peak = 0;
+    g_errno_slot = 0;
+
+    void *region = NULL;
+    if (size >= 16 && vita_mem_range(base, size, &region) == VITA_OK) {
+        (void)region;
+        g_heap_base = base;
+        g_heap_size = size;
+        g_errno_slot = base;
+        vita_write32(base, 0);
+        heap_chunk available = { base + 8u, size - 8u, 0 };
+        (void)heap_insert(0, available);
+    }
+    mtx_unlock(&g_heap_lock);
+}
+
+void vita_heap_shutdown(void) {
+    call_once(&g_heap_once, heap_once);
+    mtx_lock(&g_heap_lock);
+    free(g_heap_chunks);
+    g_heap_chunks = NULL;
+    g_heap_chunk_count = 0;
+    g_heap_chunk_capacity = 0;
+    g_heap_base = g_heap_size = g_heap_used = g_heap_peak = 0;
+    g_errno_slot = 0;
+    mtx_unlock(&g_heap_lock);
+}
+
+uint32_t vita_heap_used(void) {
+    uint32_t value;
+    call_once(&g_heap_once, heap_once);
+    mtx_lock(&g_heap_lock);
+    value = g_heap_used;
+    mtx_unlock(&g_heap_lock);
+    return value;
+}
+
+uint32_t vita_heap_size(void) {
+    uint32_t value;
+    call_once(&g_heap_once, heap_once);
+    mtx_lock(&g_heap_lock);
+    value = g_heap_size;
+    mtx_unlock(&g_heap_lock);
+    return value;
+}
+
+uint32_t vita_heap_peak(void) {
+    uint32_t value;
+    call_once(&g_heap_once, heap_once);
+    mtx_lock(&g_heap_lock);
+    value = g_heap_peak;
+    mtx_unlock(&g_heap_lock);
+    return value;
+}
+
+uint32_t vita_heap_alloc(uint32_t n, uint32_t alignment) {
+    if (!n) return 0;
+    if (alignment < 8) alignment = 8;
+    if ((alignment & (alignment - 1u)) != 0) return 0;
+    if (n > UINT32_MAX - 7u) return 0;
+    uint32_t size = (n + 7u) & ~7u;
+
+    call_once(&g_heap_once, heap_once);
+    mtx_lock(&g_heap_lock);
+    if (!g_heap_size) {
+        mtx_unlock(&g_heap_lock);
         return 0;
     }
-    g_heap_used = at_off + size;
-    return g_heap_base + at_off;
+    for (uint32_t i = 0; i < g_heap_chunk_count; i++) {
+        heap_chunk *chunk = &g_heap_chunks[i];
+        if (chunk->used) continue;
+        uint64_t aligned64 =
+            ((uint64_t)chunk->address + alignment - 1u) & ~(uint64_t)(alignment - 1u);
+        if (aligned64 > UINT32_MAX) continue;
+        uint32_t aligned = (uint32_t)aligned64;
+        if (aligned < chunk->address ||
+            aligned - chunk->address > chunk->size)
+            continue;
+        uint32_t before = aligned - chunk->address;
+        if (size > chunk->size - before) continue;
+        uint32_t after = chunk->size - before - size;
+
+        if (before) {
+            heap_chunk head = { chunk->address, before, 0 };
+            if (!heap_insert(i, head)) break;
+            i++;
+            chunk = &g_heap_chunks[i];
+        }
+        if (after) {
+            heap_chunk tail = { aligned + size, after, 0 };
+            if (!heap_insert(i + 1, tail)) break;
+            chunk = &g_heap_chunks[i];
+        }
+        chunk->address = aligned;
+        chunk->size = size;
+        chunk->used = 1;
+        g_heap_used += size;
+        if (g_heap_used > g_heap_peak) g_heap_peak = g_heap_used;
+        mtx_unlock(&g_heap_lock);
+        return aligned;
+    }
+    mtx_unlock(&g_heap_lock);
+    return 0;
+}
+
+int vita_heap_free(uint32_t address) {
+    if (!address) return VITA_OK;
+    call_once(&g_heap_once, heap_once);
+    mtx_lock(&g_heap_lock);
+    for (uint32_t i = 0; i < g_heap_chunk_count; i++) {
+        heap_chunk *chunk = &g_heap_chunks[i];
+        if (chunk->address != address) continue;
+        if (!chunk->used) {
+            mtx_unlock(&g_heap_lock);
+            return VITA_ERROR_INVALID_ARGUMENT;
+        }
+        chunk->used = 0;
+        g_heap_used -= chunk->size;
+        if (i + 1 < g_heap_chunk_count && !g_heap_chunks[i + 1].used) {
+            chunk->size += g_heap_chunks[i + 1].size;
+            heap_erase(i + 1);
+        }
+        if (i && !g_heap_chunks[i - 1].used) {
+            g_heap_chunks[i - 1].size += chunk->size;
+            heap_erase(i);
+        }
+        mtx_unlock(&g_heap_lock);
+        return VITA_OK;
+    }
+
+    mtx_unlock(&g_heap_lock);
+    return VITA_ERROR_INVALID_ARGUMENT;
+}
+
+void vita_libc_thread_shutdown(void) {
+    if (g_errno_slot && g_errno_slot != g_heap_base)
+        (void)vita_heap_free(g_errno_slot);
+    g_errno_slot = 0;
+}
+
+static uint32_t heap_allocation_size(uint32_t address) {
+    for (uint32_t i = 0; i < g_heap_chunk_count; i++)
+        if (g_heap_chunks[i].used && g_heap_chunks[i].address == address)
+            return g_heap_chunks[i].size;
+    return 0;
+}
+
+uint32_t vita_heap_realloc(uint32_t address, uint32_t n) {
+    if (!address) return vita_heap_alloc(n, 8);
+    if (!n) {
+        (void)vita_heap_free(address);
+        return 0;
+    }
+    call_once(&g_heap_once, heap_once);
+    mtx_lock(&g_heap_lock);
+    uint32_t old_size = heap_allocation_size(address);
+    mtx_unlock(&g_heap_lock);
+    if (!old_size) return 0;
+    if (old_size >= n) return address;
+
+    uint32_t replacement = vita_heap_alloc(n, 8);
+    if (!replacement) return 0;
+    void *dst = NULL;
+    void *src = NULL;
+    if (vita_mem_range(replacement, old_size, &dst) != VITA_OK ||
+        vita_mem_range(address, old_size, &src) != VITA_OK) {
+        (void)vita_heap_free(replacement);
+        return 0;
+    }
+    (void)dst;
+    (void)src;
+    (void)vita_mem_move_guest(replacement, address, old_size);
+    (void)vita_heap_free(address);
+    return replacement;
 }
 
 void vita_hle_malloc(void) {
     uint32_t n = r0;
-    r0 = n ? heap_alloc(n) : 0u;
+    r0 = vita_heap_alloc(n, 8);
 }
 
-void vita_hle_free(void) { /* bump allocator: nothing to return */ }
+void vita_hle_free(void) {
+    uint32_t address = r0;
+    (void)vita_heap_free(address);
+}
 
 void vita_hle_realloc(void) {
-    uint32_t old = r0, n = r1;
-    if (!n)   { r0 = 0; return; }
-    if (!old) { r0 = heap_alloc(n); return; }
-    /* The old size is unknown to a bump allocator, so copy what is certainly
-     * readable and no more. Over-copying here would read past the original
-     * allocation; under-copying loses data the caller still owns, so the bound
-     * is what the region can back rather than a guess at the old size. */
-    uint32_t at = heap_alloc(n);
-    if (!at) { r0 = 0; return; }
-    uint32_t avail = vita_mem_avail(old);
-    uint32_t copy  = n < avail ? n : avail;
-    void *d = gp(at, copy, "realloc dst");
-    void *s = gp(old, copy, "realloc src");
-    if (d && s) memmove(d, s, copy);
-    r0 = at;
+    r0 = vita_heap_realloc(r0, r1);
+}
+
+void vita_hle_calloc(void) {
+    uint32_t count = r0, size = r1;
+    if (count && size > UINT32_MAX / count) {
+        r0 = 0;
+        return;
+    }
+    uint32_t bytes = count * size;
+    uint32_t address = vita_heap_alloc(bytes, 8);
+    if (address && bytes) {
+        (void)vita_mem_set_guest(address, 0, bytes);
+    }
+    r0 = address;
 }
 
 /* --- memory ------------------------------------------------------------------
@@ -168,18 +478,18 @@ void vita_hle_memcpy(void) {
     /* memmove, not memcpy: the guest may hand over overlapping regions, and
      * while ARM's memcpy is equally undefined there, the host's would corrupt
      * rather than trap and the bug would surface far away. */
-    if (d && s) memmove(d, s, r2);
+    if (d && s) (void)vita_mem_move_guest(r0, r1, r2);
     /* memcpy returns its destination. */
 }
 
 void vita_hle_memmove(void) {
     void *d = gp(r0, r2, "memmove dst"), *s = gp(r1, r2, "memmove src");
-    if (d && s) memmove(d, s, r2);
+    if (d && s) (void)vita_mem_move_guest(r0, r1, r2);
 }
 
 void vita_hle_memset(void) {
     void *d = gp(r0, r2, "memset");
-    if (d) memset(d, (int)(r1 & 0xFF), r2);
+    if (d) (void)vita_mem_set_guest(r0, (uint8_t)r1, r2);
 }
 
 void vita_hle_memcmp(void) {
@@ -220,7 +530,7 @@ void vita_hle_strncmp(void) {
 void vita_hle_strcpy(void) {
     uint32_t n = gstrlen(r1, "strcpy src") + 1;
     void *d = gp(r0, n, "strcpy dst"), *s = gp(r1, n, "strcpy src");
-    if (d && s) memcpy(d, s, n);
+    if (d && s) (void)vita_mem_move_guest(r0, r1, n);
 }
 
 void vita_hle_strncpy(void) {
@@ -229,15 +539,15 @@ void vita_hle_strncpy(void) {
     if (!d) return;
     uint32_t copy = l < n ? l : n;
     void *s = gp(r1, copy, "strncpy src");
-    if (s) memcpy(d, s, copy);
+    if (s) (void)vita_mem_move_guest(r0, r1, copy);
     /* strncpy pads the remainder with NULs — not just one, all of them. */
-    if (copy < n) memset((uint8_t *)d + copy, 0, n - copy);
+    if (copy < n) (void)vita_mem_set_guest(r0 + copy, 0, n - copy);
 }
 
 void vita_hle_strcat(void) {
     uint32_t ld = gstrlen(r0, "strcat dst"), ls = gstrlen(r1, "strcat src");
     void *d = gp(r0 + ld, ls + 1, "strcat dst"), *s = gp(r1, ls + 1, "strcat src");
-    if (d && s) memcpy(d, s, ls + 1);
+    if (d && s) (void)vita_mem_move_guest(r0 + ld, r1, ls + 1);
 }
 
 void vita_hle_strchr(void) {

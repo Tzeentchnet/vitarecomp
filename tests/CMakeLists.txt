@@ -102,6 +102,19 @@ target_link_libraries(test_runtime PRIVATE vitarecomp)
 target_compile_options(test_runtime PRIVATE -UNDEBUG)
 add_test(NAME runtime COMMAND test_runtime)
 
+add_executable(test_foundation test_foundation.c)
+target_link_libraries(test_foundation PRIVATE vitarecomp)
+if(MSVC)
+    target_compile_options(test_foundation PRIVATE /UNDEBUG)
+else()
+    target_compile_options(test_foundation PRIVATE -UNDEBUG)
+endif()
+add_test(NAME runtime-foundation COMMAND test_foundation)
+set_tests_properties(runtime-foundation PROPERTIES
+    LABELS "runtime;threading;vfs;allocator;imports;shutdown"
+    TIMEOUT 30
+)
+
 add_executable(test_prior_aot test_prior_aot.c)
 find_package(Threads REQUIRED)
 target_link_libraries(test_prior_aot PRIVATE vitarecomp Threads::Threads)
@@ -346,3 +359,31 @@ if(VITARECOMP_BUILD_GPU)
         )
     endif()
 endif()
+
+# Keep assertion, abort, and crash paths non-interactive under CTest. In
+# particular, Debug MSVC assertions must report to stderr rather than opening a
+# desktop dialog that can outlive the test process.
+set(_vitarecomp_test_targets
+    test_container
+    test_inflate
+    test_decode
+    test_reloc
+    test_discover
+    test_emit
+    test_runtime
+    test_foundation
+    test_prior_aot
+    test_dispatch_diagnostic
+    test_gpu_contract
+    test_gpu_c_abi
+    test_dx12_warp
+    vitarecomp_dx12_conformance
+    test_vulkan_conformance
+)
+foreach(_target IN LISTS _vitarecomp_test_targets)
+    if(TARGET ${_target})
+        target_sources(${_target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_noninteractive.c"
+        )
+    endif()
+endforeach()

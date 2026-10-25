@@ -59,6 +59,7 @@ used to keep unrelated host/title code out.
 | 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` | Core CPU/VFP/NEON/half/memory/dispatch helpers listed below | Selective port; checked memory and mode-bearing dispatch hardened locally | MIT; same upstream copyright and license retained | Canonical runtime tests, prior-vector tests, cross-thread exclusive-monitor test, generated-source compilation |
 | 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` | `samples/fbdemo`, `samples/hello`, `samples/threads` source and prebuilt public homebrew modules | Coherent fixture import | MIT; covered by source repository license and this ledger | CTest `homebrew-e2e`: extract, emit twice byte-identically, and compile all generated C |
 | 2026-10-25 | Local `integration/renderers@b1754cd5464604c70f39253d63b8c6163da20012` | `src/gpu` DX12/Vulkan implementations, backend registry/runtime changes, pinned-DXC rules, shared HLSL, conformance tests, and renderer documentation | Complete branch merge onto CPU baseline `5c4aa9c7ae1b04c3c832ee399a89c5d853a34df3`; canonical CPU-generated C/runtime ABI retained | GPL-2.0-or-later | Combined MSVC Debug build; CTest 16/16; DX12 WARP and hardware lifecycle/resize conformance; validation-enabled Vulkan lifecycle/resize/recreate conformance; invalid-ICD no-fallback; wrong-DXC rejection; private CPU aggregate and deterministic-generation revalidation |
+| 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` | Title-neutral runtime topics: clock/scheduler, libc/libm/mspace/sysmem, thread manager, kernel/I/O/FIOS2/ULT, and PSARC paths listed below | Selective port and independent hardening; no merge, host renderer, or title compatibility code | MIT source revision retained as provenance; new fork changes follow the repository license layers above | MSVC `/W4 /WX`; Debug and RelWithDebInfo full CTest/public homebrew E2E; MSVC AddressSanitizer runtime/CPU tests |
 
 ### Selected CPU file boundary
 
@@ -107,31 +108,67 @@ topics:
 | A32 decoding and emission | `cb4308ed6ea22d90170bd67261825c5f76039f67` | analyzer/decoder/emitter files, NEON helper, decoder/runtime tests |
 | Discovery and jump-table follow-up | `c6a9beda43584688e4bafc00972fb62316284e2f` | `analyze.c`, `decode.c/.h`, `emit.c`, decoder/runtime tests |
 
-The selected downstream CPU import intentionally does **not** include that
-fork's `host/`, renderer, GXM/HLE, audio, movie, filesystem, archive, or
-title-specific behavior. The production renderers recorded above were authored
-and integrated locally rather than imported from that downstream boundary.
+The selected downstream CPU import intentionally excluded that fork's
+`host/`, renderer, GXM/HLE, audio, movie, filesystem, archive, and
+title-specific behavior. The title-neutral runtime/HLE paths listed below were
+audited and integrated later as a separate boundary. The production renderers
+recorded above were authored and integrated locally rather than imported from
+the downstream fork.
 
 ## Combined mainline validation
 
 The renderer checkpoint
-`b1754cd5464604c70f39253d63b8c6163da20012` was merged onto canonical CPU
+`b1754cd5464604c70f39253d63b8c6163da20012` and runtime checkpoint
+`91c91ea1c6d291ba3fcd53dca3ba9c843be36d10` were integrated onto canonical CPU
 baseline `5c4aa9c7ae1b04c3c832ee399a89c5d853a34df3`. The combined tree built in
-Visual Studio 2022 Debug with `/W4 /WX /permissive- /bigobj` and passed all
-16 CTest entries. This includes the three public homebrew end-to-end fixtures,
-both production-backend registrations, strict unavailable/no-fallback
-behavior, DX12 WARP and available-hardware conformance, and
-validation-enabled Vulkan conformance.
+Visual Studio 2022 Debug and RelWithDebInfo with
+`/W4 /WX /permissive- /bigobj`; both configurations passed all 17 CTest
+entries. This includes the three public homebrew end-to-end fixtures, runtime
+memory/dispatch/threading/VFS/allocator/import/shutdown coverage, both
+production-backend registrations, strict unavailable/no-fallback behavior,
+DX12 WARP and available-hardware conformance, and validation-enabled Vulkan
+conformance. The supported MSVC AddressSanitizer runtime/CPU set passed 4/4.
+The Windows Application log interval covering the validation contained no new
+framework crash or assertion event, and no framework test or assertion dialog
+remained afterward.
 
 The private three-module check publishes only aggregate results. It reproduced
 105,873 discovered functions, 4,050,600 instructions reached, 10,898,202 of
 11,308,620 executable bytes covered, 48,706 emitted functions, 3,663,088
 translated instruction instances, and 3,770 trapped instances. Repeated
 generation produced the same 809 files and 356,792,679 bytes with identical
-relative inventories, reports, and bytes. All three generated-source targets
-compiled under the strict MSVC policy with no warning or error diagnostics.
+relative inventories, reports, and bytes. Both generated sets compiled all
+800 C translation units across all three modules under the strict MSVC policy
+with no warning or error diagnostics.
 No retail image, identifying path or hash, generated source, or raw private
 report is part of the repository.
+
+### Selected runtime/HLE boundary
+
+The runtime audit used the following paths from
+`soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` as the source
+revision for generic behavior and data layouts:
+
+- `src/clock.c/.h`, `src/sched.c/.h`
+- `src/hle_libc.c`, `hle_clib.c`, `hle_scanf.c`, `hle_libm.c`
+- `src/hle_mspace.c`, `hle_sysmem.c/.h`, `hle_threadmgr.c`
+- `src/hle_kernel.c`, `hle_io.c`, `hle_fios.c/.h`, `hle_ult.c`
+- `src/psarc.c/.h` and the corresponding HLE-facing declarations
+
+The integrated versions were not copied as an opaque stack. Local work added
+checked/overflow-safe guest boundaries, TLS CPU state, synchronized lifecycle
+and clock state, reusable allocators, explicit unsupported errors, structured
+diagnostics/counters, safe canonical VFS mounts, hardened PSARC validation,
+destructor and TLS teardown, and clean restart. `runtime.c`,
+`runtime_internal.h`, `hle_registry.c`, `vfs.c`, and the public
+`runtime.h`/`host.h`/`vfs.h` contracts are integration-layer additions.
+
+The integration intentionally does **not** include downstream `host/`,
+renderer, GXM HLE, audio, movie, input, networking, dialogs, savedata UI, or
+title-specific behavior. The optional Vita3K comparison remains an
+out-of-process behavioral oracle. No Vita3K source, library, generated title
+code, proprietary fixture, host renderer, or runtime dependency was
+incorporated.
 
 ## Excluded material
 
