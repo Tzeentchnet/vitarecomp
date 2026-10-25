@@ -1,0 +1,23 @@
+* text=auto
+
+/.clang-format text eol=lf
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+/CMakeLists.txt text eol=lf
+/CMakePresets.json text eol=lf
+/LICENSE text eol=lf
+/NOTICE text eol=lf
+*.c text eol=lf
+*.cmake text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.hlsl text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.ps1 text eol=lf
+*.psd1 text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+/samples/*/prebuilt/eboot.bin binary

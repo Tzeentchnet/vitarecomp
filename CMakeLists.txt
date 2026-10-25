@@ -95,6 +95,11 @@ option(VITARECOMP_ENABLE_DX12
 option(VITARECOMP_ENABLE_VULKAN
     "Build the Windows Vulkan production backend when headers are available"
     ON)
+set(VITARECOMP_VULKAN_HEADERS_ROOT "" CACHE PATH
+    "Directory containing a pinned Vulkan-Headers include tree")
+option(VITARECOMP_REQUIRE_VULKAN_BACKEND
+    "Fail configure when the requested Windows Vulkan backend is unavailable"
+    OFF)
 option(VITARECOMP_BUILD_DX12_CONFORMANCE
     "Build the Win32 DX12 shader/presentation conformance executable" OFF)
 option(VITARECOMP_BUILD_VULKAN_CONFORMANCE
@@ -158,14 +163,36 @@ if(VITARECOMP_BUILD_GPU)
     endif()
 
     if(WIN32 AND VITARECOMP_ENABLE_VULKAN)
-        find_package(Vulkan 1.3 QUIET)
-        if(Vulkan_FOUND)
-            set(VITARECOMP_VULKAN_BACKEND_FOUND TRUE)
+        set(_vitarecomp_vulkan_include_dirs "")
+        if(VITARECOMP_VULKAN_HEADERS_ROOT)
+            find_path(VITARECOMP_VULKAN_INCLUDE_DIR
+                NAMES vulkan/vulkan.h
+                PATHS "${VITARECOMP_VULKAN_HEADERS_ROOT}"
+                PATH_SUFFIXES include Include
+                NO_DEFAULT_PATH
+            )
+            if(VITARECOMP_VULKAN_INCLUDE_DIR AND
+               EXISTS
+                   "${VITARECOMP_VULKAN_INCLUDE_DIR}/vulkan/vulkan.hpp")
+                set(_vitarecomp_vulkan_include_dirs
+                    "${VITARECOMP_VULKAN_INCLUDE_DIR}")
+            endif()
+        else()
+            find_package(Vulkan 1.3 QUIET)
+            if(Vulkan_FOUND)
+                set(_vitarecomp_vulkan_include_dirs
+                    "${Vulkan_INCLUDE_DIRS}")
+            endif()
+        endif()
+
+        if(_vitarecomp_vulkan_include_dirs)
+            set(VITARECOMP_VULKAN_BACKEND_FOUND TRUE CACHE INTERNAL
+                "Whether the Windows Vulkan backend is compiled" FORCE)
             target_sources(vitarecomp_gpu PRIVATE
                 src/gpu/vulkan_backend.cpp
             )
             target_include_directories(vitarecomp_gpu SYSTEM PRIVATE
-                ${Vulkan_INCLUDE_DIRS}
+                ${_vitarecomp_vulkan_include_dirs}
             )
             target_compile_definitions(vitarecomp_gpu PRIVATE
                 VITA_GPU_HAS_VULKAN_BACKEND
@@ -174,6 +201,8 @@ if(VITARECOMP_BUILD_GPU)
             message(STATUS
                 "vitarecomp: Windows Vulkan production backend enabled")
         else()
+            set(VITARECOMP_VULKAN_BACKEND_FOUND FALSE CACHE INTERNAL
+                "Whether the Windows Vulkan backend is compiled" FORCE)
             message(STATUS
                 "vitarecomp: Vulkan 1.3 headers not found; Vulkan backend unavailable")
         endif()
@@ -181,6 +210,15 @@ if(VITARECOMP_BUILD_GPU)
         message(FATAL_ERROR
             "VITARECOMP_BUILD_VULKAN_CONFORMANCE requires Windows and "
             "VITARECOMP_ENABLE_VULKAN=ON")
+    endif()
+
+    if(WIN32 AND VITARECOMP_ENABLE_VULKAN AND
+       VITARECOMP_REQUIRE_VULKAN_BACKEND AND
+       NOT VITARECOMP_VULKAN_BACKEND_FOUND)
+        message(FATAL_ERROR
+            "VITARECOMP_REQUIRE_VULKAN_BACKEND=ON requires Vulkan 1.3 "
+            "headers. Set VITARECOMP_VULKAN_HEADERS_ROOT to a pinned "
+            "Vulkan-Headers include tree or install the Vulkan SDK.")
     endif()
 
     if(VITARECOMP_BUILD_VULKAN_CONFORMANCE AND

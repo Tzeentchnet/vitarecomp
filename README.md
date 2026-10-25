@@ -1,5 +1,7 @@
 # vitarecomp
 
+[![Windows quality gates](https://github.com/Tzeentchnet/vitarecomp/actions/workflows/windows-quality.yml/badge.svg)](https://github.com/Tzeentchnet/vitarecomp/actions/workflows/windows-quality.yml)
+
 ### *The Vita has one good emulator. It has no static recompiler.*
 
 > Static recompilation toolkit for PlayStation Vita titles.

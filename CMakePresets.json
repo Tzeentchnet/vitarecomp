@@ -1,0 +1,83 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-x64-base",
+      "hidden": true,
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "VITARECOMP_BUILD_GPU": "ON",
+        "VITARECOMP_ENABLE_DX12": "ON",
+        "VITARECOMP_ENABLE_VULKAN": "ON",
+        "VITARECOMP_REQUIRE_VULKAN_BACKEND": "ON",
+        "VITARECOMP_BUILD_DX12_CONFORMANCE": "ON",
+        "VITARECOMP_BUILD_VULKAN_CONFORMANCE": "ON",
+        "VITARECOMP_DXC_REQUIRED": "ON",
+        "VITARECOMP_DXC_ROOT": "$env{VITARECOMP_DXC_ROOT}",
+        "VITARECOMP_VULKAN_HEADERS_ROOT": "$env{VITARECOMP_VULKAN_HEADERS_ROOT}"
+      }
+    },
+    {
+      "name": "windows-x64-debug",
+      "displayName": "Windows x64 Debug quality gate",
+      "inherits": "windows-x64-base",
+      "binaryDir": "${sourceDir}/out/build/windows-x64-debug",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug"
+      }
+    },
+    {
+      "name": "windows-x64-release",
+      "displayName": "Windows x64 Release quality gate",
+      "inherits": "windows-x64-base",
+      "binaryDir": "${sourceDir}/out/build/windows-x64-release",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-x64-debug",
+      "configurePreset": "windows-x64-debug",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-x64-release",
+      "configurePreset": "windows-x64-release",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-x64-debug",
+      "configurePreset": "windows-x64-debug",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-x64-release",
+      "configurePreset": "windows-x64-release",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}
