@@ -22,7 +22,8 @@ private:
 };
 
 std::shared_ptr<BackendFactory> make_test_only_null_backend_factory(
-    std::shared_ptr<TestOnlyNullState> state);
+    std::shared_ptr<TestOnlyNullState> state,
+    vita_gpu_backend backend = VITA_GPU_BACKEND_DX12);
 
 } // namespace vitarecomp::gpu::test
 

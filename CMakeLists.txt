@@ -63,8 +63,13 @@ target_include_directories(vitarecomp PUBLIC
 option(VITARECOMP_BUILD_GPU "Build the renderer-neutral GPU contract" ON)
 option(VITARECOMP_ENABLE_DX12
     "Build the production DirectX 12 backend on Windows" ON)
+option(VITARECOMP_ENABLE_VULKAN
+    "Build the Windows Vulkan production backend when headers are available"
+    ON)
 option(VITARECOMP_BUILD_DX12_CONFORMANCE
     "Build the Win32 DX12 shader/presentation conformance executable" OFF)
+option(VITARECOMP_BUILD_VULKAN_CONFORMANCE
+    "Build the Win32 Vulkan shader/presentation conformance executable" OFF)
 
 function(vitarecomp_project_warnings target)
     if(MSVC)
@@ -76,10 +81,10 @@ function(vitarecomp_project_warnings target)
     endif()
 endfunction()
 
-if(VITARECOMP_BUILD_DX12_CONFORMANCE AND NOT VITARECOMP_BUILD_GPU)
+if((VITARECOMP_BUILD_DX12_CONFORMANCE OR
+    VITARECOMP_BUILD_VULKAN_CONFORMANCE) AND NOT VITARECOMP_BUILD_GPU)
     message(FATAL_ERROR
-        "VITARECOMP_BUILD_DX12_CONFORMANCE requires "
-        "VITARECOMP_BUILD_GPU=ON")
+        "GPU conformance executables require VITARECOMP_BUILD_GPU=ON")
 endif()
 
 if(VITARECOMP_BUILD_GPU)
@@ -112,8 +117,6 @@ if(VITARECOMP_BUILD_GPU)
         )
         target_compile_definitions(vitarecomp_gpu PRIVATE
             VITA_GPU_HAS_DX12_BACKEND
-            WIN32_LEAN_AND_MEAN
-            NOMINMAX
         )
         target_link_libraries(vitarecomp_gpu PRIVATE
             d3d12
@@ -123,6 +126,38 @@ if(VITARECOMP_BUILD_GPU)
         message(FATAL_ERROR
             "VITARECOMP_BUILD_DX12_CONFORMANCE requires Windows and "
             "VITARECOMP_ENABLE_DX12=ON")
+    endif()
+
+    if(WIN32 AND VITARECOMP_ENABLE_VULKAN)
+        find_package(Vulkan 1.3 QUIET)
+        if(Vulkan_FOUND)
+            set(VITARECOMP_VULKAN_BACKEND_FOUND TRUE)
+            target_sources(vitarecomp_gpu PRIVATE
+                src/gpu/vulkan_backend.cpp
+            )
+            target_include_directories(vitarecomp_gpu SYSTEM PRIVATE
+                ${Vulkan_INCLUDE_DIRS}
+            )
+            target_compile_definitions(vitarecomp_gpu PRIVATE
+                VITA_GPU_HAS_VULKAN_BACKEND
+            )
+            target_link_libraries(vitarecomp_gpu PRIVATE user32)
+            message(STATUS
+                "vitarecomp: Windows Vulkan production backend enabled")
+        else()
+            message(STATUS
+                "vitarecomp: Vulkan 1.3 headers not found; Vulkan backend unavailable")
+        endif()
+    elseif(VITARECOMP_BUILD_VULKAN_CONFORMANCE)
+        message(FATAL_ERROR
+            "VITARECOMP_BUILD_VULKAN_CONFORMANCE requires Windows and "
+            "VITARECOMP_ENABLE_VULKAN=ON")
+    endif()
+
+    if(VITARECOMP_BUILD_VULKAN_CONFORMANCE AND
+       NOT VITARECOMP_VULKAN_BACKEND_FOUND)
+        message(FATAL_ERROR
+            "VITARECOMP_BUILD_VULKAN_CONFORMANCE requires Vulkan 1.3 headers")
     endif()
 endif()
 

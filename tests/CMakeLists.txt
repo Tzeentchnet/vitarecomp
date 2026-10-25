@@ -106,48 +106,76 @@ if(VITARECOMP_BUILD_GPU)
         endif()
         add_test(NAME gpu-dx12-warp-buffer COMMAND test_dx12_warp)
         set_tests_properties(gpu-dx12-warp-buffer PROPERTIES TIMEOUT 60)
+    endif()
 
-        if(VITARECOMP_BUILD_DX12_CONFORMANCE)
-            if(NOT TARGET Vitarecomp::DXC)
-                message(FATAL_ERROR
-                    "DX12 conformance shaders require the pinned official "
-                    "Microsoft DXC ${VITARECOMP_DXC_PINNED_VERSION} "
-                    "(release ${VITARECOMP_DXC_RELEASE_TAG}). Set "
-                    "VITARECOMP_DXC_ROOT to the extracted release directory; "
-                    "the build never downloads compiler binaries.")
-            endif()
+    if(WIN32 AND VITARECOMP_VULKAN_BACKEND_FOUND)
+        add_test(
+            NAME gpu-vulkan-invalid-icd-no-fallback
+            COMMAND test_gpu_c_abi --expect-vulkan-unavailable
+        )
+        set(_invalid_vulkan_icd
+            "${CMAKE_CURRENT_BINARY_DIR}/nonexistent-vulkan-icd.json")
+        set_tests_properties(gpu-vulkan-invalid-icd-no-fallback PROPERTIES
+            ENVIRONMENT
+                "VK_ICD_FILENAMES=${_invalid_vulkan_icd};VK_DRIVER_FILES=${_invalid_vulkan_icd}"
+            LABELS "gpu;vulkan;negative"
+            TIMEOUT 60
+        )
+    endif()
 
-            set(_dx12_shader_source
-                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/dx12_conformance.hlsl")
-            set(_dx12_shader_directory
-                "${CMAKE_CURRENT_BINARY_DIR}/dx12-conformance-shaders")
+    if(VITARECOMP_BUILD_DX12_CONFORMANCE OR
+       VITARECOMP_BUILD_VULKAN_CONFORMANCE)
+        if(NOT TARGET Vitarecomp::DXC)
+            message(FATAL_ERROR
+                "GPU conformance shaders require the pinned official "
+                "Microsoft DXC ${VITARECOMP_DXC_PINNED_VERSION} "
+                "(release ${VITARECOMP_DXC_RELEASE_TAG}). Set "
+                "VITARECOMP_DXC_ROOT to the extracted release directory; "
+                "the build never downloads compiler binaries.")
+        endif()
+        set(_gpu_conformance_shader_source
+            "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gpu_conformance.hlsl")
+        set(_gpu_conformance_shader_directory
+            "${CMAKE_CURRENT_BINARY_DIR}/gpu-conformance-shaders")
+        set(_gpu_conformance_shader_flags
+            -HV 2021
+            -Ges
+            -WX
+            -O3
+            -Qstrip_debug
+        )
+    endif()
+
+    if(VITARECOMP_BUILD_DX12_CONFORMANCE)
             set(_dx12_vertex_shader
-                "${_dx12_shader_directory}/dx12_conformance_vs.dxil")
+                "${_gpu_conformance_shader_directory}/dx12_conformance_vs.dxil")
             set(_dx12_pixel_shader
-                "${_dx12_shader_directory}/dx12_conformance_ps.dxil")
+                "${_gpu_conformance_shader_directory}/dx12_conformance_ps.dxil")
             add_custom_command(
                 OUTPUT "${_dx12_vertex_shader}"
                 COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "${_dx12_shader_directory}"
+                    "${_gpu_conformance_shader_directory}"
                 COMMAND $<TARGET_FILE:Vitarecomp::DXC>
-                    -T vs_6_0 -E vs_main -HV 2021
-                    -Ges -WX -O3 -Qstrip_debug -Qstrip_reflect
+                    ${_gpu_conformance_shader_flags}
+                    -Qstrip_reflect
+                    -T vs_6_0 -E vs_main
                     -Fo "${_dx12_vertex_shader}"
-                    "${_dx12_shader_source}"
-                DEPENDS "${_dx12_shader_source}" Vitarecomp::DXC
+                    "${_gpu_conformance_shader_source}"
+                DEPENDS "${_gpu_conformance_shader_source}" Vitarecomp::DXC
                 VERBATIM
                 COMMENT "Compiling deterministic DX12 conformance vertex shader"
             )
             add_custom_command(
                 OUTPUT "${_dx12_pixel_shader}"
                 COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "${_dx12_shader_directory}"
+                    "${_gpu_conformance_shader_directory}"
                 COMMAND $<TARGET_FILE:Vitarecomp::DXC>
-                    -T ps_6_0 -E ps_main -HV 2021
-                    -Ges -WX -O3 -Qstrip_debug -Qstrip_reflect
+                    ${_gpu_conformance_shader_flags}
+                    -Qstrip_reflect
+                    -T ps_6_0 -E ps_main
                     -Fo "${_dx12_pixel_shader}"
-                    "${_dx12_shader_source}"
-                DEPENDS "${_dx12_shader_source}" Vitarecomp::DXC
+                    "${_gpu_conformance_shader_source}"
+                DEPENDS "${_gpu_conformance_shader_source}" Vitarecomp::DXC
                 VERBATIM
                 COMMENT "Compiling deterministic DX12 conformance pixel shader"
             )
@@ -190,7 +218,77 @@ if(VITARECOMP_BUILD_GPU)
             )
             set_tests_properties(gpu-dx12-warp-conformance PROPERTIES
                 TIMEOUT 180
+                LABELS "gpu;dx12;integration"
             )
+    endif()
+
+    if(VITARECOMP_BUILD_VULKAN_CONFORMANCE)
+        set(_vulkan_vertex_spirv
+            "${_gpu_conformance_shader_directory}/vulkan_conformance_vs.spv")
+        set(_vulkan_pixel_spirv
+            "${_gpu_conformance_shader_directory}/vulkan_conformance_ps.spv")
+        add_custom_command(
+            OUTPUT "${_vulkan_vertex_spirv}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${_gpu_conformance_shader_directory}"
+            COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+                ${_gpu_conformance_shader_flags}
+                -spirv
+                -fspv-target-env=vulkan1.3
+                -fspv-entrypoint-name=main
+                -fvk-use-dx-layout
+                -T vs_6_0
+                -E vs_main
+                -Fo "${_vulkan_vertex_spirv}"
+                "${_gpu_conformance_shader_source}"
+            DEPENDS "${_gpu_conformance_shader_source}" Vitarecomp::DXC
+            VERBATIM
+            COMMENT "Compiling deterministic Vulkan conformance vertex shader"
+        )
+        add_custom_command(
+            OUTPUT "${_vulkan_pixel_spirv}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${_gpu_conformance_shader_directory}"
+            COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+                ${_gpu_conformance_shader_flags}
+                -spirv
+                -fspv-target-env=vulkan1.3
+                -fspv-entrypoint-name=main
+                -fvk-use-dx-layout
+                -T ps_6_0
+                -E ps_main
+                -Fo "${_vulkan_pixel_spirv}"
+                "${_gpu_conformance_shader_source}"
+            DEPENDS "${_gpu_conformance_shader_source}" Vitarecomp::DXC
+            VERBATIM
+            COMMENT "Compiling deterministic Vulkan conformance pixel shader"
+        )
+        add_executable(test_vulkan_conformance
+            test_vulkan_conformance.cpp
+            "${_vulkan_vertex_spirv}"
+            "${_vulkan_pixel_spirv}"
+        )
+        target_link_libraries(test_vulkan_conformance PRIVATE
+            vitarecomp::gpu
+            user32
+        )
+        target_compile_features(test_vulkan_conformance PRIVATE cxx_std_20)
+        vitarecomp_project_warnings(test_vulkan_conformance)
+        if(MSVC)
+            target_compile_options(test_vulkan_conformance PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(test_vulkan_conformance PRIVATE -UNDEBUG)
         endif()
+        add_test(
+            NAME vulkan-conformance
+            COMMAND test_vulkan_conformance
+                "${_vulkan_vertex_spirv}"
+                "${_vulkan_pixel_spirv}"
+        )
+        set_tests_properties(vulkan-conformance PROPERTIES
+            SKIP_RETURN_CODE 77
+            TIMEOUT 120
+            LABELS "gpu;vulkan;integration"
+        )
     endif()
 endif()

@@ -757,24 +757,136 @@ void test_backend_availability_policy() {
            VITA_GPU_ERROR_BACKEND_UNAVAILABLE,
            "production registry rejects test backend");
     gpu::Runtime runtime(std::move(production_registry));
-    vita_gpu_device_desc desc = VITA_GPU_INIT(vita_gpu_device_desc);
-    desc.backend = VITA_GPU_BACKEND_DX12;
-    desc.application_name = "unavailable-test";
-    vita_gpu_device device{};
-    const gpu::Status status = runtime.create_device(desc, device);
-    expect(status, VITA_GPU_ERROR_BACKEND_UNAVAILABLE,
-           "requested unavailable backend");
-    CHECK(status.message.find("fallback") != std::string::npos);
-    CHECK(device.value == 0);
+    for (const vita_gpu_backend backend :
+         {VITA_GPU_BACKEND_DX12, VITA_GPU_BACKEND_VULKAN}) {
+        vita_gpu_device_desc desc = VITA_GPU_INIT(vita_gpu_device_desc);
+        desc.backend = backend;
+        desc.application_name = "unavailable-test";
+        vita_gpu_device device{};
+        const gpu::Status status = runtime.create_device(desc, device);
+        expect(status, VITA_GPU_ERROR_BACKEND_UNAVAILABLE,
+               "requested unavailable backend");
+        CHECK(status.backend == backend);
+        CHECK(status.message.find("fallback") != std::string::npos);
+        CHECK(device.value == 0);
+    }
+
+    constexpr std::array<std::pair<vita_gpu_backend, vita_gpu_backend>, 2>
+        cross_backend_requests{{
+            {VITA_GPU_BACKEND_DX12, VITA_GPU_BACKEND_VULKAN},
+            {VITA_GPU_BACKEND_VULKAN, VITA_GPU_BACKEND_DX12},
+        }};
+    for (const auto &[registered, requested] : cross_backend_requests) {
+        auto isolated_state =
+            std::make_shared<test_backend::TestOnlyNullState>();
+        gpu::BackendRegistry one_factory_registry(true);
+        expect(one_factory_registry.register_factory(
+                   test_backend::make_test_only_null_backend_factory(
+                       isolated_state, registered)),
+               VITA_GPU_SUCCESS, "register one backend factory");
+        gpu::Runtime one_factory_runtime(std::move(one_factory_registry));
+        vita_gpu_device_desc desc = VITA_GPU_INIT(vita_gpu_device_desc);
+        desc.backend = requested;
+        desc.application_name = "cross-backend-fallback-test";
+        vita_gpu_device device{};
+        const gpu::Status status =
+            one_factory_runtime.create_device(desc, device);
+        expect(status, VITA_GPU_ERROR_BACKEND_UNAVAILABLE,
+               "do not fall back to another registered backend");
+        CHECK(status.backend == requested);
+        CHECK(status.message.find("fallback") != std::string::npos);
+        CHECK(device.value == 0);
+        CHECK(isolated_state->events().empty());
+    }
 
     vita_gpu_backend parsed = VITA_GPU_BACKEND_NONE;
     CHECK(vita_gpu_backend_from_name("Dx12", &parsed, nullptr) ==
           VITA_GPU_SUCCESS);
     CHECK(parsed == VITA_GPU_BACKEND_DX12);
+    CHECK(vita_gpu_backend_from_name("VULKAN", &parsed, nullptr) ==
+          VITA_GPU_SUCCESS);
+    CHECK(parsed == VITA_GPU_BACKEND_VULKAN);
     CHECK(vita_gpu_backend_from_name(" vulkan", &parsed, nullptr) ==
           VITA_GPU_ERROR_INVALID_ARGUMENT);
+    CHECK(parsed == VITA_GPU_BACKEND_NONE);
     CHECK(vita_gpu_backend_from_name("null", &parsed, nullptr) ==
           VITA_GPU_ERROR_INVALID_ARGUMENT);
+}
+
+void test_backend_coexistence_and_namespaces() {
+    auto dx12_state =
+        std::make_shared<test_backend::TestOnlyNullState>();
+    auto vulkan_state =
+        std::make_shared<test_backend::TestOnlyNullState>();
+    gpu::BackendRegistry registry(true);
+    expect(registry.register_factory(
+               test_backend::make_test_only_null_backend_factory(
+                   dx12_state, VITA_GPU_BACKEND_DX12)),
+           VITA_GPU_SUCCESS, "register DX12 test factory");
+    expect(registry.register_factory(
+               test_backend::make_test_only_null_backend_factory(
+                   vulkan_state, VITA_GPU_BACKEND_VULKAN)),
+           VITA_GPU_SUCCESS, "register Vulkan test factory");
+    expect(registry.register_factory(
+               test_backend::make_test_only_null_backend_factory(
+                   dx12_state, VITA_GPU_BACKEND_DX12)),
+           VITA_GPU_ERROR_INVALID_STATE, "reject duplicate DX12 factory");
+
+    gpu::Runtime runtime(std::move(registry));
+    CHECK(runtime.backend_count() == 2);
+    for (std::uint32_t index = 0; index < runtime.backend_count(); ++index) {
+        vita_gpu_backend_info info = VITA_GPU_INIT(vita_gpu_backend_info);
+        expect(runtime.backend_info(index, info), VITA_GPU_SUCCESS,
+               "query coexisting backend");
+        const vita_gpu_backend expected =
+            index == 0 ? VITA_GPU_BACKEND_DX12 : VITA_GPU_BACKEND_VULKAN;
+        CHECK(info.backend == expected);
+        CHECK(info.available == VITA_GPU_TRUE);
+        CHECK(std::string_view(info.name) ==
+              (expected == VITA_GPU_BACKEND_DX12 ? "dx12" : "vulkan"));
+        std::uint32_t adapter_count = 0;
+        expect(runtime.adapter_count(expected, adapter_count),
+               VITA_GPU_SUCCESS, "enumerate coexisting backend");
+        CHECK(adapter_count == 1);
+    }
+
+    vita_gpu_device previous_device{};
+    vita_gpu_buffer previous_buffer{};
+    for (int cycle = 0; cycle < 2; ++cycle) {
+        for (const vita_gpu_backend backend :
+             {VITA_GPU_BACKEND_DX12, VITA_GPU_BACKEND_VULKAN}) {
+            vita_gpu_device_desc device_desc =
+                VITA_GPU_INIT(vita_gpu_device_desc);
+            device_desc.backend = backend;
+            device_desc.flags = VITA_GPU_DEVICE_ENABLE_VALIDATION;
+            device_desc.application_name = "backend-coexistence-test";
+            vita_gpu_device device{};
+            expect(runtime.create_device(device_desc, device),
+                   VITA_GPU_SUCCESS, "create sequential backend device");
+            CHECK(device.value != 0);
+            CHECK(device.value != previous_device.value);
+
+            vita_gpu_buffer buffer{};
+            const auto desc =
+                buffer_desc(VITA_GPU_RESOURCE_STATE_COPY_DEST,
+                            VITA_GPU_BUFFER_COPY_DEST);
+            expect(runtime.create_buffer(device, desc, buffer),
+                   VITA_GPU_SUCCESS, "create sequential backend buffer");
+            CHECK(buffer.value != 0);
+            CHECK(buffer.value != previous_buffer.value);
+            if (previous_buffer.value != 0) {
+                expect(runtime.destroy_buffer(device, previous_buffer),
+                       VITA_GPU_ERROR_WRONG_OWNER,
+                       "reject cross-backend resource handle");
+            }
+            expect(runtime.destroy_buffer(device, buffer), VITA_GPU_SUCCESS,
+                   "destroy sequential backend buffer");
+            expect(runtime.destroy_device(device), VITA_GPU_SUCCESS,
+                   "destroy sequential backend device");
+            previous_device = device;
+            previous_buffer = buffer;
+        }
+    }
 }
 
 void test_shader_request_determinism() {
@@ -852,6 +964,8 @@ int main() {
         {"resize", test_resize},
         {"readback and capture", test_readback_and_capture},
         {"backend availability policy", test_backend_availability_policy},
+        {"backend coexistence and namespaces",
+         test_backend_coexistence_and_namespaces},
         {"shader request determinism", test_shader_request_determinism},
     };
 

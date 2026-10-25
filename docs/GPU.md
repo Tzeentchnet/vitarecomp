@@ -3,12 +3,85 @@
 `include/vitarecomp/gpu.h` is the stable C boundary between a recompiled title
 host and the C++20 renderer implementation. The contract is backend-neutral;
 Direct3D 12 and Vulkan are the only production backend identities. On Windows,
-the production registry contains the real `dx12` backend when
-`VITARECOMP_ENABLE_DX12=ON` (the default). Vulkan remains unavailable until a
-production implementation is linked. Requesting an unavailable backend returns
-`VITA_GPU_ERROR_BACKEND_UNAVAILABLE`; there is no automatic backend or null/mock
-fallback. See [DX12.md](DX12.md) for native behavior, supported operations, and
-the WARP conformance workflow.
+the production registry contains both real backends when
+`VITARECOMP_ENABLE_DX12=ON` and `VITARECOMP_ENABLE_VULKAN=ON` (the defaults)
+and the corresponding platform headers are available. Enumeration always
+reports both identities and their actual availability. Requesting an
+unavailable backend returns `VITA_GPU_ERROR_BACKEND_UNAVAILABLE`; it never
+selects the other production backend or the contract-test null backend.
+
+See [DX12.md](DX12.md) for Direct3D 12 behavior and the explicit WARP
+workflow. Vulkan behavior is summarized below.
+
+## Windows Vulkan backend
+
+`VITA_GPU_BACKEND_VULKAN` is registered as `vulkan` when CMake finds Vulkan
+headers on Windows. The built library does not import `vulkan-1.dll`: it loads
+the system loader and resolves entry points at runtime. A missing loader, an
+installed loader with no ICD, or no compatible physical device therefore
+remains a structured unavailable result instead of preventing process startup.
+
+The backend requires Vulkan 1.3, a unified graphics/compute/transfer queue,
+`VK_KHR_swapchain`, timeline semaphores, synchronization2, and dynamic
+rendering. These are the native operations used to implement version 1 of the
+contract rather than optional performance features. Adapter enumeration
+reports device type, PCI identifiers, UUID/LUID data when exposed, memory
+heaps, limits, and feature-derived capability flags.
+
+Implemented native paths include:
+
+- Win32 surfaces; exact color-format selection; FIFO, immediate, and mailbox
+  selection with FIFO fallback; swapchain images and views; per-frame acquire
+  semaphores and in-flight fences plus per-image render-finished semaphores;
+- explicit resize plus out-of-date/suboptimal recreation while preserving
+  borrowed image identity; minimized windows return `INVALID_STATE` until
+  restored instead of spinning or selecting another backend;
+- buffers and images with Vulkan memory-requirement queries and explicit
+  allocation/binding, host uploads, staging uploads, and host-visible
+  readback. The backend intentionally uses no heavyweight allocator because
+  the contract does not yet need suballocation policy;
+- samplers, color/depth views, descriptor layouts/pools/sets, SPIR-V shader
+  modules, graphics and compute pipelines, dynamic rendering, draw/dispatch,
+  copies, push constants, and debug labels;
+- synchronization2 barriers derived from contract stage/access/state values,
+  image layouts, command encoding and validation, timeline-fence submission,
+  CPU waits, presentation, and deterministic reverse-order destruction.
+
+CPU-visible optimal images, non-2D attachment views, arbitrary custom sampler
+border colors, packed depth-stencil upload/readback, 3D-image readback,
+sampled depth-stencil aspect selection, multi-mip storage-image bindings,
+contract v1 stencil operations, direct in-process HLSL compilation,
+multi-submit presentation of one acquired image, and external debug-capture
+integration return `VITA_GPU_ERROR_UNSUPPORTED`; none report success without
+implementing the operation. Use a readback object for capture.
+
+When requested and installed, `VK_LAYER_KHRONOS_validation` and
+`VK_EXT_debug_utils` are enabled. Error-severity validation callbacks become a
+sticky backend error, so conformance cannot pass after a high-severity
+validation message. Debug utils are enabled independently when available for
+object names and command labels.
+
+Configure a Debug build with an installed Vulkan SDK and the pinned DXC:
+
+```powershell
+$env:VULKAN_SDK = 'C:\VulkanSDK\1.4.363.0'
+cmake -S . -B build -G 'Visual Studio 17 2022' -A x64 `
+  -DVITARECOMP_DXC_ROOT=C:\tools\dxc `
+  -DVITARECOMP_DXC_REQUIRED=ON `
+  -DVITARECOMP_BUILD_DX12_CONFORMANCE=ON `
+  -DVITARECOMP_BUILD_VULKAN_CONFORMANCE=ON
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure
+```
+
+`VITARECOMP_ENABLE_VULKAN=OFF` disables the backend. The
+`vulkan-conformance` CTest opens a real Win32 window, selects `vulkan`, compiles
+the canonical framework HLSL to SPIR-V with the exact pinned DXC, clears and
+draws a triangle, presents multiple frames, validates readback, minimizes and
+restores, resizes/recreates, and repeats device startup/shutdown. It uses
+CTest's skip return code only when loader/ICD availability probing says Vulkan
+is unavailable. `gpu-vulkan-invalid-icd-no-fallback` forces invalid ICD paths
+and verifies that a Vulkan request fails instead of selecting DX12.
 
 ## ABI and ownership
 
@@ -146,22 +219,29 @@ mirror, download, or execute an installer.
 CMake searches `VITARECOMP_DXC_ROOT`, the environment variable of the same
 name, its `bin/x64` and `bin` children, and then `PATH`. It accepts an
 executable only when `dxc --version` reports the exact pin and exposes it as
-`Vitarecomp::DXC`. Discovery never downloads a tool. The contract, DX12
-backend, and WARP buffer test do not need DXC. Enabling
-`VITARECOMP_BUILD_DX12_CONFORMANCE` requires the exact compiler and gives an
-actionable configure error if it is absent or mismatched. Other production
+`Vitarecomp::DXC`. Discovery never downloads a tool. The contract and
+production backends do not need DXC unless a conformance shader target is
+enabled. `VITARECOMP_BUILD_DX12_CONFORMANCE` and
+`VITARECOMP_BUILD_VULKAN_CONFORMANCE` both require the exact compiler and give
+an actionable configure error if it is absent or mismatched. Other production
 shader builds can set `-DVITARECOMP_DXC_REQUIRED=ON` for the same policy.
 
-The DX12 backend accepts DXIL binary modules. Runtime HLSL module creation
-returns `VITA_GPU_ERROR_SHADER_COMPILER_UNAVAILABLE`; applications compile the
-same HLSL request with the pinned compiler and cache it by
-`vita_gpu_shader_request_key`. The conformance executable demonstrates this
-deterministic build-time path without committing generated shader binaries.
+Both conformance targets compile
+`tests/shaders/gpu_conformance.hlsl`: DX12 receives stripped optimized DXIL and
+Vulkan receives stripped optimized SPIR-V 1.3, from the same source entry
+functions and warnings-as-errors policy. Generated binaries remain in the
+build tree.
+Runtime HLSL module creation returns
+`VITA_GPU_ERROR_SHADER_COMPILER_UNAVAILABLE`; applications compile a shader
+request with the pinned compiler and cache it by
+`vita_gpu_shader_request_key`.
 
 ## Readback and capture
 
 Readback storage is explicitly sized and populated by recorded buffer or
 texture copy commands. Mapping returns a typed byte pointer, byte count, and
-row/slice pitches; the readback must be unmapped before destruction. Debug
-capture is an explicit begin/end scope and reports `UNSUPPORTED` when the
-selected backend has no capture integration.
+row/slice pitches; the readback must be unmapped before destruction. Vulkan
+implements buffer and image readback, including swapchain capture when the
+surface exposes transfer-source usage. Debug capture is an explicit begin/end
+scope and reports `UNSUPPORTED` because external tools such as RenderDoc own
+that integration.
