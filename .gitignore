@@ -16,6 +16,8 @@ out/
 *.skprx
 *.velf
 eboot.bin
+# Audited MIT-licensed public homebrew regression fixtures are intentional.
+!samples/*/prebuilt/eboot.bin
 *.psvimg
 sce_module/
 sce_pfs/

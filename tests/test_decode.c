@@ -1,4 +1,4 @@
-﻿/* test_decode.c â€” ARMv7 decoding, on hand-built encodings only.
+﻿/* test_decode.c — ARMv7 decoding, on hand-built encodings only.
  *
  * Every encoding here is assembled in this file from the architecture's rules
  * and its expected result worked out by hand, so a wrong decoder disagrees with
@@ -37,6 +37,23 @@ static arm_insn dec(arm_mode mode, uint32_t addr) {
     int n = arm_decode(code, BASE, sizeof(code), addr, mode, &in);
     assert(n == in.width);
     return in;
+}
+
+static void test_tbb_aligned_pc(void) {
+    uint32_t target = 0;
+    memset(code, 0, sizeof(code));
+
+    /* TBB [pc, r1] at a halfword-aligned address whose architectural PC must
+     * be aligned down from 0x1012 to 0x1010. */
+    put16(14, 0xE8DF);
+    put16(16, 0xF001);
+    code[16] = 1;
+    arm_insn in = dec(ARM_T32, BASE + 14);
+    assert(in.op == OP_TBB && in.rn == 15 && in.rm == 1);
+    assert(arm_table_targets(code, BASE, sizeof(code), &in, 1, &target, 1) == 1);
+    assert(target == BASE + 18);
+
+    printf("  TBB architectural PC alignment ok\n");
 }
 
 /* --- Thumb width: the thing that must never be wrong ------------------------ */
@@ -79,7 +96,7 @@ static void test_returns(void) {
     put16(0, 0xBD00);                      /* pop {pc}                       */
     assert(dec(ARM_T32, BASE).cls == A_RETURN);
 
-    put16(0, 0xBC00);                      /* pop {} â€” no pc, not a return   */
+    put16(0, 0xBC00);                      /* pop {} — no pc, not a return   */
     assert(dec(ARM_T32, BASE).cls == A_LOADM);
 
     put32(0, 0xE12FFF1E);                  /* bx lr (ARM)                    */
@@ -116,7 +133,7 @@ static void test_pc_destination(void) {
     assert(in.cls == A_INDIRECT);
     assert(in.cls != A_ALU);
 
-    put16(0, 0x46B6);                      /* mov lr, r6 â€” rd=14, still ALU  */
+    put16(0, 0x46B6);                      /* mov lr, r6 — rd=14, still ALU  */
     in = dec(ARM_T32, BASE);
     assert(in.cls == A_ALU && in.op == OP_MOV && in.rd == 14);
 
@@ -145,14 +162,14 @@ static void test_pc_destination(void) {
 /*
  * Two encodings share one 12-bit field, and the naive "it is just a 12-bit
  * integer" reading is correct for small constants and wrong for everything
- * else â€” which is exactly the shape of bug that survives casual testing. Each
+ * else — which is exactly the shape of bug that survives casual testing. Each
  * case is checked against a value worked out from the definition.
  */
 
 static void test_thumb_expand_imm(void) {
     memset(code, 0, sizeof(code));
 
-    /* mov.w rd, #imm â€” 0xF04F is ORR with rn=15, which is MOV. */
+    /* mov.w rd, #imm — 0xF04F is ORR with rn=15, which is MOV. */
 
     /* Pattern 00: the byte, unchanged. */
     put16(0, 0xF04F); put16(2, 0x0042);
@@ -175,7 +192,7 @@ static void test_thumb_expand_imm(void) {
     assert(in.imm == 0x42424242u);
 
     /* The rotate form. The stored 7 bits carry an implicit leading 1, so the
-     * value rotated is 0x80|imm7, not imm7 â€” the single easiest thing here to
+     * value rotated is 0x80|imm7, not imm7 — the single easiest thing here to
      * get wrong, and it leaves every such constant short by 0x80.
      *
      * i:imm3:a = 01000 gives a rotate of 8 applied to 0x80: 0x80000000. */
@@ -197,7 +214,7 @@ static void test_t32_operands(void) {
     assert(in.width == 4 && in.op == OP_ADD);
     assert(in.rd == 0 && in.rn == 1 && in.rm == 2 && !in.sets_flags);
 
-    /* adds.w r0, r1, r2 â€” the S bit is bit 4 of the first halfword. */
+    /* adds.w r0, r1, r2 — the S bit is bit 4 of the first halfword. */
     put16(0, 0xEB11); put16(2, 0x0002);
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_ADD && in.sets_flags);
@@ -212,12 +229,12 @@ static void test_t32_operands(void) {
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_CMP && in.rd == ARM_NO_REG);
 
-    /* movw r0, #0x1234 â€” a plain 16-bit literal, not a modified immediate. */
+    /* movw r0, #0x1234 — a plain 16-bit literal, not a modified immediate. */
     put16(0, 0xF241); put16(2, 0x2034);
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_MOV && in.imm == 0x1234);
 
-    /* ldr.w r0, [r1, #0x100] â€” 12-bit unsigned offset form. */
+    /* ldr.w r0, [r1, #0x100] — 12-bit unsigned offset form. */
     put16(0, 0xF8D1); put16(2, 0x0100);
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_LDR && in.rt == 0 && in.rn == 1 && in.imm == 0x100);
@@ -227,7 +244,7 @@ static void test_t32_operands(void) {
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_STR && in.rt == 0 && in.rn == 1);
 
-    /* movt r0, #0x8100 â€” writes the TOP half only.
+    /* movt r0, #0x8100 — writes the TOP half only.
      *
      * MOVW/MOVT is how ARM builds a 32-bit address. Leaving MOVT untranslated
      * costs every constructed pointer its high 16 bits, which a trace of
@@ -239,7 +256,7 @@ static void test_t32_operands(void) {
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_MOVT && in.rd == 0 && in.imm == 0x8100);
 
-    /* strd r1, r0, [sp] â€” bit 6 separates dual from multiple. An earlier mask
+    /* strd r1, r0, [sp] — bit 6 separates dual from multiple. An earlier mask
      * kept that bit and so excluded every LDRD/STRD from decoding at all. */
     put16(0, 0xE9CD); put16(2, 0x1000);
     in = dec(ARM_T32, BASE);
@@ -249,20 +266,87 @@ static void test_t32_operands(void) {
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_LDRD && in.rn == 13 && in.rt == 1 && in.rt2 == 2);
 
-    /* mul.w r0, r1, r2 â€” ra == 15 distinguishes it from MLA. */
+    /* mul.w r0, r1, r2 — ra == 15 distinguishes it from MLA. */
     put16(0, 0xFB01); put16(2, 0xF002);
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_MUL && in.rd == 0 && in.rn == 1 && in.rm == 2);
 
-    /* push.w {r4,lr} / pop.w â€” only the SP-relative forms translate as stack
-     * operations; an LDM against another base must not. */
+    /* push.w {r4,lr} / pop.w — only the SP-relative forms translate as stack
+     * operations; an LDM against another base is the general form, with
+     * its own direction and write-back. */
     put16(0, 0xE92D); put16(2, 0x4010);
     in = dec(ARM_T32, BASE);
     assert(in.cls == A_STOREM && in.op == OP_PUSH && in.rn == 13);
 
-    put16(0, 0xE8B1); put16(2, 0x0030);      /* ldm r1!, {r4,r5} â€” base r1 */
+    put16(0, 0xE8B1); put16(2, 0x0030);      /* ldm r1!, {r4,r5} — base r1 */
     in = dec(ARM_T32, BASE);
-    assert(in.cls == A_LOADM && in.op == OP_NONE);
+    assert(in.cls == A_LOADM && in.op == OP_LDM && in.rn == 1);
+    assert(in.writeback && in.mem_add && in.reglist == 0x0030);
+
+    put16(0, 0xE913); put16(2, 0x0030);      /* ldmdb.w r3, {r4,r5} */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDM && in.rn == 3 && !in.writeback && !in.mem_add);
+
+    put16(0, 0xE923); put16(2, 0x0030);      /* stmdb.w r3!, {r4,r5} */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_STM && in.rn == 3 && in.writeback && !in.mem_add);
+
+    put16(0, 0xE93D); put16(2, 0x0030);      /* ldmdb.w sp!, {r4,r5}: not a pop */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDM && in.rn == 13 && !in.mem_add);
+
+    put16(0, 0xE8BD); put16(2, 0x8010);      /* ldmia.w sp!, {r4,pc}: the return */
+    in = dec(ARM_T32, BASE);
+    assert(in.cls == A_RETURN && in.reglist == 0x8010);
+
+    /* The 16-bit forms. STMIA always writes back; LDMIA does unless the base
+     * is in the list, in which case the loaded value wins. */
+    put16(0, 0xC987);                        /* ldmia r1, {r0,r1,r2,r7} */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDM && in.rn == 1 && in.reglist == 0x87 && !in.writeback && in.mem_add);
+    put16(0, 0xC90C);                        /* ldmia r1!, {r2,r3} */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDM && in.rn == 1 && in.reglist == 0x0C && in.writeback);
+    put16(0, 0xC006);                        /* stmia r0!, {r1,r2} */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_STM && in.rn == 0 && in.reglist == 0x06 && in.writeback);
+
+    /* The wide extends: a three-bit op, a rotate, and the add forms.
+     * uxtb.w r8, r10, ror #8 / sxtb.w r0, r1 / uxth.w r0, r1 / uxtab r0, r1, r2 /
+     * sxtb16 r0, r1 / sxtah r3, r4, r5, ror #16 */
+    put16(0, 0xFA5F); put16(2, 0xF89A);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_UXTB && in.rd == 8 && in.rm == 10 && in.rn == ARM_NO_REG && in.shift_amt == 8 && in.shift_type == SH_ROR);
+    put16(0, 0xFA4F); put16(2, 0xF081);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_SXTB && in.rd == 0 && in.rm == 1 && in.shift_amt == 0);
+    put16(0, 0xFA1F); put16(2, 0xF081);
+    assert(dec(ARM_T32, BASE).op == OP_UXTH);
+    put16(0, 0xFA0F); put16(2, 0xF081);
+    assert(dec(ARM_T32, BASE).op == OP_SXTH);
+    put16(0, 0xFA51); put16(2, 0xF082);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_UXTB && in.rn == 1 && in.rm == 2 && in.rd == 0);
+    put16(0, 0xFA2F); put16(2, 0xF081);
+    assert(dec(ARM_T32, BASE).op == OP_SXTB16);
+    put16(0, 0xFA3F); put16(2, 0xF081);
+    assert(dec(ARM_T32, BASE).op == OP_UXTB16);
+    put16(0, 0xFA04); put16(2, 0xF3A5);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_SXTH && in.rn == 4 && in.rd == 3 && in.rm == 5 && in.shift_amt == 16);
+
+    /* rev r1, r0 / rev16 r1, r0 / revsh r1, r0: op bits 7:6 of 0xBAxx. */
+    put16(0, 0xBA01);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_REV && in.rd == 1 && in.rm == 0);
+    put16(0, 0xBA41);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_REV16 && in.rd == 1 && in.rm == 0);
+    put16(0, 0xBAC1);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_REVSH && in.rd == 1 && in.rm == 0);
+    put16(0, 0xBA81);                        /* unallocated */
+    assert(dec(ARM_T32, BASE).op == OP_NONE);
 
     printf("  32-bit thumb operands          ok\n");
 }
@@ -272,7 +356,7 @@ static void test_t32_operands(void) {
 static void test_operands(void) {
     memset(code, 0, sizeof(code));
 
-    /* 16-bit data processing sets flags implicitly â€” there is no S bit. */
+    /* 16-bit data processing sets flags implicitly — there is no S bit. */
     put16(0, 0x1C41);                      /* adds r1, r0, #1                */
     arm_insn in = dec(ARM_T32, BASE);
     assert(in.op == OP_ADD && in.rd == 1 && in.rn == 0);
@@ -483,9 +567,26 @@ static void test_branch_targets(void) {
 static void test_mode_switches(void) {
     memset(code, 0, sizeof(code));
 
-    put16(0, 0x4778);                      /* bx pc â€” switches to ARM        */
+    put16(0, 0x4778);                      /* bx pc — switches to ARM        */
+    /* A branch with a known destination, the word-aligned address four bytes
+     * on, in ARM. The linker's interworking veneers start with it. */
     arm_insn in = dec(ARM_T32, BASE);
-    assert(in.cls == A_INDIRECT && in.switches_mode);
+    assert(in.cls == A_BRANCH && in.switches_mode && in.has_target);
+    assert(in.target == ((BASE + 4) & ~3u));
+
+    /* The PIC long-branch veneer the Vita linker writes for a Thumb tail call
+     * to an ARM symbol:  bx pc; nop; ldr ip, [pc]; add pc, ip, pc; .word off
+     * The destination is off + (veneer + 16), and the decoder resolves it so
+     * the ARM body is never walked. */
+    put16(0, 0x4778);
+    put16(2, 0x46C0);                      /* nop (mov r8, r8)               */
+    put32(4, 0xE59FC000);                  /* ldr ip, [pc, #0]               */
+    put32(8, 0xE08CF00F);                  /* add pc, ip, pc                 */
+    put32(12, 0x00000210);                 /* -> BASE + 16 + 0x210           */
+    in = dec(ARM_T32, BASE);
+    assert(in.cls == A_BRANCH && in.switches_mode && in.has_target);
+    assert(in.target == BASE + 16 + 0x210);
+    memset(code, 0, sizeof(code));
 
     put16(0, 0x4780);                      /* blx r0                         */
     in = dec(ARM_T32, BASE);
@@ -495,7 +596,7 @@ static void test_mode_switches(void) {
     in = dec(ARM_A32, BASE);
     assert(in.cls == A_CALL && in.switches_mode);
 
-    /* bx lr must NOT be flagged as a mode switch â€” it is a return, and
+    /* bx lr must NOT be flagged as a mode switch — it is a return, and
      * treating it as interworking would corrupt the decoder's mode state for
      * everything after it. */
     put16(0, 0x4770);
@@ -509,7 +610,7 @@ static void test_mode_switches(void) {
 static void test_arm_cond_f(void) {
     memset(code, 0, sizeof(code));
 
-    /* cond == 1111 is not "never" â€” it is a separate encoding space. Reading it
+    /* cond == 1111 is not "never" — it is a separate encoding space. Reading it
      * as a normal conditional instruction misdecodes all of it. */
     put32(0, 0xFA000000);                  /* blx imm                        */
     arm_insn in = dec(ARM_A32, BASE);
@@ -535,7 +636,7 @@ static void test_arm_cond_f(void) {
  * single-precision register keeps its LOW bit in the separate D flag and its
  * high four in the main field, while a double-precision register does the
  * reverse. Getting it backwards yields a valid register number that is simply
- * the wrong one â€” no error, just a program reading floats it never wrote.
+ * the wrong one — no error, just a program reading floats it never wrote.
  */
 
 static void test_vfp(void) {
@@ -547,7 +648,7 @@ static void test_vfp(void) {
     assert(in.op == OP_VLDR && in.rn == 1 && in.vd == 0);
     assert(in.imm == 8 && in.mem_add && !in.vfp_dp);
 
-    /* vldr d0, [r1, #8] â€” coproc 11 selects double precision */
+    /* vldr d0, [r1, #8] — coproc 11 selects double precision */
     put16(0, 0xED91); put16(2, 0x0B02);
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_VLDR && in.vfp_dp && in.vd == 0);
@@ -563,7 +664,7 @@ static void test_vfp(void) {
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_VLDR && in.vfp_dp && in.vd == 16);
 
-    /* vadd.f32 s0, s1, s2 / vsub.f32 â€” the op bit of the second halfword
+    /* vadd.f32 s0, s1, s2 / vsub.f32 — the op bit of the second halfword
      * separates them within one encoding. */
     put16(0, 0xEE30); put16(2, 0x0A81);
     in = dec(ARM_T32, BASE);
@@ -573,9 +674,16 @@ static void test_vfp(void) {
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_VSUB);
 
-    /* vmul.f32 and vdiv.f32 */
+    /* vmul.f32 and vdiv.f32; the op bit of the multiply group is VNMUL, and
+     * opc1 01 is the pair of negated accumulates. */
     put16(0, 0xEE20); put16(2, 0x0A81);
     assert(dec(ARM_T32, BASE).op == OP_VMUL);
+    put16(0, 0xEE20); put16(2, 0x0AC1);      /* vnmul.f32 s0, s1, s2 */
+    assert(dec(ARM_T32, BASE).op == OP_VNMUL);
+    put16(0, 0xEE10); put16(2, 0x0A81);      /* vnmls.f32 s0, s1, s2 */
+    assert(dec(ARM_T32, BASE).op == OP_VNMLS);
+    put16(0, 0xEE10); put16(2, 0x0AC1);      /* vnmla.f32 s0, s1, s2 */
+    assert(dec(ARM_T32, BASE).op == OP_VNMLA);
     put16(0, 0xEE80); put16(2, 0x0A81);
     assert(dec(ARM_T32, BASE).op == OP_VDIV);
 
@@ -584,13 +692,13 @@ static void test_vfp(void) {
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_VCMP && in.vm != ARM_NO_REG);
 
-    /* vcmp.f32 s0, #0 â€” compares against zero, so there is no second
+    /* vcmp.f32 s0, #0 — compares against zero, so there is no second
      * register at all. */
     put16(0, 0xEEB5); put16(2, 0x0A40);
     in = dec(ARM_T32, BASE);
     assert(in.op == OP_VCMP && in.vm == ARM_NO_REG && in.has_imm);
 
-    /* vmrs APSR_nzcv, fpscr â€” VFP comparisons write FPSCR, and only this
+    /* vmrs APSR_nzcv, fpscr — VFP comparisons write FPSCR, and only this
      * moves them where a conditional branch can see them. */
     put16(0, 0xEEF1); put16(2, 0xFA10);
     assert(dec(ARM_T32, BASE).op == OP_VMRS);
@@ -607,7 +715,600 @@ static void test_vfp(void) {
     put16(0, 0xEF00); put16(2, 0x0000);
     assert(dec(ARM_T32, BASE).cls == A_SIMD);
 
+    /* vmov.f32 s2, #0.5 and vmov.f64 d0, #1.0: eight bits of constant. */
+    put16(0, 0xEEB6); put16(2, 0x1A00);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VMOV_IMM && !in.vfp_dp && in.vd == 2 && in.imm == 0x3F000000u);
+    put16(0, 0xEEB7); put16(2, 0x0B00);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VMOV_IMM && in.vfp_dp && in.vd == 0 && in.imm64 == 0x3FF0000000000000ull);
+    put16(0, 0xEEBF); put16(2, 0x8A08);      /* vmov.f32 s16, #-1.5: imm8 0xF8 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VMOV_IMM && in.vd == 16 && in.imm == 0xBFC00000u);
+
+    /* vldmia r0, {d0-d1} and vstmia sp, {d0-d1}: list forms without
+     * write-back, P=0 U=1 W=0, which an earlier revision left unclaimed. */
+    put16(0, 0xEC90); put16(2, 0x0B04);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VLDM && in.rn == 0 && in.vd == 0 && in.imm == 2 && !in.writeback && in.mem_add && in.vfp_dp);
+    put16(0, 0xEC8D); put16(2, 0x0B04);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VSTM && in.rn == 13 && !in.writeback);
+
+    /* vmov r0, r1, d0 / vmov d0, r0, r1 / vmov r0, r1, s0, s1 */
+    put16(0, 0xEC51); put16(2, 0x0B10);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VMOV_D_TO_C && in.vfp_dp && in.rt == 0 && in.rt2 == 1 && in.vm == 0);
+    put16(0, 0xEC41); put16(2, 0x0B10);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VMOV_C_TO_D && in.vfp_dp && in.rt == 0 && in.rt2 == 1 && in.vm == 0);
+    put16(0, 0xEC51); put16(2, 0x0A10);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VMOV_D_TO_C && !in.vfp_dp && in.vm == 0);
+
+    /* vcvtb.f16.f32 s0, s0 / vcvtb.f16.f32 s1, s1 / vcvtb.f32.f16 s0, s0 /
+     * vcvtt.f32.f16 s0, s0: half precision, T in bit 7 of the low halfword. */
+    put16(0, 0xEEB3); put16(2, 0x0A40);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_F32_F16 && in.vd == 0 && in.vm == 0 && in.imm == 0);
+    put16(0, 0xEEF3); put16(2, 0x0A60);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_F32_F16 && in.vd == 1 && in.vm == 1 && in.imm == 0);
+    put16(0, 0xEEB2); put16(2, 0x0A40);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_F16_F32 && in.vd == 0 && in.vm == 0 && in.imm == 0);
+    put16(0, 0xEEB2); put16(2, 0x0AC0);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_F16_F32 && in.imm == 1);
+
+    /* vcvt.f64.u32 d1, s0 and vcvt.f64.s32 d1, s0: the signedness is bit 7
+     * of the second halfword. vcvt.f32.u32 s0, s1 likewise. */
+    put16(0, 0xEEB8); put16(2, 0x1B40);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_I2F && in.vfp_dp && in.vfp_unsigned && in.vd == 1 && in.vm == 0);
+    put16(0, 0xEEB8); put16(2, 0x1BC0);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_I2F && in.vfp_dp && !in.vfp_unsigned);
+    put16(0, 0xEEB8); put16(2, 0x0A60);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_I2F && !in.vfp_dp && in.vfp_unsigned && in.vm == 1);
+    put16(0, 0xEEB8); put16(2, 0x0AE0);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_I2F && !in.vfp_dp && !in.vfp_unsigned);
+
+    /* vcvt.s32.f64 s0, d1: the integer side is an S register whichever the
+     * float side is. vcvt.f64.f32 d2, s3 changes precision. */
+    put16(0, 0xEEBD); put16(2, 0x0BC1);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_F2I && in.vfp_dp && in.vd == 0 && in.vm == 1 && !in.vfp_unsigned);
+    put16(0, 0xEEB7); put16(2, 0x2AE1);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_VCVT_FF && !in.vfp_dp && in.vd == 2 && in.vm == 3);
+
     printf("  scalar vfp                     ok\n");
+}
+
+/* --- Advanced SIMD operands ------------------------------------------------- */
+
+static void test_neon_operands(void) {
+    memset(code, 0, sizeof(code));
+    arm_insn in;
+
+    /* vdup.32 d0, d0[0] / q0, d0[0] / d2, d1[1] / vdup.16 d0, d1[0] / vdup.8 d0, d1[1] */
+    put16(0, 0xFFB4); put16(2, 0x0C00);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_DUP_LANE && in.vd == 0 && in.vm == 0 && in.neon_size == 32 && in.imm == 0 && !in.neon_q);
+    put16(0, 0xFFB4); put16(2, 0x0C40);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_DUP_LANE && in.neon_q);
+    put16(0, 0xFFBC); put16(2, 0x2C01);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_DUP_LANE && in.vd == 2 && in.vm == 1 && in.neon_size == 32 && in.imm == 1);
+    put16(0, 0xFFB2); put16(2, 0x0C01);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_DUP_LANE && in.neon_size == 16 && in.imm == 0);
+    put16(0, 0xFFB3); put16(2, 0x0C01);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_DUP_LANE && in.neon_size == 8 && in.imm == 1);
+
+    /* The f32 three-register forms. */
+    put16(0, 0xFF04); put16(2, 0x6D54);      /* vmul.f32 q3, q2, q2 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_FMUL && in.vd == 6 && in.vn == 4 && in.vm == 4 && in.neon_q && in.neon_f);
+    put16(0, 0xEF01); put16(2, 0x0D00);      /* vadd.f32 d0, d1, d0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_FADD && in.vd == 0 && in.vn == 1 && in.vm == 0 && !in.neon_q);
+    put16(0, 0xEF21); put16(2, 0x0D00);      /* vsub.f32 d0, d1, d0 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FSUB);
+    put16(0, 0xFF02); put16(2, 0x1D02);      /* vpadd.f32 d1, d2, d2 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_FPADD && in.vd == 1 && in.vn == 2 && in.vm == 2);
+    put16(0, 0xFF02); put16(2, 0x1D42);      /* ...has no Q form */
+    in = dec(ARM_T32, BASE);
+    assert(in.cls == A_SIMD && in.op == OP_NONE);
+    put16(0, 0xEF26); put16(2, 0x6F52);      /* vrsqrts.f32 q3, q3, q1 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_FRSQRTS && in.vd == 6 && in.vn == 6 && in.vm == 2 && in.neon_q);
+    put16(0, 0xEF06); put16(2, 0x6F52);      /* vrecps.f32 q3, q3, q1 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FRECPS);
+    put16(0, 0xEF00); put16(2, 0x0E00);      /* vceq.f32 d0, d0, d0 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FCEQ);
+    put16(0, 0xFF00); put16(2, 0x0E00);      /* vcge.f32 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FCGE);
+    put16(0, 0xFF20); put16(2, 0x0E00);      /* vcgt.f32 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FCGT);
+    put16(0, 0xEF00); put16(2, 0x0F00);      /* vmax.f32 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FMAX);
+    put16(0, 0xEF20); put16(2, 0x0F00);      /* vmin.f32 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FMIN);
+    put16(0, 0xEF00); put16(2, 0x0D10);      /* vmla.f32 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FMLA);
+    put16(0, 0xEF20); put16(2, 0x0D10);      /* vmls.f32 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FMLS);
+    put16(0, 0xFF20); put16(2, 0x0D00);      /* vabd.f32 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FABD);
+    put16(0, 0xEF10); put16(2, 0x0D00);      /* size<0> set: not f32 */
+    assert(dec(ARM_T32, BASE).op == OP_NONE);
+
+    /* Integer three-register forms. */
+    put16(0, 0xEF00); put16(2, 0x0910);      /* vmul.i8 d0, d0, d0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MUL && in.neon_size == 8);
+    put16(0, 0xEF10); put16(2, 0x0900);      /* vmla.i16 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MLA && in.neon_size == 16);
+    put16(0, 0xFF20); put16(2, 0x0600);      /* vmax.u32 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MAX && in.vfp_unsigned && in.neon_size == 32);
+    put16(0, 0xEF20); put16(2, 0x0610);      /* vmin.s32 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MIN && !in.vfp_unsigned);
+    put16(0, 0xEF00); put16(2, 0x0300);      /* vcgt.s8 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_CGT);
+    put16(0, 0xFF00); put16(2, 0x0310);      /* vcge.u8 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_CGE && in.vfp_unsigned);
+
+    /* Two registers, miscellaneous. */
+    put16(0, 0xFFBB); put16(2, 0x45C2);      /* vrsqrte.f32 q2, q1 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_FRSQRTE && in.vd == 4 && in.vm == 2 && in.neon_q);
+    put16(0, 0xFFBB); put16(2, 0x2542);      /* vrecpe.f32 q1, q1 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_FRECPE && in.vd == 2 && in.vm == 2);
+    put16(0, 0xFFBB); put16(2, 0x0442);      /* vrecpe.u32: the integer estimate, unclaimed */
+    assert(dec(ARM_T32, BASE).op == OP_NONE);
+    put16(0, 0xFFB9); put16(2, 0x07C0);      /* vneg.f32 q0, q0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_FNEG && in.neon_q);
+    put16(0, 0xFFB9); put16(2, 0x0740);      /* vabs.f32 q0, q0 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_FABS);
+    put16(0, 0xFFB5); put16(2, 0x0380);      /* vneg.s16 d0, d0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_NEG && in.neon_size == 16 && !in.neon_f);
+    put16(0, 0xFFB0); put16(2, 0x0580);      /* vmvn d0, d0 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_MVN);
+    put16(0, 0xFFB1); put16(2, 0x0000);      /* vcgt.s8 d0, d0, #0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_CMP0 && in.imm == 0 && in.neon_size == 8 && !in.neon_f);
+    put16(0, 0xFFB9); put16(2, 0x0480);      /* vcge.f32 d0, d0, #0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_CMP0 && in.imm == 1 && in.neon_f);
+    put16(0, 0xFFB0); put16(2, 0x0000);      /* vrev64.8 d0, d0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_REV && in.imm == 64 && in.neon_size == 8);
+    put16(0, 0xFFB4); put16(2, 0x0080);      /* vrev32.16 d0, d0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_REV && in.imm == 32 && in.neon_size == 16);
+    put16(0, 0xFFB4); put16(2, 0x0100);      /* vrev16.16: no such thing */
+    assert(dec(ARM_T32, BASE).op == OP_NONE);
+    put16(0, 0xFFB0); put16(2, 0x0500);      /* vcnt.8 d0, d0 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_CNT);
+    put16(0, 0xFFB8); put16(2, 0x0480);      /* vclz.i32 d0, d0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_CLZ && in.neon_size == 32);
+    put16(0, 0xFFB2); put16(2, 0x0000);      /* vswp d0, d0 */
+    assert(dec(ARM_T32, BASE).op == OP_NEON_SWP);
+    put16(0, 0xFFBB); put16(2, 0x0740);      /* vcvt.s32.f32 q0, q0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_CVT && in.imm == 2 && in.neon_q);
+    put16(0, 0xFFBB); put16(2, 0x0640);      /* vcvt.f32.s32 q0, q0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_CVT && in.imm == 0);
+
+    /* vext.8 q3, q3, q3, #8 and vext.8 d0, d1, d2, #3 */
+    put16(0, 0xEFB6); put16(2, 0x6846);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_EXT && in.vd == 6 && in.vn == 6 && in.vm == 6 && in.imm == 8 && in.neon_q);
+    put16(0, 0xEFB1); put16(2, 0x0302);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_EXT && in.vd == 0 && in.vn == 1 && in.vm == 2 && in.imm == 3 && !in.neon_q);
+    put16(0, 0xEFB1); put16(2, 0x0902);      /* #9 on a D register: no */
+    assert(dec(ARM_T32, BASE).op == OP_NONE);
+
+    /* Shifts by an immediate: the lane width is where the top bit of
+     * L:imm6 sits, the amount is the rest. */
+    put16(0, 0xFFA0); put16(2, 0x3490);      /* vsri.64 d3, d0, #32 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SRI && in.vd == 3 && in.vm == 0 && in.neon_size == 64 && in.imm == 32);
+    put16(0, 0xFFA0); put16(2, 0x2593);      /* vsli.64 d2, d3, #32 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SLI && in.vd == 2 && in.vm == 3 && in.neon_size == 64 && in.imm == 32);
+    put16(0, 0xEFB4); put16(2, 0x0050);      /* vshr.s32 d0, d0, #12 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SHR && in.neon_size == 32 && in.imm == 12 && !in.vfp_unsigned);
+    put16(0, 0xFFB4); put16(2, 0x0050);      /* vshr.u32 d0, d0, #12 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SHR && in.vfp_unsigned);
+    put16(0, 0xEF9C); put16(2, 0x0110);      /* vsra.s16 d0, d0, #4 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SRA && in.neon_size == 16 && in.imm == 4);
+    put16(0, 0xEF8B); put16(2, 0x0510);      /* vshl.i8 d0, d0, #3 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SHL && in.neon_size == 8 && in.imm == 3);
+    put16(0, 0xEF80); put16(2, 0x0590);      /* vshl.i64 d0, d0, #0 (L set) */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SHL && in.neon_size == 64 && in.imm == 0);
+    put16(0, 0xEFA0); put16(2, 0x0250);      /* vrshr.s32 d0, d0, #32 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_RSHR && in.neon_size == 32 && in.imm == 32);
+    put16(0, 0xEF90); put16(2, 0x0A10);      /* vmovl.s16 q0, d0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MOVL && in.neon_size == 16 && in.imm == 0 && in.neon_q && !in.vfp_unsigned);
+    put16(0, 0xFF88); put16(2, 0x0A10);      /* vmovl.u8 q0, d0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MOVL && in.neon_size == 8 && in.vfp_unsigned);
+    put16(0, 0xEF9C); put16(2, 0x0A10);      /* vshll.s16 q0, d0, #12 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SHLL && in.neon_size == 16 && in.imm == 12);
+    put16(0, 0xEFA8); put16(2, 0x0810);      /* vshrn.i64 d0, q0, #24 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SHRN && in.neon_size == 64 && in.imm == 24 && !in.neon_q);
+    put16(0, 0xEF90); put16(2, 0x0850);      /* vrshrn.i32 d0, q0, #16 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_RSHRN && in.neon_size == 32 && in.imm == 16);
+    put16(0, 0xFFB6); put16(2, 0x0200);      /* vmovn.i32 d0, q0 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MOVN && in.neon_size == 32 && in.imm == 0);
+    put16(0, 0xEF88); put16(2, 0x0710);      /* vqshl.s8 #0: saturating, unclaimed */
+    assert(dec(ARM_T32, BASE).op == OP_NONE);
+    put16(0, 0xEF81); put16(2, 0x0710);      /* imm6 000xxx with L clear is the immediate group: vorr.i32 #0x10000000 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_ORR_IMM && in.imm64 == 0x1000000010000000ull);
+
+    /* By a scalar: vmla.f32 q1, q2, d1[0]; vmul.f32 q0, q0, d3[1]; vmul.i16 d0, d0, d1[2] */
+    put16(0, 0xFFA4); put16(2, 0x2141);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MLA_SCALAR && in.neon_f && in.neon_q && in.vd == 2 && in.vn == 4 && in.vm == 1 && in.imm == 0);
+    put16(0, 0xFFA0); put16(2, 0x0963);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MUL_SCALAR && in.neon_f && in.neon_q && in.vm == 3 && in.imm == 1);
+    put16(0, 0xEF90); put16(2, 0x0841);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MUL_SCALAR && !in.neon_f && !in.neon_q && in.neon_size == 16 && in.vm == 1 && in.imm == 0);
+    put16(0, 0xEF90); put16(2, 0x0861);      /* d1[2]: the lane is M:Vm<3>, M high */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MUL_SCALAR && in.vm == 1 && in.imm == 2);
+    put16(0, 0xEF90); put16(2, 0x0869);      /* d1[3] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MUL_SCALAR && in.vm == 1 && in.imm == 3);
+    put16(0, 0xEFA0); put16(2, 0x0440);      /* vmls.i32 d0, d0, d0[0] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_MLS_SCALAR && !in.neon_f && in.neon_size == 32);
+    put16(0, 0xEFA0); put16(2, 0x0A40);      /* vmull: long, unclaimed */
+    assert(dec(ARM_T32, BASE).op == OP_NONE);
+
+    printf("  neon operands                  ok\n");
+}
+
+/* --- exclusive access and barriers ----------------------------------------- */
+
+static void test_exclusive(void) {
+    memset(code, 0, sizeof(code));
+    arm_insn in;
+
+    put16(0, 0xE850); put16(2, 0x2F00);      /* ldrex r2, [r0] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDREX && in.cls == A_LOAD && in.rt == 2 && in.rn == 0 && in.imm == 0 && in.mem_size == 32);
+    put16(0, 0xE840); put16(2, 0x2301);      /* strex r3, r2, [r0, #4] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_STREX && in.cls == A_STORE && in.rd == 3 && in.rt == 2 && in.rn == 0 && in.imm == 4);
+    put16(0, 0xE8D1); put16(2, 0x4F4F);      /* ldrexb r4, [r1] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDREX && in.rt == 4 && in.rn == 1 && in.mem_size == 8);
+    put16(0, 0xE8C1); put16(2, 0x4F52);      /* strexh r2, r4, [r1] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_STREX && in.rd == 2 && in.rt == 4 && in.rn == 1 && in.mem_size == 16);
+
+    /* mrc p15, 0, r0, c13, c0, 3: the TLS pointer; any other MRC is not claimed. */
+    put16(0, 0xEE1D); put16(2, 0x0F70);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_MRC_TLS && in.rt == 0);
+    put16(0, 0xEE1D); put16(2, 0x5F70);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_MRC_TLS && in.rt == 5);
+    put16(0, 0xEE1D); put16(2, 0x0F50);      /* c13, c0, 2: TPIDRURW */
+    assert(dec(ARM_T32, BASE).op == OP_NONE);
+
+    /* tbb [pc, r0] shares the 0xE8D0 space and must stay a table branch. */
+    put16(0, 0xE8DF); put16(2, 0xF000);
+    assert(dec(ARM_T32, BASE).op == OP_TBB);
+
+    /* The guarding compare may sit several loads and stores before the table
+     * branch; a flag-setting instruction or a write to the index between them
+     * means the compare is not this table's. cmp r3, #6 / ldr r5, [r1, #12] /
+     * str r5, [r4, #4] / str.w r12, [r1, #12] / bhi / tbh [pc, r3, lsl #1] */
+    {
+        arm_insn prev[6], tb;
+        put16(0, 0x2B06); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0x68CD); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0x6065); prev[2] = dec(ARM_T32, BASE);
+        put16(0, 0xF8C1); put16(2, 0xC00C); prev[3] = dec(ARM_T32, BASE);
+        put16(0, 0xD814); prev[4] = dec(ARM_T32, BASE);
+        put16(0, 0xE8DF); put16(2, 0xF013); tb = dec(ARM_T32, BASE);
+        assert(tb.op == OP_TBH && tb.rm == 3);
+        assert(arm_table_count(prev, 5, &tb) == 7);
+        put16(0, 0x9300); prev[3] = dec(ARM_T32, BASE);     /* str r3, [sp]: reads the index, keeps it */
+        assert(arm_table_count(prev, 5, &tb) == 7);
+        put16(0, 0x3301); prev[5] = dec(ARM_T32, BASE);     /* adds r3, #1 */
+        prev[4] = prev[5]; assert(arm_table_count(prev, 5, &tb) == 0);
+        put16(0, 0x4613); prev[4] = dec(ARM_T32, BASE);     /* mov r3, r2 */
+        assert(arm_table_count(prev, 5, &tb) == 0);
+    }
+
+    /* A switch on 40..58: cmp r0, #58 / bgt out / cmp r0, #39 / ble.w out /
+     * subs r0, #40 / tbh [pc, r0, lsl #1]. The nearest compare is the lower
+     * bound; the count comes from the upper one, less the subtract: 19. */
+    {
+        arm_insn prev[5], tb;
+        put16(0, 0x283A); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0xDC2A); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0x2827); prev[2] = dec(ARM_T32, BASE);
+        put16(0, 0xF340); put16(2, 0x8105); prev[3] = dec(ARM_T32, BASE);
+        put16(0, 0x3828); prev[4] = dec(ARM_T32, BASE);
+        put16(0, 0xE8DF); put16(2, 0xF010); tb = dec(ARM_T32, BASE);
+        assert(prev[1].cls == A_BRANCH && prev[1].conditional && prev[1].cond == ARM_COND_GT);
+        assert(prev[3].cond == ARM_COND_LE && prev[4].op == OP_SUB && prev[4].rd == 0 && prev[4].imm == 40);
+        assert(arm_table_count(prev, 5, &tb) == 19);
+        assert(arm_table_count(prev + 2, 3, &tb) == 0);     /* only the lower bound in view */
+    }
+
+    /* A guard that branches to its table: cmp r0, #37 / bls table ... table:
+     * str r1, [sp, #44] / tbh [pc, r0, lsl #1]. The walk from `table` is
+     * seeded with the compare and counts 38; bne is not a guard, blo is one
+     * less. */
+    {
+        arm_insn prev[2], br, tb;
+        int8_t reg = -1; uint32_t max = 0;
+        put16(0, 0x2825); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0xD90A); br = dec(ARM_T32, BASE);
+        assert(arm_table_guard(prev, 1, &br, &reg, &max) && reg == 0 && max == 37);
+        put16(0, 0xD10A); br = dec(ARM_T32, BASE);
+        assert(!arm_table_guard(prev, 1, &br, &reg, &max));
+        put16(0, 0xD30A); br = dec(ARM_T32, BASE);
+        assert(arm_table_guard(prev, 1, &br, &reg, &max) && max == 36);
+        arm_table_seed(&prev[0], 0, 37);
+        put16(0, 0x910B); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0xE8DF); put16(2, 0xF010); tb = dec(ARM_T32, BASE);
+        assert(arm_table_count(prev, 2, &tb) == 38);
+    }
+
+    /* A tree of compares over a dense range: cmp r0, #103 / bgt far / cmp r0,
+     * #62 / bgt table ... table: cmp r0, #97 / ble.w out / subs r0, #98 /
+     * tbh [pc, r0, lsl #1]. The branch to the table is taken when r0 is
+     * above 62, which bounds nothing from above; the compare before it had
+     * already sent everything above 103 elsewhere. Seeded with that, the
+     * table counts 103 - 98 + 1: six. A write to r0 between the two
+     * compares and the bound is gone. */
+    {
+        arm_insn prev[3], win[4], br, tb;
+        int8_t reg = -1; uint32_t max = 0;
+        put16(0, 0x2867); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0xDC11); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0x283E); prev[2] = dec(ARM_T32, BASE);
+        put16(0, 0xDC2B); br = dec(ARM_T32, BASE);
+        assert(br.cls == A_BRANCH && br.conditional && br.cond == ARM_COND_GT);
+        assert(arm_table_guard(prev, 3, &br, &reg, &max) && reg == 0 && max == 103);
+        assert(!arm_table_guard(prev + 2, 1, &br, &reg, &max));    /* the first compare out of view */
+        put16(0, 0x3001); prev[1] = dec(ARM_T32, BASE);            /* adds r0, #1 in between */
+        assert(!arm_table_guard(prev, 3, &br, &reg, &max));
+
+        arm_table_seed(&win[0], 0, 103);
+        put16(0, 0x2861); win[1] = dec(ARM_T32, BASE);
+        put16(0, 0xF340); put16(2, 0x8115); win[2] = dec(ARM_T32, BASE);
+        put16(0, 0x3862); win[3] = dec(ARM_T32, BASE);
+        put16(0, 0xE8DF); put16(2, 0xF010); tb = dec(ARM_T32, BASE);
+        assert(arm_table_count(win, 4, &tb) == 6);
+        assert(arm_table_count(win + 1, 3, &tb) == 0);              /* not seeded: only the lower bound */
+    }
+
+    /* A table at the top of a loop, jumped back to once the next state has
+     * been checked: ldrsb.w r0, [r6] / mov r7, r9 / cmp r0, #31 / bhi out /
+     * b.w table. The jump takes the bound with it, 32 states. And with the
+     * range checked in two steps before a jump, cmp r4, #19 / bgt far /
+     * cmp r4, #0 / blt.w out / b table: the top is the first compare's. */
+    {
+        arm_insn prev[5], br;
+        int8_t reg = -1; uint32_t max = 0;
+        put16(0, 0xF996); put16(2, 0x0000); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0x464F); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0x281F); prev[2] = dec(ARM_T32, BASE);
+        put16(0, 0xD8F6); prev[3] = dec(ARM_T32, BASE);
+        put16(0, 0xF7FE); put16(2, 0xBFF9); br = dec(ARM_T32, BASE);
+        assert(br.cls == A_BRANCH && !br.conditional && br.has_target);
+        assert(arm_table_guard_jump(prev, 4, &br, &reg, &max) && reg == 0 && max == 31);
+        assert(!arm_table_guard_jump(prev, 3, &br, &reg, &max));       /* compared, but nothing sent away yet */
+        assert(!arm_table_guard(prev, 4, &br, &reg, &max));            /* and this is not the conditional kind */
+
+        put16(0, 0x2C13); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0xDC03); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0x2C00); prev[2] = dec(ARM_T32, BASE);
+        put16(0, 0xF2C0); put16(2, 0x8324); prev[3] = dec(ARM_T32, BASE);
+        put16(0, 0xE006); br = dec(ARM_T32, BASE);
+        assert(prev[3].cond == ARM_COND_LT && !br.conditional);
+        assert(arm_table_guard_jump(prev, 4, &br, &reg, &max) && reg == 4 && max == 19);
+    }
+
+    /* The index moved between registers and offset on the way.
+     * cmp r7, #13 / bgt / adds r0, r7, #1 / tbh [pc, r0]: 15.
+     * adds r5, r1, #0 / cmp r1, #4 / bhi / tbh [pc, r5]: the compare comes
+     * after the move: 5.
+     * movw r1, #283 / cmp r0, r1 / bgt / subs r0, #1 / subs.w r0, r0, #256 /
+     * tbh [pc, r0]: 27. */
+    {
+        arm_insn prev[5], tb;
+        put16(0, 0x2F0D); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0xDCD8); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0x1C78); prev[2] = dec(ARM_T32, BASE);
+        put16(0, 0xE8DF); put16(2, 0xF010); tb = dec(ARM_T32, BASE);
+        assert(prev[2].op == OP_ADD && prev[2].rd == 0 && prev[2].rn == 7 && prev[2].imm == 1);
+        assert(arm_table_count(prev, 3, &tb) == 15);
+
+        put16(0, 0x1C0D); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0x2904); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0xD80A); prev[2] = dec(ARM_T32, BASE);
+        put16(0, 0xE8DF); put16(2, 0xF015); tb = dec(ARM_T32, BASE);
+        assert(arm_table_count(prev, 3, &tb) == 5);
+
+        put16(0, 0xF240); put16(2, 0x111B); prev[0] = dec(ARM_T32, BASE);
+        put16(0, 0x4288); prev[1] = dec(ARM_T32, BASE);
+        put16(0, 0xDC21); prev[2] = dec(ARM_T32, BASE);
+        put16(0, 0x3801); prev[3] = dec(ARM_T32, BASE);
+        put16(0, 0xF5B0); put16(2, 0x7080); prev[4] = dec(ARM_T32, BASE);
+        put16(0, 0xE8DF); put16(2, 0xF010); tb = dec(ARM_T32, BASE);
+        assert(prev[0].op == OP_MOV && prev[0].has_imm && prev[0].imm == 283 && prev[0].rd == 1);
+        assert(prev[1].op == OP_CMP && !prev[1].has_imm && prev[1].rn == 0 && prev[1].rm == 1);
+        assert(prev[4].op == OP_SUB && prev[4].imm == 256);
+        assert(arm_table_count(prev, 5, &tb) == 27);
+    }
+
+    /* dmb sy, dsb sy, isb sy, clrex. */
+    put16(0, 0xF3BF); put16(2, 0x8F5F);
+    assert(dec(ARM_T32, BASE).op == OP_DMB);
+    put16(0, 0xF3BF); put16(2, 0x8F4F);
+    assert(dec(ARM_T32, BASE).op == OP_DMB);
+    put16(0, 0xF3BF); put16(2, 0x8F6F);
+    assert(dec(ARM_T32, BASE).op == OP_DMB);
+    put16(0, 0xF3BF); put16(2, 0x8F2F);
+    assert(dec(ARM_T32, BASE).op == OP_CLREX);
+
+    printf("  ldrex/strex, barriers          ok\n");
+}
+
+/* The structure loads and stores. These share their top bits with the core
+ * load/store encodings, so an unclaimed one is not a trap but a halfword
+ * store of a core register: `vld1.32 {d8[]}, [sl]` in a retail title's
+ * record loop became `strh r8, [sl, #0xC8F]` and wrote the loop counter
+ * over the records. */
+static void test_neon_structure_loads(void) {
+    memset(code, 0, sizeof(code));
+    arm_insn in;
+
+    /* vld1.32 {d8[]}, [sl]: one word to every lane of one register */
+    put16(0, 0xF9AA); put16(2, 0x8C8F);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_LD_ALL && in.vd == 8 && in.rn == 10 && in.rm == 15 &&
+           in.neon_size == 32 && in.imm == 1 && in.bf_width == 1 && in.bf_lsb == 1 && !in.writeback);
+
+    /* vld1.8 {d1[3]}, [r2] */
+    put16(0, 0xF9A2); put16(2, 0x106F);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_LD_LANE && in.vd == 1 && in.rn == 2 && in.neon_size == 8 && in.imm64 == 3 && in.imm == 1);
+
+    /* vst1.32 {d0[1]}, [r0]! */
+    put16(0, 0xF980); put16(2, 0x088D);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_ST_LANE && in.vd == 0 && in.rn == 0 && in.rm == 13 && in.neon_size == 32 && in.imm64 == 1 && in.writeback);
+
+    /* Prior migration vector: this is an 8-bit lane store, never a full
+     * D-register store. */
+    put16(0, 0xF980); put16(2, 0x000D);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_ST_LANE && in.vd == 0 && in.rn == 0 &&
+           in.rm == 13 && in.neon_size == 8 && in.imm64 == 0 &&
+           in.imm == 1 && in.writeback);
+
+    /* vld2.16 {d0[2], d1[2]}, [r3] */
+    put16(0, 0xF9A3); put16(2, 0x058F);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_LD_LANE && in.imm == 2 && in.neon_size == 16 && in.imm64 == 2 && in.bf_lsb == 1);
+
+    /* vld2.8 {d0, d1}, [r0]: two interleaved structures, one group */
+    put16(0, 0xF920); put16(2, 0x080F);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_LDN && in.imm == 2 && in.bf_lsb == 1 && in.bf_width == 1 && in.neon_size == 8);
+
+    /* vst4.32 {d0, d2, d4, d6}, [r1]: four, spaced two apart */
+    put16(0, 0xF901); put16(2, 0x018F);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_STN && in.imm == 4 && in.bf_lsb == 2 && in.bf_width == 1 && in.neon_size == 32);
+
+    /* vld2.32 {d0, d1, d2, d3}, [r0]: two structures twice over */
+    put16(0, 0xF920); put16(2, 0x038F);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_LDN && in.imm == 2 && in.bf_width == 2 && in.neon_size == 32);
+
+    /* The space is claimed whole: a 64-bit lane form is SIMD, not a store. */
+    put16(0, 0xF9A2); put16(2, 0x0C0F | 0x00C0);   /* vld1 all lanes, size 11 */
+    in = dec(ARM_T32, BASE);
+    assert(in.cls == A_SIMD && in.op == OP_NONE);
+
+    printf("  neon structure loads           ok\n");
+}
+
+/* VSHL by register: the value is Vm and the counts are Vn. */
+static void test_neon_shift_by_register(void) {
+    memset(code, 0, sizeof(code));
+    arm_insn in;
+
+    put16(0, 0xEF21); put16(2, 0x1402);     /* vshl.s32 d1, d2, d1 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SHL_REG && in.vd == 1 && in.vn == 1 && in.vm == 2);
+    assert(in.neon_size == 32 && !in.vfp_unsigned && !in.neon_q);
+
+    put16(0, 0xFF6A); put16(2, 0x94A9);     /* vshl.u32 d25, d25, d26 */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_NEON_SHL_REG && in.vd == 25 && in.vn == 26 && in.vm == 25);
+    assert(in.neon_size == 32 && in.vfp_unsigned);
+
+    printf("  neon shift by register         ok\n");
+}
+
+/* The 32-bit PC-relative loads. Rn = 15 is the literal form, with a 12-bit
+ * offset whose sign is bit 7 of the first halfword: the bit the other forms
+ * use to pick the 12-bit immediate. Read the ordinary way, a negative
+ * offset becomes a register offset of zero, and the "literal" is the next
+ * instruction's bytes: a retail title's vector capacity came out as 69
+ * elements in a buffer of 30 that way. */
+static void test_pc_relative_loads(void) {
+    memset(code, 0, sizeof(code));
+    arm_insn in;
+
+    put16(0, 0xF85F); put16(2, 0x2020);     /* ldr.w r2, [pc, #-32] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDR && in.rn == 15 && in.rt == 2 && in.has_imm && in.imm == 32 && !in.mem_add);
+
+    put16(0, 0xF8DF); put16(2, 0x2020);     /* ldr.w r2, [pc, #32] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDR && in.rn == 15 && in.has_imm && in.imm == 32 && in.mem_add);
+
+    put16(0, 0xF83F); put16(2, 0x1004);     /* ldrh.w r1, [pc, #-4] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDRH && in.rn == 15 && in.rt == 1 && in.imm == 4 && !in.mem_add);
+
+    put16(0, 0xF91F); put16(2, 0x3010);     /* ldrsb.w r3, [pc, #-16] */
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDRSB && in.rn == 15 && in.rt == 3 && in.imm == 16 && !in.mem_add);
+
+    put16(0, 0xF81F); put16(2, 0xF020);     /* pld [pc, #-32]: a hint, nothing */
+    assert(dec(ARM_T32, BASE).op == OP_NOP);
+
+    /* The positive 16-bit form is unchanged: ldr r0, [pc, #8] */
+    put16(0, 0x4802);
+    in = dec(ARM_T32, BASE);
+    assert(in.op == OP_LDR && in.rn == 15 && in.imm == 8 && in.mem_add);
+
+    printf("  pc-relative loads              ok\n");
 }
 
 static void test_simd_identified(void) {
@@ -626,10 +1327,130 @@ static void test_simd_identified(void) {
     assert(in.cls == A_STORE && in.op == OP_VSTR);
     assert(in.rn == 0 && in.vd == 0 && !in.vfp_dp);
 
-    put32(0, 0xEE000A10);                  /* vmov (ARM)                     */
-    assert(dec(ARM_A32, BASE).cls == A_SIMD);
-
     printf("  simd identified as a class     ok\n");
+}
+
+/* --- ARM -------------------------------------------------------------------- */
+
+/* The integer instructions a hand-written routine is held together with,
+ * each decoded into the fields its Thumb counterpart fills; and the
+ * Advanced SIMD and VFP it is made of, which must decode exactly as their
+ * Thumb encodings do. The words are from a retail title's routines. */
+static void test_arm(void) {
+    arm_insn in;
+    memset(code, 0, sizeof(code));
+
+    put32(0, 0xE3560000); in = dec(ARM_A32, BASE);          /* cmp r6, #0 */
+    assert(in.width == 4 && in.op == OP_CMP && in.rn == 6 && in.rd == ARM_NO_REG);
+    assert(in.has_imm && in.imm == 0 && in.sets_flags && in.cond == ARM_COND_AL && !in.conditional);
+    put32(0, 0xE2866001); in = dec(ARM_A32, BASE);          /* add r6, r6, #1 */
+    assert(in.op == OP_ADD && in.rd == 6 && in.rn == 6 && in.has_imm && in.imm == 1 && !in.sets_flags);
+    put32(0, 0xE28F8E26); in = dec(ARM_A32, BASE);          /* add r8, pc, #608: an immediate rotated into place */
+    assert(in.op == OP_ADD && in.rd == 8 && in.rn == 15 && in.imm == 608);
+    put32(0, 0xE2566001); in = dec(ARM_A32, BASE);          /* subs r6, r6, #1 */
+    assert(in.op == OP_SUB && in.rd == 6 && in.sets_flags);
+    put32(0, 0xE1A060A6); in = dec(ARM_A32, BASE);          /* lsr r6, r6, #1: a move of a shifted register */
+    assert(in.op == OP_MOV && in.rd == 6 && in.rm == 6 && in.shift_type == SH_LSR && in.shift_amt == 1 && !in.has_imm);
+    put32(0, 0xE1A00211); in = dec(ARM_A32, BASE);          /* lsl r0, r1, r2 */
+    assert(in.op == OP_LSL && in.rd == 0 && in.rn == 1 && in.rm == 2);
+    put32(0, 0x01A03001); in = dec(ARM_A32, BASE);          /* moveq r3, r1 */
+    assert(in.op == OP_MOV && in.rd == 3 && in.rm == 1 && in.cond == ARM_COND_EQ && in.conditional);
+    put32(0, 0xA3A07000); in = dec(ARM_A32, BASE);          /* movge r7, #0 */
+    assert(in.op == OP_MOV && in.rd == 7 && in.has_imm && in.imm == 0 && in.cond == ARM_COND_GE);
+    put32(0, 0xE1C7700A); in = dec(ARM_A32, BASE);          /* bic r7, r7, sl */
+    assert(in.op == OP_BIC && in.rd == 7 && in.rn == 7 && in.rm == 10);
+    put32(0, 0xE0030291); in = dec(ARM_A32, BASE);          /* mul r3, r1, r2 */
+    assert(in.op == OP_MUL && in.rd == 3 && in.rn == 1 && in.rm == 2);
+    put32(0, 0xE7EE7057); in = dec(ARM_A32, BASE);          /* ubfx r7, r7, #0, #15 */
+    assert(in.op == OP_UBFX && in.rd == 7 && in.rn == 7 && in.bf_lsb == 0 && in.bf_width == 15);
+    put32(0, 0xE7A0505A); in = dec(ARM_A32, BASE);          /* sbfx r5, sl, #0, #1 */
+    assert(in.op == OP_SBFX && in.rd == 5 && in.rn == 10 && in.bf_lsb == 0 && in.bf_width == 1);
+
+    put32(0, 0xE59D6014); in = dec(ARM_A32, BASE);          /* ldr r6, [sp, #20] */
+    assert(in.op == OP_LDR && in.cls == A_LOAD && in.rt == 6 && in.rn == 13 && in.has_imm && in.imm == 20);
+    assert(in.mem_add && !in.mem_post && !in.writeback);
+    put32(0, 0xE5D37000); in = dec(ARM_A32, BASE);          /* ldrb r7, [r3] */
+    assert(in.op == OP_LDRB && in.rt == 7 && in.rn == 3 && in.imm == 0);
+    put32(0, 0xE1D350B0); in = dec(ARM_A32, BASE);          /* ldrh r5, [r3] */
+    assert(in.op == OP_LDRH && in.cls == A_LOAD && in.rt == 5 && in.rn == 3 && in.has_imm && in.imm == 0);
+    put32(0, 0xE4D13001); in = dec(ARM_A32, BASE);          /* ldrb r3, [r1], #1 */
+    assert(in.op == OP_LDRB && in.mem_post && in.writeback && in.mem_add && in.imm == 1);
+
+    put32(0, 0xE92D0070); in = dec(ARM_A32, BASE);          /* push {r4, r5, r6} */
+    assert(in.op == OP_PUSH && in.cls == A_STOREM && in.reglist == 0x0070);
+    put32(0, 0xE8BD0D80); in = dec(ARM_A32, BASE);          /* pop {r7, r8, sl, fp} */
+    assert(in.op == OP_POP && in.cls == A_LOADM && in.reglist == 0x0D80);
+    put32(0, 0xE8BD8010); in = dec(ARM_A32, BASE);          /* pop {r4, pc} */
+    assert(in.op == OP_POP && in.cls == A_RETURN && in.reglist == 0x8010);
+    put32(0, 0xE49DF004); in = dec(ARM_A32, BASE);          /* pop {pc}, written ldr pc, [sp], #4 */
+    assert(in.op == OP_POP && in.cls == A_RETURN && in.reglist == 0x8000 && in.rn == 13);
+    put32(0, 0xE12FFF1E); in = dec(ARM_A32, BASE);          /* bx lr */
+    assert(in.cls == A_RETURN && !in.conditional);
+    put32(0, 0x012FFF1E); in = dec(ARM_A32, BASE);          /* bxeq lr: a return the function goes on after */
+    assert(in.cls == A_RETURN && in.conditional && in.cond == ARM_COND_EQ);
+    put32(0, 0x0A000098); in = dec(ARM_A32, BASE);          /* beq */
+    assert(in.op == OP_B && in.cls == A_BRANCH && in.conditional && in.cond == ARM_COND_EQ);
+    assert(in.has_target && in.target == BASE + 8 + 0x98 * 4);
+    put32(0, 0xEB000010); in = dec(ARM_A32, BASE);          /* bl */
+    assert(in.cls == A_CALL && in.has_target && in.target == BASE + 8 + 0x40 && !in.switches_mode);
+
+    /* what the emitter has no form for is left without an operation, to trap by name */
+    put32(0, 0xE0E10002); in = dec(ARM_A32, BASE);          /* rsc r0, r1, r2 */
+    assert(in.op == OP_NONE && in.cls == A_ALU);
+    put32(0, 0xE0800211); in = dec(ARM_A32, BASE);          /* add r0, r0, r1, lsl r2 */
+    assert(in.op == OP_NONE && in.cls == A_ALU);
+    put32(0, 0xE99D0003); in = dec(ARM_A32, BASE);          /* ldmib sp, {r0, r1} */
+    assert(in.op == OP_NONE && in.cls == A_LOADM);
+
+    /* Advanced SIMD and VFP: the Thumb encoding with its leading bits moved */
+    static const struct { uint32_t arm; uint16_t h1, h2; } SAME[] = {
+        { 0xF262E812u, 0xEF62, 0xE812 },        /* vtst.32 d30, d2, d2 */
+        { 0xF2078F16u, 0xEF07, 0x8F16 },        /* vrecps.f32 d8, d7, d6 */
+        { 0xF3659E04u, 0xFF65, 0x9E04 },        /* vcgt.f32 d25, d5, d4 */
+        { 0xF322413Eu, 0xFF22, 0x413E },        /* vbit d4, d2, d30 */
+        { 0xF3BA2088u, 0xFFBA, 0x2088 },        /* vtrn.32 d2, d8 */
+        { 0xF3BBB58Au, 0xFFBB, 0xB58A },        /* vrsqrte.f32 d11, d10 */
+        { 0xF2BEE576u, 0xEFBE, 0xE576 },        /* vshl.s32 q7, q11, #30 */
+        { 0xF3FC7B89u, 0xFFFC, 0x7B89 },        /* vtbl.8 d23, {d28-d31}, d9 */
+        { 0xECB22B18u, 0xECB2, 0x2B18 },        /* vldmia r2!, {d2-d13} */
+        { 0xEC874B08u, 0xEC87, 0x4B08 },        /* vstmia r7, {d4-d7} */
+        { 0xECBD8B10u, 0xECBD, 0x8B10 },        /* vpop {d8-d15} */
+        { 0xED9F1BC0u, 0xED9F, 0x1BC0 },        /* vldr d1, [pc, #768] */
+        { 0xEE8EAB90u, 0xEE8E, 0xAB90 },        /* vdup.32 d30, sl */
+        { 0xEE000A10u, 0xEE00, 0x0A10 },        /* vmov s0, r0 */
+    };
+    for (size_t i = 0; i < sizeof(SAME) / sizeof(SAME[0]); i++) {
+        arm_insn a, t;
+        put32(0, SAME[i].arm); a = dec(ARM_A32, BASE);
+        put16(0, SAME[i].h1); put16(2, SAME[i].h2); t = dec(ARM_T32, BASE);
+        assert(a.width == 4 && a.raw == SAME[i].arm);
+        assert(a.op == t.op && a.cls == t.cls && a.cond == ARM_COND_AL);
+        assert(a.vd == t.vd && a.vn == t.vn && a.vm == t.vm && a.rn == t.rn && a.rm == t.rm && a.rt == t.rt);
+        assert(a.imm == t.imm && a.imm64 == t.imm64 && a.reglist == t.reglist && a.writeback == t.writeback);
+        assert(a.neon_q == t.neon_q && a.neon_size == t.neon_size && a.vfp_dp == t.vfp_dp && a.vfp_unsigned == t.vfp_unsigned);
+    }
+    /* the three a retail title's vertex routines needed beyond what its compiled code had */
+    put32(0, 0xF3BA0086); in = dec(ARM_A32, BASE);          /* vtrn.32 d0, d6 */
+    assert(in.op == OP_NEON_TRN && in.vd == 0 && in.vm == 6 && in.neon_size == 32 && !in.neon_q);
+    put32(0, 0xF3B86904); in = dec(ARM_A32, BASE);          /* vtbl.8 d6, {d8-d9}, d4 */
+    assert(in.op == OP_NEON_TBL && in.vd == 6 && in.vn == 8 && in.vm == 4 && in.imm == 2 && !in.neon_q);
+    put32(0, 0xF3FC7B89); in = dec(ARM_A32, BASE);          /* vtbl.8 d23, {d28-d31}, d9 */
+    assert(in.op == OP_NEON_TBL && in.vd == 23 && in.vn == 28 && in.vm == 9 && in.imm == 4);
+    put32(0, 0xF3B0E2CE); in = dec(ARM_A32, BASE);          /* vpaddl.u8 q7, q7 */
+    assert(in.op == OP_NEON_PADDL && in.vd == 14 && in.vm == 14 && in.neon_size == 8 && in.neon_q && in.vfp_unsigned);
+    put32(0, 0xF3B4E2CE); in = dec(ARM_A32, BASE);          /* vpaddl.u16 q7, q7 */
+    assert(in.op == OP_NEON_PADDL && in.neon_size == 16 && in.vfp_unsigned);
+
+    put16(0, 0xFFB6); put16(2, 0x460E); in = dec(ARM_T32, BASE);    /* vcvt.f16.f32 d4, q7 */
+    assert(in.op == OP_NEON_HALVE && in.vd == 4 && in.vm == 14);
+    put16(0, 0xFFB6); put16(2, 0x470E); in = dec(ARM_T32, BASE);    /* vcvt.f32.f16 q2, d14 */
+    assert(in.op == OP_NEON_UNHALVE && in.vd == 4 && in.vm == 14);
+
+    /* and a VFP instruction keeps the condition its Thumb form would get from an IT block */
+    put32(0, 0x1E000A10); in = dec(ARM_A32, BASE);          /* vmovne s0, r0 */
+    assert(in.op == OP_VMOV_TO_V && in.cond == ARM_COND_NE);
+
+    printf("  arm: integer, simd by way of thumb ok\n");
 }
 
 /* --- IT blocks -------------------------------------------------------------- */
@@ -640,11 +1461,11 @@ static void test_it_block(void) {
     /* IT makes up to the next four instructions conditional. It must be
      * distinguishable from the NOP-family hints that share its encoding
      * space, because phase 5 has to honour it. */
-    put16(0, 0xBF08);                      /* it eq â€” mask nonzero           */
+    put16(0, 0xBF08);                      /* it eq — mask nonzero           */
     arm_insn in = dec(ARM_T32, BASE);
     assert(in.cls == A_SYS && strcmp(in.mnemonic, "it") == 0);
 
-    put16(0, 0xBF00);                      /* nop â€” mask zero                */
+    put16(0, 0xBF00);                      /* nop — mask zero                */
     in = dec(ARM_T32, BASE);
     assert(in.cls == A_NOP);
 
@@ -671,6 +1492,7 @@ static void test_bounds(void) {
 int main(void) {
     printf("decode:\n");
     test_thumb_width();
+    test_tbb_aligned_pc();
     test_returns();
     test_pc_destination();
     test_operands();
@@ -683,10 +1505,15 @@ int main(void) {
     test_mode_switches();
     test_arm_cond_f();
     test_simd_identified();
+    test_arm();
+    test_neon_structure_loads();
+    test_pc_relative_loads();
+    test_neon_shift_by_register();
     test_vfp();
+    test_neon_operands();
+    test_exclusive();
     test_it_block();
     test_bounds();
     printf("all decode tests passed\n");
     return 0;
 }
-

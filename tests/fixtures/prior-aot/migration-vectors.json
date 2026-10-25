@@ -40,7 +40,7 @@
     },
     {
       "id": "arm-thumb-same-aligned-address",
-      "status": "deferred-pending-canonical-cpu-selection",
+      "status": "executed-in-test-discover-test-emit-and-test-runtime",
       "entries": [
         { "address": "0x00001000", "instructionSet": "arm" },
         { "address": "0x00001000", "instructionSet": "thumb" }
@@ -71,7 +71,7 @@
   "semanticVectors": [
     {
       "id": "a32-blne-predicate-false",
-      "status": "deferred-pending-canonical-cpu-selection",
+      "status": "executed-in-test-emit",
       "instructionSet": "arm",
       "codeBytesLittleEndian": ["02", "00", "00", "1b"],
       "initial": { "z": 1, "lr": "0x11111111" },
@@ -84,7 +84,7 @@
     },
     {
       "id": "a32-blx-lr-capture-before-link",
-      "status": "deferred-pending-canonical-cpu-selection",
+      "status": "executed-in-test-emit",
       "instructionSet": "arm",
       "codeBytesLittleEndian": ["3e", "ff", "2f", "e1"],
       "initial": { "lr": "0x00002001" },
@@ -97,7 +97,7 @@
     },
     {
       "id": "a32-bxne-lr-predicate-false",
-      "status": "deferred-pending-canonical-cpu-selection",
+      "status": "executed-in-test-emit",
       "instructionSet": "arm",
       "codeBytesLittleEndian": ["1e", "ff", "2f", "11"],
       "initial": { "z": 1, "lr": "0x00002001" },
@@ -106,7 +106,7 @@
     },
     {
       "id": "a32-bxne-register-predicate-false",
-      "status": "deferred-pending-canonical-cpu-selection",
+      "status": "executed-in-test-emit",
       "instructionSet": "arm",
       "codeBytesLittleEndian": ["13", "ff", "2f", "11"],
       "initial": { "z": 1, "r3": "0x00003001" },
@@ -115,7 +115,7 @@
     },
     {
       "id": "a32-svcne-predicate-false",
-      "status": "deferred-pending-canonical-cpu-selection",
+      "status": "executed-in-test-emit",
       "instructionSet": "arm",
       "codeBytesLittleEndian": ["07", "00", "00", "1f"],
       "initial": { "z": 1 },
@@ -124,7 +124,7 @@
     },
     {
       "id": "thumb-tbb-halfword-aligned-pc",
-      "status": "deferred",
+      "status": "executed-in-test-decode",
       "instructionSet": "thumb",
       "instructionAddress": "0x0000100e",
       "codeBytesLittleEndian": ["df", "e8", "01", "f0"],
@@ -141,11 +141,16 @@
       ]
     },
     {
-      "id": "thumb-vst1-single-lane-rejected",
-      "status": "deferred",
+      "id": "thumb-vst1-single-lane",
+      "status": "executed-in-test-decode-and-test-emit",
       "instructionSet": "thumb",
       "codeBytesLittleEndian": ["80", "f9", "0d", "00"],
-      "expected": { "result": "unsupported-lane-form", "memoryWrites": 0 },
+      "expected": {
+        "result": "supported-lane-form",
+        "memoryWrites": 1,
+        "writeWidthBits": 8,
+        "lane": 0
+      },
       "integrationPoints": [
         "tools/armrecomp/decode.c",
         "tools/armrecomp/emit.c"
@@ -186,7 +191,7 @@
     },
     {
       "id": "fpscr-fz-flushes-positive-subnormal-before-compare",
-      "status": "deferred",
+      "status": "executed-in-test-prior-aot",
       "operation": "vcmp.f32",
       "initial": {
         "leftBits": "0x00000001",
@@ -204,7 +209,7 @@
     },
     {
       "id": "fpscr-no-fz-preserves-positive-subnormal",
-      "status": "deferred",
+      "status": "executed-in-test-prior-aot",
       "operation": "vcmp.f32",
       "initial": {
         "leftBits": "0x00000001",
@@ -231,7 +236,7 @@
     },
     {
       "id": "ordinary-write-invalidates-other-core",
-      "status": "deferred-pending-canonical-cpu-selection",
+      "status": "executed-cross-thread-in-test-prior-aot",
       "steps": [
         { "core": 0, "operation": "ldrex32", "address": "0x00004000" },
         { "core": 1, "operation": "write32", "address": "0x00004000", "value": "0x22222222" },
@@ -245,7 +250,7 @@
       "integrationPoints": [
         "include/vitarecomp/mem.h",
         "src/mem.c",
-        "future canonical thread/CPU owner"
+        "src/excl.c"
       ]
     }
   ]

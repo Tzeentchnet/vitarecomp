@@ -156,6 +156,20 @@ Three things this does not claim:
   relocations, so shape is all there is — which is the cost of the launch-window
   catalogue being where the exclusives are.
 
+The selected CPU baseline additionally seeds SCE relocations, MOVW/MOVT-built
+pointers, tail/interworking targets, and guarded TBB/TBH tables. Discovery
+keys every code address with its instruction mode:
+
+```
+key = (address & ~1u) | (mode == Thumb ? 1u : 0u)
+```
+
+ARM and Thumb roots at the same aligned address therefore have separate
+visited and function-index state. A separate mode-neutral byte bitmap keeps
+coverage from counting their bytes twice. Current redacted whole-image
+coverage and the correctness effects of this change are in
+[`CPU_BASELINE.md`](CPU_BASELINE.md).
+
 
 ## Stage 5 — emit
 
@@ -206,6 +220,13 @@ state is wrong and every later trap is reached down a path that would not have
 happened on hardware. What it is good for is one run naming many missing pieces
 instead of one.
 
+Emission is reachability-filtered and body-bounded. Large modules are split
+into deterministic translation units that share one generated header. Every
+run also writes path-free JSON and text reports containing the sorted
+unsupported/trap census and each partition's function, instruction, and key
+range inventory. Reports are suitable for byte-for-byte repeat checks; they do
+not contain the input path, output path, or a module content hash.
+
 ### Indirect transfers need a run-time table
 
 Once the trace stopped reporting untranslated instructions
@@ -222,9 +243,10 @@ sorted address→function table and a binary search
 trap, never a silent return — jumping somewhere untranslated has to stop,
 because continuing runs the caller with the callee's work undone.
 
-Masking bit 0 in one place matters here: every pointer to Thumb code carries it
-as an instruction-set marker, and a lookup that does not mask misses *every*
-entry by one.
+Bit 0 is part of the dispatch key. Every pointer to Thumb code carries it as an
+instruction-set marker, while an ARM entry at the same aligned address uses a
+clear bit. Generated symbols, table entries, and `vita_dispatch_find` preserve
+that bit rather than masking it, so interworking selects the correct body.
 
 **Import stubs live in the same table.** A module reaches firmware through
 pointers as well as through `BL` — `module_start` makes its very first firmware
@@ -319,4 +341,3 @@ Every helper exists because the obvious C is **wrong**, not merely verbose:
 
 All of it is pinned by `tests/test_runtime.c`, with the expected values derived
 from the architecture's definition rather than from what the code returns.
-

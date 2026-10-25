@@ -204,18 +204,17 @@ static void mark_c(void) { g_called = 3; }
 
 static void test_dispatch(void) {
     static const vita_dispatch_entry sorted[] = {
-        { 0x81000100u, mark_a },
-        { 0x81000200u, mark_b },   /* an import stub, as far as the table knows */
-        { 0x81000300u, mark_c },
+        { 0x81000100u, mark_a },   /* ARM */
+        { 0x81000101u, mark_b },   /* Thumb, same aligned address */
+        { 0x81000301u, mark_c },
     };
     vita_dispatch_init(sorted, 3);
 
     g_called = 0; vita_dispatch(0, 0x81000100u); assert(g_called == 1);
-    g_called = 0; vita_dispatch(0, 0x81000300u); assert(g_called == 3);
+    g_called = 0; vita_dispatch(0, 0x81000301u); assert(g_called == 3);
 
-    /* Every pointer to Thumb code carries bit 0 as an instruction-set marker.
-     * A lookup that does not mask it misses EVERY entry, by one. */
-    g_called = 0; vita_dispatch(0, 0x81000201u); assert(g_called == 2);
+    /* ARM and Thumb at one aligned address are distinct dispatch keys. */
+    g_called = 0; vita_dispatch(0, 0x81000101u); assert(g_called == 2);
 
     assert(vita_dispatch_hits() == 3);
     assert(vita_dispatch_misses() == 0);
@@ -223,7 +222,7 @@ static void test_dispatch(void) {
     /* An unsorted table is refused outright: count goes to zero, so every
      * lookup misses loudly instead of some lookups missing quietly. */
     static const vita_dispatch_entry unsorted[] = {
-        { 0x81000300u, mark_c },
+        { 0x81000301u, mark_c },
         { 0x81000100u, mark_a },
     };
     vita_dispatch_init(unsorted, 2);

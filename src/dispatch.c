@@ -32,13 +32,25 @@ void vita_dispatch_init(const vita_dispatch_entry *table, uint32_t count) {
     }
 }
 
+uint32_t vita_dispatch_floor(uint32_t addr) {
+    uint32_t key = addr, lo = 0, hi = g_count;
+    while (lo < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (g_table[mid].addr <= key) lo = mid + 1; else hi = mid;
+    }
+    return lo ? g_table[lo - 1].addr : 0;
+}
+
 uint32_t vita_dispatch_hits(void)   { return g_hits; }
 uint32_t vita_dispatch_misses(void) { return g_misses; }
 
+void vita_call(vita_fn fn) {
+    fn();
+}
+
 void vita_dispatch(uint32_t from, uint32_t addr) {
-    /* Bit 0 marks the instruction set, not the address. Every pointer to Thumb
-     * code carries it, so failing to mask means every lookup misses by one. */
-    uint32_t key = addr & ~1u;
+    /* Bit 0 is the ARM/Thumb discriminator and therefore part of the key. */
+    uint32_t key = addr;
 
     uint32_t lo = 0, hi = g_count;
     while (lo < hi) {

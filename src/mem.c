@@ -7,6 +7,7 @@
  */
 
 #include "vitarecomp/mem.h"
+#include "excl_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -53,35 +54,57 @@ uint32_t vita_mem_avail(uint32_t addr) {
  * an unaligned address and would fault outright on some hosts. */
 
 uint32_t vita_read32(uint32_t a) {
+    vita_memory_lock();
     void *p = vita_mem_ptr(a, 4);
     uint32_t v = 0;
     if (p) memcpy(&v, p, 4);
+    vita_memory_unlock();
     return v;
 }
 
 uint16_t vita_read16(uint32_t a) {
+    vita_memory_lock();
     void *p = vita_mem_ptr(a, 2);
     uint16_t v = 0;
     if (p) memcpy(&v, p, 2);
+    vita_memory_unlock();
     return v;
 }
 
 uint8_t vita_read8(uint32_t a) {
+    vita_memory_lock();
     void *p = vita_mem_ptr(a, 1);
-    return p ? *(uint8_t *)p : 0;
+    uint8_t v = p ? *(uint8_t *)p : 0;
+    vita_memory_unlock();
+    return v;
 }
 
 void vita_write32(uint32_t a, uint32_t v) {
+    vita_memory_lock();
     void *p = vita_mem_ptr(a, 4);
-    if (p) memcpy(p, &v, 4);
+    if (p) {
+        memcpy(p, &v, 4);
+        vita_exclusive_note_write();
+    }
+    vita_memory_unlock();
 }
 
 void vita_write16(uint32_t a, uint16_t v) {
+    vita_memory_lock();
     void *p = vita_mem_ptr(a, 2);
-    if (p) memcpy(p, &v, 2);
+    if (p) {
+        memcpy(p, &v, 2);
+        vita_exclusive_note_write();
+    }
+    vita_memory_unlock();
 }
 
 void vita_write8(uint32_t a, uint8_t v) {
+    vita_memory_lock();
     void *p = vita_mem_ptr(a, 1);
-    if (p) *(uint8_t *)p = v;
+    if (p) {
+        *(uint8_t *)p = v;
+        vita_exclusive_note_write();
+    }
+    vita_memory_unlock();
 }

@@ -46,4 +46,11 @@ void vita_write32(uint32_t addr, uint32_t v);
 void vita_write16(uint32_t addr, uint16_t v);
 void vita_write8 (uint32_t addr, uint8_t  v);
 
+/* Exclusive accesses use byte sizes (1, 2, 4, or 8). Any successful ordinary
+ * write invalidates outstanding monitors before a later STREX can succeed. */
+uint64_t vita_ldrex(uint32_t addr, uint32_t size);
+uint32_t vita_strex(uint32_t addr, uint64_t value, uint32_t size);
+void vita_clrex(void);
+void vita_barrier(void);
+
 #endif /* VITARECOMP_MEM_H */

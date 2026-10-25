@@ -21,16 +21,22 @@
 typedef void (*vita_fn)(void);
 
 typedef struct {
-    uint32_t addr;      /* guest virtual address, Thumb bit cleared */
+    uint32_t addr;      /* guest address with ARM/Thumb bit retained */
     vita_fn  fn;
 } vita_dispatch_entry;
 
 /* The table must be sorted by addr; the generated one is. */
 void vita_dispatch_init(const vita_dispatch_entry *table, uint32_t count);
 
-/* Call the function recompiled from `addr`. The Thumb bit is masked off here
- * rather than at every call site — a pointer to Thumb code always has bit 0
- * set, and that is an instruction-set marker, not part of the address.
+/* Call a statically resolved generated function through the runtime boundary.
+ * Keeping this out of the generated translation unit prevents the host
+ * compiler from deciding a guest callee never returns and deleting valid
+ * fallthrough code. */
+void vita_call(vita_fn fn);
+
+/* Call the function recompiled from `addr`. A pointer to Thumb code carries
+ * bit 0; it is retained so ARM and Thumb entries at one aligned address remain
+ * distinct.
  *
  * `from` is the guest address of the transfer itself. A miss reports both, and
  * the destination alone is not enough to act on: "something jumped to
@@ -41,6 +47,10 @@ void vita_dispatch(uint32_t from, uint32_t addr);
 /* How many distinct addresses were dispatched to, and how many missed. Useful
  * for telling "the table is incomplete" from "the program went somewhere it
  * should not have". */
+/* The start of the function an address falls in: the greatest table entry
+ * not above it, or 0. For naming where a sample or a fault was. */
+uint32_t vita_dispatch_floor(uint32_t addr);
+
 uint32_t vita_dispatch_hits(void);
 uint32_t vita_dispatch_misses(void);
 

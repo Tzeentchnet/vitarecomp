@@ -115,53 +115,18 @@ key material anywhere in it.
 | **1 — Container stack** | SCE/SELF, appinfo, ELF32, program headers, segment table; bounds-checked, named refusal for PFS retail dumps, encryption flag cross-checked against zlib headers | ✅ Complete |
 | **2 — Inflate & reassemble** | DEFLATE + zlib written not vendored; **15/15 corpus modules extract and round-trip**, 236 KB → 53 MB | ✅ Complete |
 | **3 — Decoder** | ARMv7-A + Thumb-2, width determination, control flow, IT blocks, NEON/VFP classed; `armrecomp cover` over 16 modules | ✅ Complete |
-| **4 — Discovery** | `.sce_module_info`, import/export tables, recursive descent carrying mode state, pointer-shape recovery over **both code and data** segments, with pointer tables read as tables; 21,495 functions, 83.3% of `.text` covered | ✅ Complete |
-| **5 — Emitter** | ARM → readable C, literal folding, run-time dispatch, scalar VFP, wide branches. **Generated C compiles, links, and runs** | ✅ Complete |
+| **4 — Discovery** | `.sce_module_info`, import/export tables, SCE relocations, recursive descent with distinct ARM/Thumb keys, MOVW/MOVT pointers, jump tables, tail targets, and pointer-shape recovery over code and data | ✅ Complete |
+| **5 — Emitter** | ARM → readable C, literal folding, run-time dispatch, measured NEON/VFP forms, reachability filtering, partitioned output, and deterministic reports. **Generated C compiles with MSVC `/W4 /WX`** | ✅ Complete |
 | **6 — Runtime & HLE** | Runtime landed; NID resolution 519/524 (99.0%); imports bound so every firmware call traps *by name*. `sceGxm` / `sceKernel` / `SceLibc` bodies outstanding | 🔨 In progress |
 
-**Translation rate on *Uncharted: Fight for Fortune*: 98.95% of instructions**,
-measured over the whole module — all 21,495 discovered functions, 1,837,610
-instructions. The rest emit named traps, never silence:
-
-```
-still trapping, by kind:
-  simd/vfp                      10716    0.58% of all instructions
-  ?                              3009    0.16%
-  ldm/stm                        1575    0.09%
-  branch: target not a function   1428    0.08%
-  misc                            902    0.05%
-  indirect transfer               788    0.04%
-  mla/mls                         507    0.03%
-  alu (ARM stub bodies)           504    0.03%
-  ldm/stm.w                       401    0.02%
-  svc / sys                       335    0.02%
-```
-
-NEON is the largest remaining bucket at 0.58%, and it is now what the *running*
-program stops on — everything before it in the boot path is translated. The
-`alu`/`svc` entries are the ARM bodies of the 524 firmware import stubs, which
-are meant to be replaced by HLE rather than translated. Breakdown in
-[docs/TRANSLATION.md](docs/TRANSLATION.md).
-
-The `sbfx`/`bfi` residue is deliberate: those 11 are extracts running off the
-end of the register, which is UNPREDICTABLE and comes from a linear sweep over
-literal pools. They trap rather than being clamped.
-
-**The whole module builds and runs.** All 21,495 functions — 135 MB of
-generated C — compile and link into a 39 MB executable. It loads the ELF's own
-segments into guest memory, registers the dispatch table, calls `module_start`,
-walks all 551 C++ static constructors, and reaches game code before stopping
-on a NEON instruction:
-
-```
-vitarecomp: untranslated instruction at 0x81293F06 (raw 0xEF800050): simd
-```
-
-Getting there needed the boot path complete: indirect transfers resolve through
-the same table as direct ones (functions and import stubs merged and sorted),
-because a module reaches firmware through pointers as well as through `BL` and
-`module_start` makes its very first firmware call that way; and a first batch of
-`SceLibc` — the C++/CRT init, the mem/str family, and a guest heap.
+The selected CPU baseline preserves the upstream generated-C ABI while
+integrating the audited downstream analyzer/emitter topics. On a redacted
+three-image retail set it covers **96.371%** of 11,308,620 executable bytes and
+translates **99.8972%** of 3,666,858 emitted instruction instances. All three
+generated modules compile as MSVC objects; repeat generation is byte-identical.
+Unsupported operations remain named aborting traps, never silent output.
+Method, trade-offs, and provenance are documented in
+[docs/CPU_BASELINE.md](docs/CPU_BASELINE.md).
 
 > **Compiling at this scale:** each function becomes its own COMDAT section and
 > a COFF object indexes at most 65,535, so MSVC needs `/bigobj` on the generated
@@ -172,6 +137,7 @@ because a module reaches firmware through pointers as well as through `BL` and
 | Document | What It Covers |
 |----------|---------------|
 | **[Architecture](docs/ARCHITECTURE.md)** | The pipeline stage by stage: container, inflate, decode, discovery, emit, runtime. Address conventions, indirect dispatch, import binding, and why each runtime helper exists |
+| **[CPU baseline](docs/CPU_BASELINE.md)** | Selected analyzer/emitter boundary, redacted retail metrics, deterministic reports, strict traps, and executable regression evidence |
 | **[Translation](docs/TRANSLATION.md)** | Coverage figures, `ThumbExpandImm` and its traps, what is still trapping ranked by value, the NEON/VFP breakdown |
 | **[Corpus](docs/CORPUS.md)** | The 15 measured modules, the plaintext finding, the `ET_SCE_EXEC` → `ET_SCE_RELEXEC` era split and why it makes the launch window the hard case |
 | **[Decryption](docs/DECRYPT.md)** | The SELF container, what is encrypted and what is not, and why the QA corpus needs no keys |
@@ -205,6 +171,10 @@ armrecomp funcs    <elf> [nid-db]               the HLE work list, from the impo
 armrecomp discover <elf>                        function discovery
 armrecomp emit     <elf> <out.c> <n> [nid-db]   translate to C
 ```
+
+`emit` also writes deterministic `<out>.report.json` and
+`<out>.report.txt` files with the strict unsupported/trap census and partition
+inventory. These reports contain no input path or content hash.
 
 `info` accepts a SELF (`eboot.bin`, `*.suprx`) or a plain ELF/velf. The optional
 NID database is a path to

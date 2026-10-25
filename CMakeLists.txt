@@ -27,13 +27,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(MSVC)
-    add_compile_options(/W3)
+    add_compile_options(/W4 /WX /permissive-)
     # The generated C is millions of lines; MSVC's default object format
     # cannot hold that many sections.
     add_compile_options(/bigobj)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 else()
-    add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+    add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 endif()
 
 # --- the runtime library ------------------------------------------------------
@@ -44,6 +44,7 @@ endif()
 add_library(vitarecomp STATIC
     src/cpu.c
     src/mem.c
+    src/excl.c
     src/trap.c
     src/loader.c
     src/dispatch.c

@@ -33,6 +33,13 @@ that material as part of this fork.
 The complete GPL text is in LICENSES/GPL-2.0-or-later.txt. Detailed provenance
 and the import ledger are in docs/PROVENANCE.md.
 
-At this foundation point, no code or assets from Shiz0id/vitarecomp,
-soyjxck/vitarecomp, Vita3K, any game, or generated title output have been
-incorporated.
+Selected CPU-analysis, generated-C emitter, runtime-helper, regression-test,
+and public homebrew-fixture material was ported from
+soyjxck/vitarecomp at
+5a095d7f429b1e51ffca3af438b18ad1502f07fb. That material descends from the
+same MIT-licensed upstream and retains the MIT notice above. The exact paths,
+topic commits, adaptations, and validation are recorded in
+docs/PROVENANCE.md.
+
+No code or assets from Shiz0id/vitarecomp or Vita3K, no retail game data, and
+no generated title output have been incorporated.

@@ -11,6 +11,12 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
+
 #ifdef NDEBUG
 #error "tests must be built with asserts enabled (NDEBUG is defined)"
 #endif
@@ -96,6 +102,21 @@ static void test_vfp_unordered_flags(void) {
     printf("  VFP NaN payload and unordered flags ok\n");
 }
 
+static void test_fpscr_flush_to_zero(void) {
+    vfp_reg subnormal;
+    subnormal.u = 1u;
+
+    vfp_set_fpscr(0x01000000u);
+    vfp_cmp_f32(subnormal.f, 0.0f);
+    assert((vfp_get_fpscr() & 0xF0000000u) == 0x60000000u);
+
+    vfp_set_fpscr(0u);
+    vfp_cmp_f32(subnormal.f, 0.0f);
+    assert((vfp_get_fpscr() & 0xF0000000u) == 0x20000000u);
+
+    printf("  FPSCR FZ subnormal comparisons ok\n");
+}
+
 static void test_checked_memory_edges(void) {
     const uint32_t base = 0x1000u;
     assert(vita_mem_init(base, 16) == 0);
@@ -123,6 +144,71 @@ static void test_checked_memory_edges(void) {
     printf("  checked memory boundary vectors ok\n");
 }
 
+static void test_exclusive_invalidation(void) {
+    const uint32_t base = 0x4000u;
+    assert(vita_mem_init(base, 16) == 0);
+    vita_write32(base, 0x11111111u);
+
+    assert(vita_ldrex(base, 4) == 0x11111111u);
+    vita_write32(base, 0x22222222u);
+    assert(vita_strex(base, 0x33333333u, 4) == 1);
+    assert(vita_read32(base) == 0x22222222u);
+
+    assert(vita_ldrex(base, 4) == 0x22222222u);
+    vita_clrex();
+    assert(vita_strex(base, 0x44444444u, 4) == 1);
+
+    assert(vita_ldrex(base, 4) == 0x22222222u);
+    assert(vita_strex(base, 0x55555555u, 4) == 0);
+    assert(vita_read32(base) == 0x55555555u);
+
+    vita_mem_free();
+    printf("  exclusive monitor invalidation ok\n");
+}
+
+typedef struct {
+    uint32_t addr;
+    uint32_t value;
+} writer_args;
+
+#ifdef _WIN32
+static DWORD WINAPI ordinary_writer(LPVOID opaque) {
+    const writer_args *args = (const writer_args *)opaque;
+    vita_write32(args->addr, args->value);
+    return 0;
+}
+#else
+static void *ordinary_writer(void *opaque) {
+    const writer_args *args = (const writer_args *)opaque;
+    vita_write32(args->addr, args->value);
+    return NULL;
+}
+#endif
+
+static void test_cross_thread_exclusive_invalidation(void) {
+    const uint32_t base = 0x4000u;
+    writer_args args = { base, 0x22222222u };
+    assert(vita_mem_init(base, 16) == 0);
+    vita_write32(base, 0x11111111u);
+    assert(vita_ldrex(base, 4) == 0x11111111u);
+
+#ifdef _WIN32
+    HANDLE thread = CreateThread(NULL, 0, ordinary_writer, &args, 0, NULL);
+    assert(thread != NULL);
+    assert(WaitForSingleObject(thread, INFINITE) == WAIT_OBJECT_0);
+    assert(CloseHandle(thread));
+#else
+    pthread_t thread;
+    assert(pthread_create(&thread, NULL, ordinary_writer, &args) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+#endif
+
+    assert(vita_strex(base, 0x33333333u, 4) == 1);
+    assert(vita_read32(base) == 0x22222222u);
+    vita_mem_free();
+    printf("  cross-thread exclusive invalidation ok\n");
+}
+
 static void test_semantic_boundaries(void) {
     assert(vita_lsl(0xFFFFFFFFu, 32) == 0);
     assert(vita_lsr(0x80000000u, 33) == 0);
@@ -141,7 +227,10 @@ int main(void) {
     printf("prior AOT migration:\n");
     test_represented_state_round_trip();
     test_vfp_unordered_flags();
+    test_fpscr_flush_to_zero();
     test_checked_memory_edges();
+    test_exclusive_invalidation();
+    test_cross_thread_exclusive_invalidation();
     test_semantic_boundaries();
     printf("all executable prior AOT vectors passed\n");
     return 0;

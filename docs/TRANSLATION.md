@@ -3,10 +3,13 @@
 What decodes, what translates, and what is left. All figures are from
 `armrecomp` on *Uncharted: Fight for Fortune* unless stated otherwise.
 
-## Coverage, and why the dominant instruction set is decided by branch targets
+> The named-module figures below preserve the original public-project
+> development record. The selected CPU baseline is measured on a redacted
+> three-image set; its current aggregate coverage, yield, strict-trap totals,
+> and comparison method are published in
+> [`CPU_BASELINE.md`](CPU_BASELINE.md).
 
-Every module in the corpus is **Thumb-2 dominant**, with a real ARM minority
-that makes mode tracking mandatory rather than optional.
+## Coverage, and why the dominant instruction set is decided by branch targets
 
 Every module in the corpus is **Thumb-2 dominant**, with a real ARM minority
 that makes mode tracking mandatory rather than optional.
