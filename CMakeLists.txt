@@ -38,8 +38,11 @@ endif()
 
 # --- the runtime library ------------------------------------------------------
 #
-# Empty until phase 3. Declared now so a game repo's add_subdirectory() and
-# target_link_libraries() are stable from the start.
+# The runtime remains C-only and title-neutral. Archive inflation reuses the
+# repository's small audited inflater privately; it is not part of the public
+# runtime API.
+
+find_package(Threads REQUIRED)
 
 add_library(vitarecomp STATIC
     src/cpu.c
@@ -50,11 +53,36 @@ add_library(vitarecomp STATIC
     src/dispatch.c
     src/vfp.c
     src/hle_libc.c
+    src/hle_clib.c
+    src/hle_scanf.c
+    src/hle_libm.c
+    src/hle_mspace.c
+    src/hle_registry.c
+    src/hle_kernel.c
+    src/hle_sysmem.c
+    src/hle_threadmgr.c
+    src/hle_io.c
+    src/hle_fios.c
+    src/hle_ult.c
+    src/clock.c
+    src/sched.c
+    src/runtime.c
+    src/vfs.c
+    src/psarc.c
+    tools/armrecomp/inflate.c
 )
 
 target_include_directories(vitarecomp PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+target_include_directories(vitarecomp PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/armrecomp
+)
+target_compile_definitions(vitarecomp PUBLIC VITARECOMP_THREADED=1)
+target_link_libraries(vitarecomp PUBLIC Threads::Threads)
+if(NOT WIN32)
+    target_link_libraries(vitarecomp PUBLIC m)
+endif()
 
 # --- renderer-neutral GPU contract ------------------------------------------
 #

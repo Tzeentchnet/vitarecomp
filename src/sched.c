@@ -1,0 +1,611 @@
+/* sched.c — guest threads on the host. See sched.h.
+ *
+ * C11 threads: one host thread per guest thread, a single mutex, and one
+ * condition variable per thread that it sleeps on while another holds the
+ * baton. The baton is `g_cur`; the thread that holds it is the only one
+ * touching the register globals or guest memory.
+ */
+
+#include "clock.h"
+#include "sched.h"
+#include "hle_sysmem.h"
+#include "vitarecomp/cpu.h"
+#include "vitarecomp/dispatch.h"
+#include "vitarecomp/hle.h"
+#include "vitarecomp/host.h"
+#include "vitarecomp/mem.h"
+#include "vitarecomp/recomp_rt.h"
+#include "vitarecomp/vfp.h"
+#include "runtime_internal.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <threads.h>
+#include <time.h>
+
+#define MAX_THREADS      64
+#define THREAD_UID_FIRST 0x40010100u      /* the main thread's; the rest follow */
+
+#define SCE_KERNEL_ERROR_INVALID_UID      0x80024501u
+#define SCE_KERNEL_ERROR_WAIT_TIMEOUT     0x80028005u
+#define SCE_KERNEL_ERROR_NO_MEMORY        0x8002710Bu
+#define SCE_KERNEL_ERROR_NOT_DORMANT      0x80028013u
+
+void vita_thread_tls_release(uint32_t *slot);
+void vita_libc_thread_shutdown(void);
+
+enum { T_FREE = 0, T_NEW, T_READY, T_RUNNING, T_WAITING, T_DONE };
+
+typedef struct {
+    uint32_t r[13], sp, lr;
+    int      n, z, c, v, ge;
+    vfp_reg  vfp[64];
+    int      fn, fz, fc, fv;
+    uint32_t last_pc;
+} regs_t;
+
+typedef struct {
+    int      state;
+    uint32_t uid;
+    char     name[32];
+    uint32_t entry, prio, stack_base, stack_size, tls;
+    int      wait_kind;
+    uint32_t wait_obj;
+    uint64_t wait_until;         /* 0: no timeout                        */
+    int      timed_out;
+    int      exit_status;
+    regs_t   regs;
+    thrd_t   host;
+    int      host_started;
+    cnd_t    wake;
+    int      go;
+} vthread;
+
+static vthread  g_t[MAX_THREADS];
+static mtx_t    g_mtx;
+static mtx_t    g_boot_lock;
+static once_flag g_boot_once = ONCE_FLAG_INIT;
+static vthread *g_cur;
+static int      g_init;
+static void   (*g_leave)(void);     /* what the running thread does before the baton leaves it (sched.h) */
+
+void vita_sched_on_handover(void (*leave)(void)) { g_leave = leave; }
+
+static uint64_t now_us(void) { return vita_clock_us(); }
+
+/* A slice is a count of backward branches, whose host duration varies by
+ * machine and instrumentation. With a real clock the count adapts toward a
+ * bounded wall-clock slice so latency-sensitive workers get regular turns.
+ * With a virtual clock computation advances no time, so the fixed count makes
+ * scheduling deterministic. */
+#define SLICE_US    3000u
+#define SLICE_LEAST 250
+static int32_t  g_slice_len = VITA_SLICE;
+static uint64_t g_slice_began;
+
+static void slice_begun(void) {
+    vita_slice = g_slice_len;
+    g_slice_began = now_us();
+}
+
+static void slice_measured(void) {
+    uint64_t took = now_us() - g_slice_began;
+    if (took > SLICE_US) {
+        int64_t n = (int64_t)g_slice_len * SLICE_US / (int64_t)took;
+        if (n < g_slice_len / 4) n = g_slice_len / 4;       /* one long call from the library is not the measure of a loop */
+        g_slice_len = n < SLICE_LEAST ? SLICE_LEAST : (int32_t)n;
+    } else if (took < SLICE_US / 4 && g_slice_len < VITA_SLICE) {
+        g_slice_len = g_slice_len > VITA_SLICE / 2 ? VITA_SLICE : g_slice_len * 2;
+    }
+}
+
+static void save_regs(vthread *t) {
+    uint32_t *rr = t->regs.r;
+    rr[0] = r0; rr[1] = r1; rr[2] = r2;  rr[3] = r3;  rr[4] = r4;  rr[5] = r5; rr[6] = r6;
+    rr[7] = r7; rr[8] = r8; rr[9] = r9; rr[10] = r10; rr[11] = r11; rr[12] = r12;
+    t->regs.sp = sp; t->regs.lr = lr;
+    t->regs.n = flag_n; t->regs.z = flag_z; t->regs.c = flag_c; t->regs.v = flag_v; t->regs.ge = flag_ge;
+    memcpy(t->regs.vfp, vfp_s, sizeof(vfp_s));
+    t->regs.fn = fpscr_n; t->regs.fz = fpscr_z; t->regs.fc = fpscr_c; t->regs.fv = fpscr_v;
+    t->regs.last_pc = vita_last_pc;
+}
+
+static void load_regs(const vthread *t) {
+    const uint32_t *rr = t->regs.r;
+    r0 = rr[0]; r1 = rr[1]; r2 = rr[2];  r3 = rr[3];  r4 = rr[4];  r5 = rr[5]; r6 = rr[6];
+    r7 = rr[7]; r8 = rr[8]; r9 = rr[9]; r10 = rr[10]; r11 = rr[11]; r12 = rr[12];
+    sp = t->regs.sp; lr = t->regs.lr;
+    flag_n = t->regs.n; flag_z = t->regs.z; flag_c = t->regs.c; flag_v = t->regs.v; flag_ge = t->regs.ge;
+    memcpy(vfp_s, t->regs.vfp, sizeof(vfp_s));
+    fpscr_n = t->regs.fn; fpscr_z = t->regs.fz; fpscr_c = t->regs.fc; fpscr_v = t->regs.fv;
+    vita_last_pc = t->regs.last_pc;
+}
+
+/* The main thread is the one that called first; it already runs. */
+static void boot_once(void) {
+    (void)mtx_init(&g_boot_lock, mtx_plain);
+}
+
+static void init_once(void) {
+    call_once(&g_boot_once, boot_once);
+    mtx_lock(&g_boot_lock);
+    if (g_init) {
+        mtx_unlock(&g_boot_lock);
+        return;
+    }
+    g_init = 1;
+    mtx_init(&g_mtx, mtx_plain);
+    vthread *m = &g_t[0];
+    memset(m, 0, sizeof(*m));
+    m->state = T_RUNNING;
+    m->uid = THREAD_UID_FIRST;
+    snprintf(m->name, sizeof(m->name), "main");
+    m->prio = 0x40;
+    cnd_init(&m->wake);
+    g_cur = m;
+    mtx_unlock(&g_boot_lock);
+}
+
+static vthread *by_uid(uint32_t uid) {
+    for (int i = 0; i < MAX_THREADS; i++)
+        if (g_t[i].state != T_FREE && g_t[i].uid == uid) return &g_t[i];
+    return NULL;
+}
+
+uint32_t vita_thread_self(void) { init_once(); return g_cur->uid; }
+
+void vita_main_stack_init(uint32_t base, uint32_t size) {
+    init_once();
+    g_t[0].stack_base = base;
+    g_t[0].stack_size = size;
+}
+
+uint32_t *vita_thread_tls_slot(uint32_t uid) {
+    init_once();
+    vthread *t = by_uid(uid);
+    return t ? &t->tls : NULL;
+}
+
+uint32_t vita_sched_threads(uint32_t *runnable) {
+    uint32_t n = 0, run = 0;
+    for (int i = 0; i < MAX_THREADS; i++) {
+        if (g_t[i].state == T_FREE) continue;
+        n++;
+        if (g_t[i].state == T_READY || g_t[i].state == T_RUNNING) run++;
+    }
+    if (runnable) *runnable = run;
+    return n;
+}
+
+void vita_sched_dump(FILE *f) {
+    static const char *const WAITS[] = { "nothing", "semaphore", "mutex", "condition", "the end of thread", "the clock", "SceUlt object",
+                                         "event flag", "message pipe" };
+    init_once();
+    /* not under the lock: this runs on the thread that holds the baton, at exit */
+    uint64_t now = now_us();
+    for (int i = 0; i < MAX_THREADS; i++) {
+        const vthread *t = &g_t[i];
+        if (t->state == T_FREE) continue;
+        uint32_t pc = t == g_cur ? vita_last_pc : t->regs.last_pc;
+        fprintf(f, "  thread 0x%08X %-20s ", t->uid, t->name);
+        if (t->state == T_WAITING) {
+            int kind = t->wait_kind >= 0 && t->wait_kind <= VW_MSG_PIPE ? t->wait_kind : 0;
+            fprintf(f, "waits on %s", WAITS[kind]);
+            if (kind != VW_DELAY) fprintf(f, " 0x%08X", t->wait_obj);
+            if (t->wait_until) fprintf(f, ", %llu ms more at most", (unsigned long long)(t->wait_until > now ? (t->wait_until - now) / 1000 : 0));
+        } else {
+            fprintf(f, "%s", t->state == T_RUNNING ? "running" : t->state == T_READY ? "ready" : t->state == T_NEW ? "not started" : "ended");
+        }
+        fprintf(f, ", last at 0x%08X\n", pc);
+    }
+}
+
+uint32_t vita_sched_running(char *name, uint32_t cap) {
+    init_once();
+    mtx_lock(&g_mtx);
+    const vthread *t = g_cur;
+    uint32_t uid = t->state == T_RUNNING ? t->uid : 0;
+    if (name && cap) snprintf(name, cap, "%s", uid ? t->name : "(idle)");
+    mtx_unlock(&g_mtx);
+    return uid;
+}
+
+/* Timed waiters whose time has come become runnable; returns the earliest
+ * time still pending, or 0. */
+static uint64_t expire(uint64_t now) {
+    uint64_t earliest = 0;
+    for (int i = 0; i < MAX_THREADS; i++) {
+        vthread *t = &g_t[i];
+        if (t->state != T_WAITING || !t->wait_until) continue;
+        if (t->wait_until <= now) { t->state = T_READY; t->timed_out = 1; t->wait_until = 0; }
+        else if (!earliest || t->wait_until < earliest) earliest = t->wait_until;
+    }
+    return earliest;
+}
+
+/* The next thread to run after `cur`, round-robin. When nothing is runnable
+ * the host sleeps until the earliest timed wait, and when there is none of
+ * those either the program has deadlocked, which is said rather than spun
+ * on. Called with the mutex held. */
+static vthread *pick_next(vthread *cur) {
+    for (;;) {
+        uint64_t earliest = expire(now_us());
+        int start = (int)(cur - g_t);
+        for (int k = 1; k <= MAX_THREADS; k++) {
+            vthread *t = &g_t[(start + k) % MAX_THREADS];
+            if (t->state == T_READY) return t;
+        }
+        if (cur->state == T_READY || cur->state == T_RUNNING) return cur;
+        if (!earliest) {
+            uint32_t n = 0, run = 0;
+            n = vita_sched_threads(&run);
+            fprintf(stderr, "vitarecomp: every thread is waiting (%u threads); the program is deadlocked\n", n);
+            for (int i = 0; i < MAX_THREADS; i++)
+                if (g_t[i].state == T_WAITING)
+                    fprintf(stderr, "  %s (0x%08X) waits on kind %d object 0x%08X\n",
+                            g_t[i].name, g_t[i].uid, g_t[i].wait_kind, g_t[i].wait_obj);
+            mtx_unlock(&g_mtx);
+            vita_trap_unimpl(0, n, "deadlock: every thread is waiting");
+            vita_host_exit(3);
+            mtx_lock(&g_mtx);
+            cur->state = T_RUNNING;
+            cur->timed_out = 1;
+            return cur;
+        }
+        uint64_t now = now_us();
+        if (earliest > now) {
+            uint64_t d = earliest - now;
+            mtx_unlock(&g_mtx);
+            vita_clock_wait(d);
+            mtx_lock(&g_mtx);
+        }
+    }
+}
+
+/* Hand the baton from the running thread to `next` and sleep until it comes
+ * back. Called with the mutex held; returns with it held. */
+static void switch_to(vthread *cur, vthread *next) {
+    if (next == cur) { cur->state = T_RUNNING; return; }
+    if (g_leave) {
+        void (*leave)(void) = g_leave;
+        mtx_unlock(&g_mtx);
+        leave();
+        mtx_lock(&g_mtx);
+    }
+    save_regs(cur);
+    next->state = T_RUNNING;
+    g_cur = next;
+    next->go = 1;
+    cnd_signal(&next->wake);
+    while (!cur->go) cnd_wait(&cur->wake, &g_mtx);
+    cur->go = 0;
+    cur->state = T_RUNNING;
+    slice_begun();
+}
+
+/* A new guest thread's host thread: waits for its first turn, then runs the
+ * entry through the dispatch table with the registers switch_to loaded, and
+ * ends the guest thread when the entry returns. */
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4702)
+#endif
+static int thread_main(void *arg) {
+    vthread *t = (vthread *)arg;
+    mtx_lock(&g_mtx);
+    while (!t->go) cnd_wait(&t->wake, &g_mtx);
+    t->go = 0;
+    t->state = T_RUNNING;
+    load_regs(t);
+    slice_begun();
+    mtx_unlock(&g_mtx);
+
+    vita_dispatch(0, t->entry);
+    vita_thread_exit((int)r0);
+    return 0;
+}
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
+uint32_t vita_thread_create(const char *name, uint32_t entry, uint32_t prio, uint32_t stack_size) {
+    init_once();
+    if (stack_size > UINT32_MAX - 0xFFFu) return 0;
+    int i;
+    for (i = 0; i < MAX_THREADS && g_t[i].state != T_FREE; i++) {}
+    if (i == MAX_THREADS) return 0;
+    vthread *t = &g_t[i];
+    memset(t, 0, sizeof(*t));
+    t->state = T_NEW;
+    t->uid = THREAD_UID_FIRST + (uint32_t)i;
+    snprintf(t->name, sizeof(t->name), "%s", name ? name : "");
+    t->entry = entry;
+    t->prio = prio;
+    t->stack_size = (stack_size + 0xFFFu) & ~0xFFFu;
+    if (t->stack_size < 0x1000) t->stack_size = 0x1000;
+    cnd_init(&t->wake);
+    return t->uid;
+}
+
+int vita_thread_start(uint32_t uid, uint32_t arglen, uint32_t argp) {
+    init_once();
+    vthread *t = by_uid(uid);
+    if (!t) return (int)SCE_KERNEL_ERROR_INVALID_UID;
+    if (t->state != T_NEW) return (int)SCE_KERNEL_ERROR_NOT_DORMANT;
+    if (!t->stack_base) {
+        t->stack_base = vita_sysmem_reserve(t->stack_size);
+        if (!t->stack_base) return (int)SCE_KERNEL_ERROR_NO_MEMORY;
+    }
+    /* The arguments are copied onto the new stack, as the kernel does, and
+     * the entry gets their length and the copy's address. */
+    uint32_t top = t->stack_base + t->stack_size;
+    uint32_t args = 0;
+    if (arglen && argp) {
+        if (arglen > t->stack_size - 16u ||
+            !vita_mem_ptr(argp, arglen))
+            return (int)SCE_KERNEL_ERROR_NO_MEMORY;
+        args = (top - arglen) & ~15u;
+        void *d = vita_mem_ptr(args, arglen);
+        const void *s = vita_mem_ptr(argp, arglen);
+        if (d && s) {
+            (void)vita_mem_move_guest(args, argp, arglen);
+        } else {
+            return (int)SCE_KERNEL_ERROR_NO_MEMORY;
+        }
+        top = args;
+    }
+    memset(&t->regs, 0, sizeof(t->regs));
+    t->regs.r[0] = arglen;
+    t->regs.r[1] = args;
+    t->regs.sp = top - 16;
+    t->regs.lr = 0;
+    t->state = T_READY;
+
+    if (thrd_create(&t->host, thread_main, t) != thrd_success) { t->state = T_NEW; return (int)SCE_KERNEL_ERROR_NO_MEMORY; }
+    t->host_started = 1;
+    vita_runtime_count(VITA_COUNTER_THREAD_CREATED, 1);
+    vita_hle_trace("thread \"%s\" (0x%08X) starts at 0x%08X, stack 0x%08X+0x%X", t->name, t->uid, t->entry, t->stack_base, t->stack_size);
+
+    /* The new thread runs first, up to its first wait: that is what a
+     * higher-priority thread would do, and it is what lets a worker set
+     * itself up before the thread that made it goes on. */
+    mtx_lock(&g_mtx);
+    vthread *cur = g_cur;
+    cur->state = T_READY;
+    switch_to(cur, t);
+    mtx_unlock(&g_mtx);
+    return 0;
+}
+
+void vita_thread_exit(int status) {
+    init_once();
+    vthread *cur = g_cur;
+    if (cur != &g_t[0])
+        vita_hle_trace("thread \"%s\" (0x%08X) ends with %d",
+                       cur->name, cur->uid, status);
+    mtx_lock(&g_mtx);
+    if (cur == &g_t[0]) {
+        mtx_unlock(&g_mtx);
+        vita_host_exit(status);
+        return;
+    }
+    cur->state = T_DONE;
+    cur->exit_status = status;
+    save_regs(cur);
+    vita_runtime_count(VITA_COUNTER_THREAD_FINISHED, 1);
+    for (int i = 0; i < MAX_THREADS; i++) {
+        vthread *w = &g_t[i];
+        if (w->state == T_WAITING && w->wait_kind == VW_THREAD_END && w->wait_obj == cur->uid) { w->state = T_READY; w->wait_until = 0; }
+    }
+    vthread *next = pick_next(cur);
+    if (next == cur) {                     /* cannot happen: main is never DONE here */
+        mtx_unlock(&g_mtx);
+        vita_host_exit(status);
+        vita_libc_thread_shutdown();
+        thrd_exit(0);
+    }
+    if (g_leave) {
+        void (*leave)(void) = g_leave;
+        mtx_unlock(&g_mtx);
+        leave();
+        mtx_lock(&g_mtx);
+    }
+    next->state = T_RUNNING;
+    g_cur = next;
+    next->go = 1;
+    cnd_signal(&next->wake);
+    mtx_unlock(&g_mtx);
+    vita_libc_thread_shutdown();
+    thrd_exit(0);
+}
+
+int vita_thread_wait_end(uint32_t uid, uint32_t timeout_us, int *status) {
+    init_once();
+    vthread *t = by_uid(uid);
+    if (!t) return (int)SCE_KERNEL_ERROR_INVALID_UID;
+    if (t->state != T_DONE) {
+        if (vita_sched_block(VW_THREAD_END, uid, timeout_us) < 0) return (int)SCE_KERNEL_ERROR_WAIT_TIMEOUT;
+        t = by_uid(uid);
+        if (!t) return (int)SCE_KERNEL_ERROR_INVALID_UID;
+    }
+    if (status) *status = t->exit_status;
+    return 0;
+}
+
+int vita_thread_delete(uint32_t uid) {
+    init_once();
+    vthread *t = by_uid(uid);
+    if (!t) return (int)SCE_KERNEL_ERROR_INVALID_UID;
+    if (t->state == T_NEW || t->state == T_DONE) {
+        if (t->host_started) {
+            int host_result = 0;
+            (void)thrd_join(t->host, &host_result);
+        }
+        vita_thread_tls_release(&t->tls);
+        vita_sysmem_release(t->stack_base);
+        cnd_destroy(&t->wake);
+        memset(t, 0, sizeof(*t));
+        return 0;
+    }
+    return (int)SCE_KERNEL_ERROR_NOT_DORMANT;
+}
+
+int vita_thread_info(uint32_t uid, char *name, uint32_t cap, uint32_t *entry,
+                     uint32_t *stack, uint32_t *stack_size, uint32_t *prio) {
+    init_once();
+    vthread *t = by_uid(uid);
+    if (!t) return -1;
+    if (name && cap) snprintf(name, cap, "%s", t->name);
+    if (entry) *entry = t->entry;
+    if (stack) *stack = t->stack_base;
+    if (stack_size) *stack_size = t->stack_size;
+    if (prio) *prio = t->prio;
+    return 0;
+}
+
+int vita_sched_block(int kind, uint32_t obj, uint32_t timeout_us) {
+    init_once();
+    mtx_lock(&g_mtx);
+    vthread *cur = g_cur;
+    cur->state = T_WAITING;
+    cur->wait_kind = kind;
+    cur->wait_obj = obj;
+    if (timeout_us) {
+        uint64_t now = now_us();
+        cur->wait_until = timeout_us > UINT64_MAX - now
+                        ? UINT64_MAX : now + timeout_us;
+    } else {
+        cur->wait_until = 0;
+    }
+    cur->timed_out = 0;
+    vthread *next = pick_next(cur);
+    switch_to(cur, next);
+    int r = cur->timed_out ? -1 : 0;
+    cur->wait_kind = VW_NONE;
+    mtx_unlock(&g_mtx);
+    return r;
+}
+
+void vita_sched_wake(int kind, uint32_t obj, int all) {
+    init_once();
+    mtx_lock(&g_mtx);
+    for (int i = 0; i < MAX_THREADS; i++) {
+        vthread *t = &g_t[i];
+        if (t->state != T_WAITING || t->wait_kind != kind || t->wait_obj != obj) continue;
+        t->state = T_READY;
+        t->wait_until = 0;
+        t->timed_out = 0;
+        if (!all) break;
+    }
+    mtx_unlock(&g_mtx);
+}
+
+void vita_sched_yield(void) {
+    init_once();
+    mtx_lock(&g_mtx);
+    vthread *cur = g_cur;
+    cur->state = T_READY;
+    vthread *next = pick_next(cur);
+    switch_to(cur, next);
+    mtx_unlock(&g_mtx);
+}
+
+/* The running thread's slice ran out: the other runnable threads go, each
+ * for a slice of its own, and this one resumes when the round comes back.
+ * Timed waits that have come due count as runnable, so a thread that
+ * computes without a firmware call no longer holds a sleeper past its time. */
+void vita_sched_slice_end_impl(void) {
+    slice_measured();
+    slice_begun();
+    if (!g_init) return;                   /* one thread, and no one to give way to */
+    mtx_lock(&g_mtx);
+    vthread *cur = g_cur;
+    (void)expire(now_us());
+    int start = (int)(cur - g_t);
+    for (int k = 1; k < MAX_THREADS; k++) {
+        vthread *t = &g_t[(start + k) % MAX_THREADS];
+        if (t->state != T_READY) continue;
+        cur->state = T_READY;
+        switch_to(cur, t);
+        break;
+    }
+    mtx_unlock(&g_mtx);
+}
+
+/* The running thread is in a loop that only another thread can end (see
+ * recomp_rt.h). Another runnable thread goes at once. With none, a sleeper
+ * on the clock may still end it, so the host sleeps a little and the loop
+ * looks again; with none of those either nothing can ever change the word,
+ * which is a deadlock and is said. */
+void vita_sched_spin_wait_impl(uint32_t addr) {
+    init_once();
+    mtx_lock(&g_mtx);
+    vthread *cur = g_cur;
+    uint64_t now = now_us(), earliest = expire(now);
+    int start = (int)(cur - g_t);
+    for (int k = 1; k < MAX_THREADS; k++) {
+        vthread *t = &g_t[(start + k) % MAX_THREADS];
+        if (t->state != T_READY) continue;
+        cur->state = T_READY;
+        switch_to(cur, t);
+        mtx_unlock(&g_mtx);
+        return;
+    }
+    if (!earliest) {
+        uint32_t n = vita_sched_threads(NULL);
+        fprintf(stderr, "vitarecomp: \"%s\" waits at 0x%08X on memory that no thread can change (%u threads, the rest waiting); the program is deadlocked\n",
+                cur->name, addr, n);
+        for (int i = 0; i < MAX_THREADS; i++)
+            if (g_t[i].state == T_WAITING)
+                fprintf(stderr, "  %s (0x%08X) waits on kind %d object 0x%08X\n",
+                        g_t[i].name, g_t[i].uid, g_t[i].wait_kind, g_t[i].wait_obj);
+        mtx_unlock(&g_mtx);
+        vita_trap_unimpl(addr, n, "deadlock: a spin on memory no thread can change");
+        vita_host_exit(3);
+        return;
+    }
+    mtx_unlock(&g_mtx);
+    uint64_t d = earliest > now ? earliest - now : 0;
+    if (d > 1000) d = 1000;
+    if (d) vita_clock_wait(d);
+}
+
+void vita_sched_delay(uint32_t us) {
+    if (us == 0) { vita_sched_yield(); return; }
+    (void)vita_sched_block(VW_DELAY, 0, us);
+}
+
+void vita_sched_shutdown(void) {
+    call_once(&g_boot_once, boot_once);
+    mtx_lock(&g_boot_lock);
+    if (!g_init) {
+        mtx_unlock(&g_boot_lock);
+        return;
+    }
+    /* Shutdown is entered after the guest host has joined every live thread.
+     * Join completed workers here as a final ownership sweep. */
+    for (int i = 1; i < MAX_THREADS; i++) {
+        vthread *thread = &g_t[i];
+        if (thread->state == T_FREE) continue;
+        if (thread->host_started && thread->state == T_DONE) {
+            int host_result = 0;
+            (void)thrd_join(thread->host, &host_result);
+        }
+        if (thread->state == T_NEW || thread->state == T_DONE) {
+            vita_thread_tls_release(&thread->tls);
+            vita_sysmem_release(thread->stack_base);
+            cnd_destroy(&thread->wake);
+            memset(thread, 0, sizeof(*thread));
+        }
+    }
+    vita_thread_tls_release(&g_t[0].tls);
+    cnd_destroy(&g_t[0].wake);
+    memset(g_t, 0, sizeof(g_t));
+    mtx_destroy(&g_mtx);
+    g_cur = NULL;
+    g_leave = NULL;
+    g_slice_len = VITA_SLICE;
+    g_slice_began = 0;
+    g_init = 0;
+    mtx_unlock(&g_boot_lock);
+}

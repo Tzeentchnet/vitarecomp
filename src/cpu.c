@@ -21,6 +21,10 @@ static vita_slice_hook g_slice_hook;
 static vita_spin_hook g_spin_hook;
 static vita_tls_hook g_tls_hook;
 
+void vita_sched_slice_end_impl(void);
+void vita_sched_spin_wait_impl(uint32_t addr);
+uint32_t vita_thread_tls_base_impl(void);
+
 void vita_runtime_set_hooks(vita_slice_hook slice_hook,
                             vita_spin_hook spin_hook,
                             vita_tls_hook tls_hook) {
@@ -30,8 +34,12 @@ void vita_runtime_set_hooks(vita_slice_hook slice_hook,
 }
 
 void vita_slice_end(void) {
-    vita_slice = VITA_SLICE;
-    if (g_slice_hook) g_slice_hook();
+    if (g_slice_hook) {
+        vita_slice = VITA_SLICE;
+        g_slice_hook();
+        return;
+    }
+    vita_sched_slice_end_impl();
 }
 
 void vita_spin_wait(uint32_t addr) {
@@ -39,13 +47,12 @@ void vita_spin_wait(uint32_t addr) {
         g_spin_hook(addr);
         return;
     }
-    vita_trap_unimpl(addr, 0, "spin wait requires a scheduler hook");
+    vita_sched_spin_wait_impl(addr);
 }
 
 uint32_t vita_tls_base(void) {
     if (g_tls_hook) return g_tls_hook();
-    vita_trap_unimpl(vita_last_pc, 0, "TLS base requires a runtime hook");
-    return 0;
+    return vita_thread_tls_base_impl();
 }
 
 void vita_trace_fn(uint32_t addr) {

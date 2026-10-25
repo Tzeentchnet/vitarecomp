@@ -28,10 +28,15 @@ typedef struct {
     int fpscr_nzcv[4];
 } represented_state;
 
-static uint32_t *const core_registers[15] = {
-    &r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7,
-    &r8, &r9, &r10, &r11, &r12, &sp, &lr,
-};
+static uint32_t *core_registers[15];
+
+static void initialize_core_registers(void) {
+    uint32_t *values[15] = {
+        &r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7,
+        &r8, &r9, &r10, &r11, &r12, &sp, &lr,
+    };
+    memcpy(core_registers, values, sizeof(values));
+}
 
 static void capture_state(represented_state *out) {
     for (int i = 0; i < 15; i++) out->core[i] = *core_registers[i];
@@ -224,6 +229,7 @@ static void test_semantic_boundaries(void) {
 }
 
 int main(void) {
+    initialize_core_registers();
     printf("prior AOT migration:\n");
     test_represented_state_round_trip();
     test_vfp_unordered_flags();

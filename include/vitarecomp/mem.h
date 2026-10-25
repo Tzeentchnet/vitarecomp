@@ -28,6 +28,23 @@ void vita_mem_free(void);
  * point of failure instead of silent corruption elsewhere. */
 void *vita_mem_ptr(uint32_t addr, uint32_t len);
 
+/* Checked forms for host and HLE code. They distinguish an invalid guest
+ * range from a valid zero-length one and never truncate a host size_t. */
+int vita_mem_range(uint32_t addr, size_t len, void **out);
+int vita_mem_copy_from_guest(void *dst, uint32_t src, size_t len);
+int vita_mem_copy_to_guest(uint32_t dst, const void *src, size_t len);
+int vita_mem_move_guest(uint32_t dst, uint32_t src, size_t len);
+int vita_mem_set_guest(uint32_t dst, uint8_t value, size_t len);
+
+/* Copies a NUL-terminated guest string. A missing terminator, an undersized
+ * destination and an unbacked address are distinct failures. */
+int vita_mem_read_cstr(uint32_t addr, char *dst, size_t capacity,
+                       size_t *length);
+
+uint32_t vita_mem_base(void);
+size_t vita_mem_size(void);
+uint64_t vita_mem_bad_access_count(void);
+
 /* Bytes backed from `addr` to the end of the region, or 0 if it is outside.
  *
  * The HLE needs this and `vita_mem_ptr` cannot answer it: a C string has no
@@ -45,6 +62,12 @@ uint8_t  vita_read8 (uint32_t addr);
 void vita_write32(uint32_t addr, uint32_t v);
 void vita_write16(uint32_t addr, uint16_t v);
 void vita_write8 (uint32_t addr, uint8_t  v);
+
+/* Checked host-side atomic compare/exchange. `observed` receives the value
+ * read even when it differs from `expected`. */
+int vita_mem_compare_exchange32(uint32_t addr, uint32_t expected,
+                                uint32_t desired, uint32_t *observed);
+int vita_mem_mark_written(uint32_t addr, size_t len);
 
 /* Exclusive accesses use byte sizes (1, 2, 4, or 8). Any successful ordinary
  * write invalidates outstanding monitors before a later STREX can succeed. */

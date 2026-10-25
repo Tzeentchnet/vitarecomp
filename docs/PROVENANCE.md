@@ -57,6 +57,7 @@ used to keep unrelated host/title code out.
 | 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` (CPU snapshot `1e922f488d57fe5a6a11ac056120a2c6fb299e4d`) | Analyzer, ARM/Thumb decoder, generated-C emitter, module/NID/relocation readers; exact paths below | Selective file port followed by canonical-ABI adaptations; no merge | MIT; same upstream copyright and license retained | MSVC `/W4 /WX`; synthetic decoder/discovery/emitter/relocation/runtime tests; three public homebrew extract/emit/repeat/compile fixtures; private three-image generation/repeat/object compilation |
 | 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` | Core CPU/VFP/NEON/half/memory/dispatch helpers listed below | Selective port; checked memory and mode-bearing dispatch hardened locally | MIT; same upstream copyright and license retained | Canonical runtime tests, prior-vector tests, cross-thread exclusive-monitor test, generated-source compilation |
 | 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` | `samples/fbdemo`, `samples/hello`, `samples/threads` source and prebuilt public homebrew modules | Coherent fixture import | MIT; covered by source repository license and this ledger | CTest `homebrew-e2e`: extract, emit twice byte-identically, and compile all generated C |
+| 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` | Title-neutral runtime topics: clock/scheduler, libc/libm/mspace/sysmem, thread manager, kernel/I/O/FIOS2/ULT, and PSARC paths listed below | Selective port and independent hardening; no merge, host renderer, or title compatibility code | MIT source revision retained as provenance; new fork changes follow the repository license layers above | MSVC `/W4 /WX`; Debug and RelWithDebInfo full CTest/public homebrew E2E; MSVC AddressSanitizer runtime/CPU tests |
 
 ### Selected CPU file boundary
 
@@ -106,8 +107,32 @@ topics:
 | Discovery and jump-table follow-up | `c6a9beda43584688e4bafc00972fb62316284e2f` | `analyze.c`, `decode.c/.h`, `emit.c`, decoder/runtime tests |
 
 The integration intentionally does **not** include downstream `host/`,
-renderer, GXM/HLE, audio, movie, filesystem, archive, or title-specific
-behavior. Those remain candidates for separate audited tasks.
+renderer, GXM, audio, movie, input, networking, dialogs, savedata UI, or
+title-specific behavior. Those remain candidates for separate audited tasks.
+
+### Selected runtime/HLE boundary
+
+The runtime audit used the following paths from
+`soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` as the source
+revision for generic behavior and data layouts:
+
+- `src/clock.c/.h`, `src/sched.c/.h`
+- `src/hle_libc.c`, `hle_clib.c`, `hle_scanf.c`, `hle_libm.c`
+- `src/hle_mspace.c`, `hle_sysmem.c/.h`, `hle_threadmgr.c`
+- `src/hle_kernel.c`, `hle_io.c`, `hle_fios.c/.h`, `hle_ult.c`
+- `src/psarc.c/.h` and the corresponding HLE-facing declarations
+
+The integrated versions were not copied as an opaque stack. Local work added
+checked/overflow-safe guest boundaries, TLS CPU state, synchronized lifecycle
+and clock state, reusable allocators, explicit unsupported errors, structured
+diagnostics/counters, safe canonical VFS mounts, hardened PSARC validation,
+destructor and TLS teardown, and clean restart. `runtime.c`,
+`runtime_internal.h`, `hle_registry.c`, `vfs.c`, and the public
+`runtime.h`/`host.h`/`vfs.h` contracts are integration-layer additions.
+
+The optional Vita3K comparison remained an out-of-process behavioral oracle.
+No Vita3K source, library, generated title code, proprietary fixture, host
+renderer, or runtime dependency was incorporated.
 
 ## Excluded material
 
