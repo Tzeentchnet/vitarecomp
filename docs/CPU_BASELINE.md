@@ -95,3 +95,21 @@ generated 809 files (356,792,679 bytes) twice with identical relative file
 sets and bytes. All three generated-source targets then compiled with MSVC
 `/W4 /WX /permissive- /bigobj`; the final compile log contained no warning or
 error diagnostics.
+
+## Renderer merge revalidation
+
+The renderer integration checkpoint
+`b1754cd5464604c70f39253d63b8c6163da20012` was revalidated after merging it
+onto CPU baseline `5c4aa9c7ae1b04c3c832ee399a89c5d853a34df3`. A fresh
+combined Visual Studio 2022 Debug build retained the strict MSVC policy
+(`/W4 /WX /permissive- /bigobj`), and the expanded CTest suite passed 16/16
+tests, including the same three public homebrew fixtures.
+
+The private three-module rerun reproduced every published CPU aggregate:
+105,873 discovered functions, 4,050,600 instructions reached, 10,898,202 of
+11,308,620 executable bytes covered, 48,706 emitted functions, 3,666,858
+emitted instruction instances, 3,663,088 translated instances, and 3,770
+trapped instances. Both runs again produced the same 809-file,
+356,792,679-byte inventory with byte-identical reports and generated sources.
+All three generated-source targets compiled with the strict MSVC policy and no
+warning or error diagnostics.

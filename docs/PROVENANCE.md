@@ -40,6 +40,7 @@ for identifiable upstream material. See [`LICENSE`](../LICENSE),
 | `sp00nznet/vitarecomp` | `6ed4a5c59045706292c8ec03dfe5207ecc4033a4` and its ancestors | Foundation history | MIT |
 | `Shiz0id/vitarecomp` | Comparison remote `shiz0id` | Not incorporated | No determination made here |
 | `soyjxck/vitarecomp` | `5a095d7f429b1e51ffca3af438b18ad1502f07fb` | Selected CPU analysis/emission/runtime topics, tests, and public homebrew fixtures | MIT; upstream notice retained in `LICENSES/MIT.txt` and `NOTICE` |
+| Local renderer integration | `b1754cd5464604c70f39253d63b8c6163da20012` | Production Windows DX12 and Vulkan backends, shared conformance shader, tests, and documentation | GPL-2.0-or-later |
 | Vita3K | None | Not incorporated | Not applicable |
 | Retail game data or generated title code | None | Not incorporated | Not applicable |
 
@@ -57,6 +58,7 @@ used to keep unrelated host/title code out.
 | 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` (CPU snapshot `1e922f488d57fe5a6a11ac056120a2c6fb299e4d`) | Analyzer, ARM/Thumb decoder, generated-C emitter, module/NID/relocation readers; exact paths below | Selective file port followed by canonical-ABI adaptations; no merge | MIT; same upstream copyright and license retained | MSVC `/W4 /WX`; synthetic decoder/discovery/emitter/relocation/runtime tests; three public homebrew extract/emit/repeat/compile fixtures; private three-image generation/repeat/object compilation |
 | 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` | Core CPU/VFP/NEON/half/memory/dispatch helpers listed below | Selective port; checked memory and mode-bearing dispatch hardened locally | MIT; same upstream copyright and license retained | Canonical runtime tests, prior-vector tests, cross-thread exclusive-monitor test, generated-source compilation |
 | 2026-10-25 | `soyjxck/vitarecomp@5a095d7f429b1e51ffca3af438b18ad1502f07fb` | `samples/fbdemo`, `samples/hello`, `samples/threads` source and prebuilt public homebrew modules | Coherent fixture import | MIT; covered by source repository license and this ledger | CTest `homebrew-e2e`: extract, emit twice byte-identically, and compile all generated C |
+| 2026-10-25 | Local `integration/renderers@b1754cd5464604c70f39253d63b8c6163da20012` | `src/gpu` DX12/Vulkan implementations, backend registry/runtime changes, pinned-DXC rules, shared HLSL, conformance tests, and renderer documentation | Complete branch merge onto CPU baseline `5c4aa9c7ae1b04c3c832ee399a89c5d853a34df3`; canonical CPU-generated C/runtime ABI retained | GPL-2.0-or-later | Combined MSVC Debug build; CTest 16/16; DX12 WARP and hardware lifecycle/resize conformance; validation-enabled Vulkan lifecycle/resize/recreate conformance; invalid-ICD no-fallback; wrong-DXC rejection; private CPU aggregate and deterministic-generation revalidation |
 
 ### Selected CPU file boundary
 
@@ -105,9 +107,31 @@ topics:
 | A32 decoding and emission | `cb4308ed6ea22d90170bd67261825c5f76039f67` | analyzer/decoder/emitter files, NEON helper, decoder/runtime tests |
 | Discovery and jump-table follow-up | `c6a9beda43584688e4bafc00972fb62316284e2f` | `analyze.c`, `decode.c/.h`, `emit.c`, decoder/runtime tests |
 
-The integration intentionally does **not** include downstream `host/`,
-renderer, GXM/HLE, audio, movie, filesystem, archive, or title-specific
-behavior. Those remain candidates for separate audited tasks.
+The selected downstream CPU import intentionally does **not** include that
+fork's `host/`, renderer, GXM/HLE, audio, movie, filesystem, archive, or
+title-specific behavior. The production renderers recorded above were authored
+and integrated locally rather than imported from that downstream boundary.
+
+## Combined mainline validation
+
+The renderer checkpoint
+`b1754cd5464604c70f39253d63b8c6163da20012` was merged onto canonical CPU
+baseline `5c4aa9c7ae1b04c3c832ee399a89c5d853a34df3`. The combined tree built in
+Visual Studio 2022 Debug with `/W4 /WX /permissive- /bigobj` and passed all
+16 CTest entries. This includes the three public homebrew end-to-end fixtures,
+both production-backend registrations, strict unavailable/no-fallback
+behavior, DX12 WARP and available-hardware conformance, and
+validation-enabled Vulkan conformance.
+
+The private three-module check publishes only aggregate results. It reproduced
+105,873 discovered functions, 4,050,600 instructions reached, 10,898,202 of
+11,308,620 executable bytes covered, 48,706 emitted functions, 3,663,088
+translated instruction instances, and 3,770 trapped instances. Repeated
+generation produced the same 809 files and 356,792,679 bytes with identical
+relative inventories, reports, and bytes. All three generated-source targets
+compiled under the strict MSVC policy with no warning or error diagnostics.
+No retail image, identifying path or hash, generated source, or raw private
+report is part of the repository.
 
 ## Excluded material
 

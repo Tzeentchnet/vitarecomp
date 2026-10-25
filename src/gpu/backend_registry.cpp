@@ -1,4 +1,7 @@
 #include "gpu_internal.hpp"
+#if defined(VITA_GPU_HAS_VULKAN_BACKEND)
+#include "vulkan_backend.hpp"
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -65,7 +68,6 @@ BackendRegistry make_production_registry() {
     (void)registry.register_factory(make_dx12_backend_factory());
 #endif
 #if defined(VITA_GPU_HAS_VULKAN_BACKEND)
-    extern std::shared_ptr<BackendFactory> make_vulkan_backend_factory();
     (void)registry.register_factory(make_vulkan_backend_factory());
 #endif
 

@@ -97,8 +97,9 @@ constexpr const char *command_name() {
 
 class TestOnlyNullDevice final : public BackendDevice {
 public:
-    explicit TestOnlyNullDevice(std::shared_ptr<TestOnlyNullState> state)
-        : state_(std::move(state)) {
+    TestOnlyNullDevice(std::shared_ptr<TestOnlyNullState> state,
+                       vita_gpu_backend backend)
+        : state_(std::move(state)), backend_(backend) {
         state_->record("device:create");
     }
 
@@ -107,7 +108,7 @@ public:
     }
 
     [[nodiscard]] vita_gpu_backend backend() const noexcept override {
-        return VITA_GPU_BACKEND_DX12;
+        return backend_;
     }
 
     Status capabilities(vita_gpu_device_capabilities &output) override {
@@ -432,6 +433,7 @@ private:
     }
 
     std::shared_ptr<TestOnlyNullState> state_;
+    vita_gpu_backend backend_ = VITA_GPU_BACKEND_NONE;
     std::uint64_t next_id_ = 1;
     std::unordered_map<std::uint64_t, ObjectKind> objects_;
     std::unordered_map<std::uint64_t, Swapchain> swapchains_;
@@ -441,15 +443,19 @@ private:
 
 class TestOnlyNullFactory final : public BackendFactory {
 public:
-    explicit TestOnlyNullFactory(std::shared_ptr<TestOnlyNullState> state)
-        : state_(std::move(state)) {}
+    TestOnlyNullFactory(std::shared_ptr<TestOnlyNullState> state,
+                        vita_gpu_backend backend)
+        : state_(std::move(state)), backend_(backend),
+          name_(backend == VITA_GPU_BACKEND_DX12
+                    ? "test-only-null-dx12"
+                    : "test-only-null-vulkan") {}
 
     [[nodiscard]] vita_gpu_backend backend() const noexcept override {
-        return VITA_GPU_BACKEND_DX12;
+        return backend_;
     }
 
     [[nodiscard]] std::string_view name() const noexcept override {
-        return "test-only-null-dx12";
+        return name_;
     }
 
     [[nodiscard]] bool test_only() const noexcept override {
@@ -497,19 +503,21 @@ public:
     Status create_device(
         const vita_gpu_device_desc &,
         std::unique_ptr<BackendDevice> &output) const override {
-        output = std::make_unique<TestOnlyNullDevice>(state_);
+        output = std::make_unique<TestOnlyNullDevice>(state_, backend_);
         return Status::success();
     }
 
 private:
     std::shared_ptr<TestOnlyNullState> state_;
+    vita_gpu_backend backend_ = VITA_GPU_BACKEND_NONE;
+    std::string name_;
 };
 
 } // namespace
 
 std::shared_ptr<BackendFactory> make_test_only_null_backend_factory(
-    std::shared_ptr<TestOnlyNullState> state) {
-    return std::make_shared<TestOnlyNullFactory>(std::move(state));
+    std::shared_ptr<TestOnlyNullState> state, vita_gpu_backend backend) {
+    return std::make_shared<TestOnlyNullFactory>(std::move(state), backend);
 }
 
 } // namespace vitarecomp::gpu::test

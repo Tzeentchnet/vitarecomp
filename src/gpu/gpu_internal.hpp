@@ -211,6 +211,7 @@ struct BackendComputePipelineDesc {
 
 struct BackendColorAttachment {
     NativeId target;
+    vita_gpu_resource_state state = VITA_GPU_RESOURCE_STATE_UNDEFINED;
     vita_gpu_load_op load_op = VITA_GPU_LOAD_PRESERVE;
     vita_gpu_store_op store_op = VITA_GPU_STORE_PRESERVE;
     std::array<float, 4> clear_color{};
@@ -218,6 +219,7 @@ struct BackendColorAttachment {
 
 struct BackendDepthAttachment {
     NativeId target;
+    vita_gpu_resource_state state = VITA_GPU_RESOURCE_STATE_UNDEFINED;
     vita_gpu_load_op depth_load_op = VITA_GPU_LOAD_PRESERVE;
     vita_gpu_store_op depth_store_op = VITA_GPU_STORE_PRESERVE;
     vita_gpu_load_op stencil_load_op = VITA_GPU_LOAD_PRESERVE;
@@ -287,6 +289,8 @@ struct CopyBufferReadbackCommand {
 };
 struct CopyTextureReadbackCommand {
     NativeId source;
+    vita_gpu_resource_state source_state =
+        VITA_GPU_RESOURCE_STATE_UNDEFINED;
     std::uint32_t mip_level = 0;
     std::uint32_t array_layer = 0;
     NativeId destination;
