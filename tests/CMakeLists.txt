@@ -93,4 +93,104 @@ if(VITARECOMP_BUILD_GPU)
         target_compile_options(test_gpu_c_abi PRIVATE -UNDEBUG)
     endif()
     add_test(NAME gpu-c-abi COMMAND test_gpu_c_abi)
+
+    if(WIN32 AND VITARECOMP_ENABLE_DX12)
+        add_executable(test_dx12_warp test_dx12_warp.cpp)
+        target_link_libraries(test_dx12_warp PRIVATE vitarecomp::gpu)
+        target_compile_features(test_dx12_warp PRIVATE cxx_std_20)
+        vitarecomp_project_warnings(test_dx12_warp)
+        if(MSVC)
+            target_compile_options(test_dx12_warp PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(test_dx12_warp PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME gpu-dx12-warp-buffer COMMAND test_dx12_warp)
+        set_tests_properties(gpu-dx12-warp-buffer PROPERTIES TIMEOUT 60)
+
+        if(VITARECOMP_BUILD_DX12_CONFORMANCE)
+            if(NOT TARGET Vitarecomp::DXC)
+                message(FATAL_ERROR
+                    "DX12 conformance shaders require the pinned official "
+                    "Microsoft DXC ${VITARECOMP_DXC_PINNED_VERSION} "
+                    "(release ${VITARECOMP_DXC_RELEASE_TAG}). Set "
+                    "VITARECOMP_DXC_ROOT to the extracted release directory; "
+                    "the build never downloads compiler binaries.")
+            endif()
+
+            set(_dx12_shader_source
+                "${CMAKE_CURRENT_SOURCE_DIR}/shaders/dx12_conformance.hlsl")
+            set(_dx12_shader_directory
+                "${CMAKE_CURRENT_BINARY_DIR}/dx12-conformance-shaders")
+            set(_dx12_vertex_shader
+                "${_dx12_shader_directory}/dx12_conformance_vs.dxil")
+            set(_dx12_pixel_shader
+                "${_dx12_shader_directory}/dx12_conformance_ps.dxil")
+            add_custom_command(
+                OUTPUT "${_dx12_vertex_shader}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "${_dx12_shader_directory}"
+                COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+                    -T vs_6_0 -E vs_main -HV 2021
+                    -Ges -WX -O3 -Qstrip_debug -Qstrip_reflect
+                    -Fo "${_dx12_vertex_shader}"
+                    "${_dx12_shader_source}"
+                DEPENDS "${_dx12_shader_source}" Vitarecomp::DXC
+                VERBATIM
+                COMMENT "Compiling deterministic DX12 conformance vertex shader"
+            )
+            add_custom_command(
+                OUTPUT "${_dx12_pixel_shader}"
+                COMMAND ${CMAKE_COMMAND} -E make_directory
+                    "${_dx12_shader_directory}"
+                COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+                    -T ps_6_0 -E ps_main -HV 2021
+                    -Ges -WX -O3 -Qstrip_debug -Qstrip_reflect
+                    -Fo "${_dx12_pixel_shader}"
+                    "${_dx12_shader_source}"
+                DEPENDS "${_dx12_shader_source}" Vitarecomp::DXC
+                VERBATIM
+                COMMENT "Compiling deterministic DX12 conformance pixel shader"
+            )
+            add_custom_target(dx12_conformance_shaders
+                DEPENDS "${_dx12_vertex_shader}" "${_dx12_pixel_shader}")
+
+            add_executable(vitarecomp_dx12_conformance
+                dx12_conformance.cpp
+            )
+            add_dependencies(vitarecomp_dx12_conformance
+                dx12_conformance_shaders)
+            target_link_libraries(vitarecomp_dx12_conformance PRIVATE
+                vitarecomp::gpu
+            )
+            target_compile_features(vitarecomp_dx12_conformance PRIVATE
+                cxx_std_20
+            )
+            vitarecomp_project_warnings(vitarecomp_dx12_conformance)
+            if(MSVC)
+                target_compile_options(vitarecomp_dx12_conformance PRIVATE
+                    /UNDEBUG
+                )
+            else()
+                target_compile_options(vitarecomp_dx12_conformance PRIVATE
+                    -UNDEBUG
+                )
+            endif()
+            add_custom_command(TARGET vitarecomp_dx12_conformance POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_dx12_vertex_shader}"
+                    "$<TARGET_FILE_DIR:vitarecomp_dx12_conformance>/dx12_conformance_vs.dxil"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_dx12_pixel_shader}"
+                    "$<TARGET_FILE_DIR:vitarecomp_dx12_conformance>/dx12_conformance_ps.dxil"
+                VERBATIM
+            )
+            add_test(NAME gpu-dx12-warp-conformance
+                COMMAND vitarecomp_dx12_conformance
+                    --warp --hidden --iterations 3 --frames 4
+            )
+            set_tests_properties(gpu-dx12-warp-conformance PROPERTIES
+                TIMEOUT 180
+            )
+        endif()
+    endif()
 endif()
