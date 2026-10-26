@@ -8,13 +8,14 @@
 #include "hle_sysmem.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define SCE_GXM_ERROR_ALREADY_INITIALIZED UINT32_C(0x805B0001)
-#define SCE_GXM_ERROR_OUT_OF_MEMORY       UINT32_C(0x805B0002)
-#define SCE_GXM_ERROR_INVALID_VALUE   UINT32_C(0x805B0003)
+#define SCE_GXM_ERROR_OUT_OF_MEMORY UINT32_C(0x805B0002)
+#define SCE_GXM_ERROR_INVALID_VALUE UINT32_C(0x805B0003)
 #define SCE_GXM_ERROR_INVALID_POINTER UINT32_C(0x805B0004)
-#define SCE_GXM_ERROR_NULL_PROGRAM    UINT32_C(0x805B0008)
+#define SCE_GXM_ERROR_NULL_PROGRAM UINT32_C(0x805B0008)
 
 #define SCE_GXM_TEXTURE_LINEAR UINT32_C(0x60000000)
 #define GXM_MEMORY_MAP_LIMIT 256u
@@ -22,9 +23,11 @@
 #define GXM_CONTEXT_LIMIT 8u
 #define GXM_SHADER_PATCHER_LIMIT 8u
 #define GXM_REGISTERED_PROGRAM_LIMIT 256u
+#define GXM_VERTEX_PROGRAM_LIMIT 256u
 #define GXM_MINIMUM_CONTEXT_HOST_MEM_SIZE UINT32_C(0x800)
 #define GXM_SHADER_PATCHER_OBJECT_SIZE UINT32_C(0x100)
 #define GXM_REGISTERED_PROGRAM_SIZE UINT32_C(0x4)
+#define GXM_VERTEX_PROGRAM_SIZE UINT32_C(0x100)
 #define GXM_NOTIFICATION_REGION_SIZE UINT32_C(0x100000)
 
 typedef struct gxm_memory_map {
@@ -69,6 +72,16 @@ typedef struct gxm_registered_program {
     uint32_t program_size;
 } gxm_registered_program;
 
+typedef struct gxm_vertex_program {
+    uint32_t address;
+    uint32_t patcher;
+    uint32_t registration;
+    uint32_t reference_count;
+    vita_gxp_translation_key translation_key;
+    char *hlsl;
+    size_t hlsl_size;
+} gxm_vertex_program;
+
 typedef struct gxm_state {
     uint32_t initialized;
     uint32_t flags;
@@ -88,13 +101,16 @@ typedef struct gxm_state {
     uint32_t shader_patcher_count;
     gxm_shader_patcher shader_patchers[GXM_SHADER_PATCHER_LIMIT];
     uint32_t registered_program_count;
-    gxm_registered_program
-        registered_programs[GXM_REGISTERED_PROGRAM_LIMIT];
+    gxm_registered_program registered_programs[GXM_REGISTERED_PROGRAM_LIMIT];
+    uint32_t vertex_program_count;
+    gxm_vertex_program vertex_programs[GXM_VERTEX_PROGRAM_LIMIT];
 } gxm_state;
 
 static gxm_state g_gxm;
 
 void vita_gxm_reset(void) {
+    for (uint32_t i = 0u; i < g_gxm.vertex_program_count; i++)
+        free(g_gxm.vertex_programs[i].hlsl);
     g_gxm = (gxm_state){0};
     /* Keep this HLE object linked ahead of generated strict import defaults. */
 }
@@ -115,8 +131,7 @@ void vita_hle_sceGxmInitialize(void) {
          flags != UINT32_C(0x00020000)) ||
         parameter_buffer_size < UINT32_C(0x40000) ||
         (parameter_buffer_size & UINT32_C(0x3FFFF)) != 0u ||
-        (uint64_t)max_pending_count * callback_data_size >
-            UINT64_C(0x200)) {
+        (uint64_t)max_pending_count * callback_data_size > UINT64_C(0x200)) {
         r0 = SCE_GXM_ERROR_INVALID_VALUE;
         return;
     }
@@ -131,8 +146,8 @@ void vita_hle_sceGxmInitialize(void) {
         r0 = SCE_GXM_ERROR_OUT_OF_MEMORY;
         return;
     }
-    (void)vita_mem_set_guest(
-        notification_region, 0, GXM_NOTIFICATION_REGION_SIZE);
+    (void)vita_mem_set_guest(notification_region, 0,
+                             GXM_NOTIFICATION_REGION_SIZE);
     g_gxm.initialized = 1u;
     g_gxm.flags = flags;
     g_gxm.display_queue_max_pending_count = max_pending_count;
@@ -158,8 +173,7 @@ void vita_hle_sceGxmMapMemory(void) {
     const uint32_t size = r1;
     const uint32_t attributes = r2;
     const uint64_t end = (uint64_t)base + size;
-    if (!base || end > UINT64_C(0x100000000) ||
-        !vita_mem_ptr(base, size)) {
+    if (!base || end > UINT64_C(0x100000000) || !vita_mem_ptr(base, size)) {
         r0 = SCE_GXM_ERROR_INVALID_POINTER;
         return;
     }
@@ -169,8 +183,7 @@ void vita_hle_sceGxmMapMemory(void) {
     }
 
     const uint32_t aligned_base = base & UINT32_C(0xFFFFF000);
-    const uint64_t aligned_end =
-        (end + UINT64_C(0xFFF)) & ~UINT64_C(0xFFF);
+    const uint64_t aligned_end = (end + UINT64_C(0xFFF)) & ~UINT64_C(0xFFF);
     const uint64_t aligned_size = aligned_end - aligned_base;
     if (aligned_size > UINT32_MAX ||
         (aligned_size != 0u &&
@@ -189,15 +202,13 @@ void vita_hle_sceGxmMapMemory(void) {
         return;
     }
 
-    gxm_memory_map *mapping =
-        &g_gxm.memory_maps[g_gxm.memory_map_count++];
+    gxm_memory_map *mapping = &g_gxm.memory_maps[g_gxm.memory_map_count++];
     mapping->base = aligned_base;
     mapping->size = (uint32_t)aligned_size;
     mapping->attributes = attributes;
-    vita_hle_trace(
-        "sceGxmMapMemory(base 0x%08X, size 0x%X, attributes 0x%X) "
-        "mapped [0x%08X, +0x%X)",
-        base, size, attributes, mapping->base, mapping->size);
+    vita_hle_trace("sceGxmMapMemory(base 0x%08X, size 0x%X, attributes 0x%X) "
+                   "mapped [0x%08X, +0x%X)",
+                   base, size, attributes, mapping->base, mapping->size);
     r0 = 0;
 }
 
@@ -227,30 +238,26 @@ static void map_usse_memory(gxm_usse_map *mappings, uint32_t *map_count,
     mapping->size = size;
     mapping->offset = base;
     vita_write32(offset_address, mapping->offset);
-    vita_hle_trace(
-        "%s(base 0x%08X, size 0x%X, "
-        "offset 0x%08X)",
-        name, base, size, mapping->offset);
+    vita_hle_trace("%s(base 0x%08X, size 0x%X, "
+                   "offset 0x%08X)",
+                   name, base, size, mapping->offset);
     r0 = 0;
 }
 
 void vita_hle_sceGxmMapFragmentUsseMemory(void) {
-    map_usse_memory(
-        g_gxm.fragment_usse_maps, &g_gxm.fragment_usse_map_count,
-        "sceGxmMapFragmentUsseMemory");
+    map_usse_memory(g_gxm.fragment_usse_maps, &g_gxm.fragment_usse_map_count,
+                    "sceGxmMapFragmentUsseMemory");
 }
 
 void vita_hle_sceGxmMapVertexUsseMemory(void) {
-    map_usse_memory(
-        g_gxm.vertex_usse_maps, &g_gxm.vertex_usse_map_count,
-        "sceGxmMapVertexUsseMemory");
+    map_usse_memory(g_gxm.vertex_usse_maps, &g_gxm.vertex_usse_map_count,
+                    "sceGxmMapVertexUsseMemory");
 }
 
 void vita_hle_sceGxmCreateContext(void) {
     const uint32_t params = r0;
     const uint32_t context_address = r1;
-    if (!vita_mem_ptr(params, 44u) ||
-        !vita_mem_ptr(context_address, 4u)) {
+    if (!vita_mem_ptr(params, 44u) || !vita_mem_ptr(context_address, 4u)) {
         r0 = SCE_GXM_ERROR_INVALID_POINTER;
         return;
     }
@@ -263,27 +270,22 @@ void vita_hle_sceGxmCreateContext(void) {
     const uint32_t vertex_ring_buffer_size = vita_read32(params + 20u);
     const uint32_t fragment_ring_buffer = vita_read32(params + 24u);
     const uint32_t fragment_ring_buffer_size = vita_read32(params + 28u);
-    const uint32_t fragment_usse_ring_buffer =
-        vita_read32(params + 32u);
-    const uint32_t fragment_usse_ring_buffer_size =
-        vita_read32(params + 36u);
-    const uint32_t fragment_usse_ring_buffer_offset =
-        vita_read32(params + 40u);
+    const uint32_t fragment_usse_ring_buffer = vita_read32(params + 32u);
+    const uint32_t fragment_usse_ring_buffer_size = vita_read32(params + 36u);
+    const uint32_t fragment_usse_ring_buffer_offset = vita_read32(params + 40u);
     const uint32_t context = (host_mem + 7u) & ~UINT32_C(7);
     const uint32_t host_padding = context - host_mem;
 
     if (host_mem_size < GXM_MINIMUM_CONTEXT_HOST_MEM_SIZE ||
         host_padding > host_mem_size ||
-        host_mem_size - host_padding <
-            GXM_MINIMUM_CONTEXT_HOST_MEM_SIZE) {
+        host_mem_size - host_padding < GXM_MINIMUM_CONTEXT_HOST_MEM_SIZE) {
         r0 = SCE_GXM_ERROR_INVALID_VALUE;
         return;
     }
-    if (!vita_mem_ptr(host_mem, host_mem_size) ||
-        !vdm_ring_buffer || !vita_mem_ptr(vdm_ring_buffer,
-                                          vdm_ring_buffer_size) ||
-        !vertex_ring_buffer || !vita_mem_ptr(vertex_ring_buffer,
-                                             vertex_ring_buffer_size) ||
+    if (!vita_mem_ptr(host_mem, host_mem_size) || !vdm_ring_buffer ||
+        !vita_mem_ptr(vdm_ring_buffer, vdm_ring_buffer_size) ||
+        !vertex_ring_buffer ||
+        !vita_mem_ptr(vertex_ring_buffer, vertex_ring_buffer_size) ||
         !fragment_ring_buffer ||
         !vita_mem_ptr(fragment_ring_buffer, fragment_ring_buffer_size) ||
         !fragment_usse_ring_buffer ||
@@ -304,27 +306,23 @@ void vita_hle_sceGxmCreateContext(void) {
     }
 
     gxm_context *created = &g_gxm.contexts[g_gxm.context_count++];
-    *created = (gxm_context){
-        context,
-        host_mem,
-        host_mem_size,
-        vdm_ring_buffer,
-        vdm_ring_buffer_size,
-        vertex_ring_buffer,
-        vertex_ring_buffer_size,
-        fragment_ring_buffer,
-        fragment_ring_buffer_size,
-        fragment_usse_ring_buffer,
-        fragment_usse_ring_buffer_size,
-        fragment_usse_ring_buffer_offset
-    };
-    (void)vita_mem_set_guest(context, 0,
-                             GXM_MINIMUM_CONTEXT_HOST_MEM_SIZE);
+    *created = (gxm_context){context,
+                             host_mem,
+                             host_mem_size,
+                             vdm_ring_buffer,
+                             vdm_ring_buffer_size,
+                             vertex_ring_buffer,
+                             vertex_ring_buffer_size,
+                             fragment_ring_buffer,
+                             fragment_ring_buffer_size,
+                             fragment_usse_ring_buffer,
+                             fragment_usse_ring_buffer_size,
+                             fragment_usse_ring_buffer_offset};
+    (void)vita_mem_set_guest(context, 0, GXM_MINIMUM_CONTEXT_HOST_MEM_SIZE);
     vita_write32(context_address, context);
-    vita_hle_trace(
-        "sceGxmCreateContext(params 0x%08X) -> context 0x%08X "
-        "(host size 0x%X)",
-        params, context, host_mem_size);
+    vita_hle_trace("sceGxmCreateContext(params 0x%08X) -> context 0x%08X "
+                   "(host size 0x%X)",
+                   params, context, host_mem_size);
     r0 = 0;
 }
 
@@ -356,24 +354,21 @@ void vita_hle_sceGxmFinish(void) {
         return;
     }
     context->finish_count++;
-    vita_hle_trace(
-        "sceGxmFinish(context 0x%08X) completed empty queue #%u",
-        context->address, context->finish_count);
+    vita_hle_trace("sceGxmFinish(context 0x%08X) completed empty queue #%u",
+                   context->address, context->finish_count);
 }
 
 void vita_hle_sceGxmSetVertexProgram(void) {
     gxm_context *context = find_context(r0);
     if (!context || !r1) {
-        vita_hle_trace(
-            "sceGxmSetVertexProgram(context 0x%08X, program 0x%08X) "
-            "ignored invalid pointer",
-            r0, r1);
+        vita_hle_trace("sceGxmSetVertexProgram(context 0x%08X, program 0x%08X) "
+                       "ignored invalid pointer",
+                       r0, r1);
         return;
     }
     context->vertex_program = r1;
-    vita_hle_trace(
-        "sceGxmSetVertexProgram(context 0x%08X, program 0x%08X)",
-        context->address, context->vertex_program);
+    vita_hle_trace("sceGxmSetVertexProgram(context 0x%08X, program 0x%08X)",
+                   context->address, context->vertex_program);
 }
 
 void vita_hle_sceGxmSetFragmentProgram(void) {
@@ -386,9 +381,8 @@ void vita_hle_sceGxmSetFragmentProgram(void) {
         return;
     }
     context->fragment_program = r1;
-    vita_hle_trace(
-        "sceGxmSetFragmentProgram(context 0x%08X, program 0x%08X)",
-        context->address, context->fragment_program);
+    vita_hle_trace("sceGxmSetFragmentProgram(context 0x%08X, program 0x%08X)",
+                   context->address, context->fragment_program);
 }
 
 void vita_hle_sceGxmProgramCheck(void) {
@@ -401,8 +395,7 @@ void vita_hle_sceGxmProgramCheck(void) {
         r0 = SCE_GXM_ERROR_NULL_PROGRAM;
         return;
     }
-    vita_hle_trace("sceGxmProgramCheck(program 0x%08X) -> valid GXP",
-                   program);
+    vita_hle_trace("sceGxmProgramCheck(program 0x%08X) -> valid GXP", program);
     r0 = 0;
 }
 
@@ -417,11 +410,10 @@ static int gxp_program_size(uint32_t program, uint32_t *size) {
     return 1;
 }
 
-static int gxp_program_u32(uint32_t program, uint32_t offset,
-                           uint32_t *value) {
+static int gxp_program_u32(uint32_t program, uint32_t offset, uint32_t *value) {
     uint32_t size = 0u;
-    if (!value || !gxp_program_size(program, &size) ||
-        offset > size || size - offset < 4u)
+    if (!value || !gxp_program_size(program, &size) || offset > size ||
+        size - offset < 4u)
         return 0;
     *value = vita_read32(program + offset);
     return 1;
@@ -431,14 +423,13 @@ void vita_hle_sceGxmProgramGetSize(void) {
     const uint32_t program = r0;
     uint32_t size = 0u;
     if (!gxp_program_size(program, &size)) {
-        vita_hle_trace(
-            "sceGxmProgramGetSize(invalid program 0x%08X) -> 0",
-            program);
+        vita_hle_trace("sceGxmProgramGetSize(invalid program 0x%08X) -> 0",
+                       program);
         r0 = 0u;
         return;
     }
-    vita_hle_trace("sceGxmProgramGetSize(program 0x%08X) -> 0x%X",
-                   program, size);
+    vita_hle_trace("sceGxmProgramGetSize(program 0x%08X) -> 0x%X", program,
+                   size);
     r0 = size;
 }
 
@@ -446,16 +437,13 @@ void vita_hle_sceGxmProgramGetType(void) {
     const uint32_t program = r0;
     uint32_t flags = 0u;
     if (!gxp_program_u32(program, 20u, &flags)) {
-        vita_hle_trace(
-            "sceGxmProgramGetType(invalid program 0x%08X) -> 0",
-            program);
+        vita_hle_trace("sceGxmProgramGetType(invalid program 0x%08X) -> 0",
+                       program);
         r0 = 0u;
         return;
     }
     r0 = flags & 1u;
-    vita_hle_trace(
-        "sceGxmProgramGetType(program 0x%08X) -> %u",
-        program, r0);
+    vita_hle_trace("sceGxmProgramGetType(program 0x%08X) -> %u", program, r0);
 }
 
 void vita_hle_sceGxmProgramIsNativeColorUsed(void) {
@@ -466,9 +454,8 @@ void vita_hle_sceGxmProgramIsNativeColorUsed(void) {
         return;
     }
     r0 = (flags & UINT32_C(0x40)) != 0u;
-    vita_hle_trace(
-        "sceGxmProgramIsNativeColorUsed(program 0x%08X) -> %u",
-        program, r0);
+    vita_hle_trace("sceGxmProgramIsNativeColorUsed(program 0x%08X) -> %u",
+                   program, r0);
 }
 
 void vita_hle_sceGxmProgramGetParameterCount(void) {
@@ -481,9 +468,8 @@ void vita_hle_sceGxmProgramGetParameterCount(void) {
         r0 = 0u;
         return;
     }
-    vita_hle_trace(
-        "sceGxmProgramGetParameterCount(program 0x%08X) -> %u",
-        program, count);
+    vita_hle_trace("sceGxmProgramGetParameterCount(program 0x%08X) -> %u",
+                   program, count);
     r0 = count;
 }
 
@@ -499,10 +485,9 @@ void vita_hle_sceGxmProgramGetDefaultUniformBufferSize(void) {
         return;
     }
     r0 = count * 4u;
-    vita_hle_trace(
-        "sceGxmProgramGetDefaultUniformBufferSize(program 0x%08X) "
-        "-> 0x%X",
-        program, r0);
+    vita_hle_trace("sceGxmProgramGetDefaultUniformBufferSize(program 0x%08X) "
+                   "-> 0x%X",
+                   program, r0);
 }
 
 static uint32_t gxp_program_parameter(uint32_t program, uint32_t index) {
@@ -511,12 +496,10 @@ static uint32_t gxp_program_parameter(uint32_t program, uint32_t index) {
     uint32_t relative_offset = 0u;
     if (!gxp_program_size(program, &size) ||
         !gxp_program_u32(program, 36u, &count) ||
-        !gxp_program_u32(program, 40u, &relative_offset) ||
-        index >= count)
+        !gxp_program_u32(program, 40u, &relative_offset) || index >= count)
         return 0u;
 
-    const uint64_t table =
-        (uint64_t)program + 40u + relative_offset;
+    const uint64_t table = (uint64_t)program + 40u + relative_offset;
     const uint64_t table_size = (uint64_t)count * 16u;
     const uint64_t end = (uint64_t)program + size;
     if (table < program || table > end || table_size > end - table)
@@ -528,17 +511,15 @@ void vita_hle_sceGxmProgramGetParameter(void) {
     const uint32_t program = r0;
     const uint32_t index = r1;
     r0 = gxp_program_parameter(program, index);
-    vita_hle_trace(
-        "sceGxmProgramGetParameter(program 0x%08X, index %u) -> "
-        "0x%08X",
-        program, index, r0);
+    vita_hle_trace("sceGxmProgramGetParameter(program 0x%08X, index %u) -> "
+                   "0x%08X",
+                   program, index, r0);
 }
 
 static const char *gxp_guest_cstr(uint32_t address) {
     const uint32_t available = vita_mem_avail(address);
-    const char *text = available
-        ? (const char *)vita_mem_ptr(address, 1u)
-        : NULL;
+    const char *text =
+        available ? (const char *)vita_mem_ptr(address, 1u) : NULL;
     return text && memchr(text, '\0', available) ? text : NULL;
 }
 
@@ -550,8 +531,7 @@ static uint32_t gxp_parameter_name(uint32_t parameter) {
         encoded_offset <= INT32_MAX
             ? (int64_t)encoded_offset
             : -((int64_t)(UINT32_MAX - encoded_offset) + 1);
-    const int64_t name_address =
-        (int64_t)parameter + relative_offset;
+    const int64_t name_address = (int64_t)parameter + relative_offset;
     if (name_address <= 0 || name_address > UINT32_MAX)
         return 0u;
     const uint32_t name = (uint32_t)name_address;
@@ -569,74 +549,63 @@ void vita_hle_sceGxmProgramFindParameterByName(void) {
     }
 
     for (uint32_t i = 0; i < count; i++) {
-        const uint32_t parameter =
-            gxp_program_parameter(program, i);
-        const uint32_t parameter_name =
-            gxp_parameter_name(parameter);
-        const char *candidate =
-            gxp_guest_cstr(parameter_name);
+        const uint32_t parameter = gxp_program_parameter(program, i);
+        const uint32_t parameter_name = gxp_parameter_name(parameter);
+        const char *candidate = gxp_guest_cstr(parameter_name);
         if (candidate && strcmp(candidate, query) == 0) {
             r0 = parameter;
-            vita_hle_trace(
-                "sceGxmProgramFindParameterByName(program 0x%08X, "
-                "name 0x%08X) -> 0x%08X",
-                program, name, parameter);
+            vita_hle_trace("sceGxmProgramFindParameterByName(program 0x%08X, "
+                           "name 0x%08X) -> 0x%08X",
+                           program, name, parameter);
             return;
         }
     }
     r0 = 0u;
-    vita_hle_trace(
-        "sceGxmProgramFindParameterByName(program 0x%08X, "
-        "name 0x%08X) -> 0",
-        program, name);
+    vita_hle_trace("sceGxmProgramFindParameterByName(program 0x%08X, "
+                   "name 0x%08X) -> 0",
+                   program, name);
 }
 
 void vita_hle_sceGxmProgramParameterGetCategory(void) {
     const uint32_t parameter = r0;
     if (!vita_mem_ptr(parameter, 16u)) {
-        vita_hle_trace(
-            "sceGxmProgramParameterGetCategory(invalid parameter "
-            "0x%08X) -> 0",
-            parameter);
+        vita_hle_trace("sceGxmProgramParameterGetCategory(invalid parameter "
+                       "0x%08X) -> 0",
+                       parameter);
         r0 = 0u;
         return;
     }
     r0 = vita_read8(parameter + 4u) & 0xFu;
-    vita_hle_trace(
-        "sceGxmProgramParameterGetCategory(parameter 0x%08X) -> %u",
-        parameter, r0);
+    vita_hle_trace("sceGxmProgramParameterGetCategory(parameter 0x%08X) -> %u",
+                   parameter, r0);
 }
 
 void vita_hle_sceGxmProgramParameterGetArraySize(void) {
     const uint32_t parameter = r0;
     if (!vita_mem_ptr(parameter, 16u)) {
-        vita_hle_trace(
-            "sceGxmProgramParameterGetArraySize(invalid parameter "
-            "0x%08X) -> 0",
-            parameter);
+        vita_hle_trace("sceGxmProgramParameterGetArraySize(invalid parameter "
+                       "0x%08X) -> 0",
+                       parameter);
         r0 = 0u;
         return;
     }
     r0 = vita_read32(parameter + 8u);
-    vita_hle_trace(
-        "sceGxmProgramParameterGetArraySize(parameter 0x%08X) -> %u",
-        parameter, r0);
+    vita_hle_trace("sceGxmProgramParameterGetArraySize(parameter 0x%08X) -> %u",
+                   parameter, r0);
 }
 
 void vita_hle_sceGxmProgramParameterGetType(void) {
     const uint32_t parameter = r0;
     if (!vita_mem_ptr(parameter, 16u)) {
-        vita_hle_trace(
-            "sceGxmProgramParameterGetType(invalid parameter "
-            "0x%08X) -> 0",
-            parameter);
+        vita_hle_trace("sceGxmProgramParameterGetType(invalid parameter "
+                       "0x%08X) -> 0",
+                       parameter);
         r0 = 0u;
         return;
     }
     r0 = vita_read8(parameter + 4u) >> 4u;
-    vita_hle_trace(
-        "sceGxmProgramParameterGetType(parameter 0x%08X) -> %u",
-        parameter, r0);
+    vita_hle_trace("sceGxmProgramParameterGetType(parameter 0x%08X) -> %u",
+                   parameter, r0);
 }
 
 void vita_hle_sceGxmProgramParameterGetContainerIndex(void) {
@@ -650,10 +619,9 @@ void vita_hle_sceGxmProgramParameterGetContainerIndex(void) {
         return;
     }
     r0 = vita_read8(parameter + 5u) >> 4u;
-    vita_hle_trace(
-        "sceGxmProgramParameterGetContainerIndex(parameter 0x%08X) "
-        "-> %u",
-        parameter, r0);
+    vita_hle_trace("sceGxmProgramParameterGetContainerIndex(parameter 0x%08X) "
+                   "-> %u",
+                   parameter, r0);
 }
 
 void vita_hle_sceGxmProgramParameterGetComponentCount(void) {
@@ -667,10 +635,9 @@ void vita_hle_sceGxmProgramParameterGetComponentCount(void) {
         return;
     }
     r0 = vita_read8(parameter + 5u) & 0xFu;
-    vita_hle_trace(
-        "sceGxmProgramParameterGetComponentCount(parameter 0x%08X) "
-        "-> %u",
-        parameter, r0);
+    vita_hle_trace("sceGxmProgramParameterGetComponentCount(parameter 0x%08X) "
+                   "-> %u",
+                   parameter, r0);
 }
 
 void vita_hle_sceGxmProgramParameterGetResourceIndex(void) {
@@ -684,29 +651,26 @@ void vita_hle_sceGxmProgramParameterGetResourceIndex(void) {
         return;
     }
     r0 = vita_read32(parameter + 12u);
-    vita_hle_trace(
-        "sceGxmProgramParameterGetResourceIndex(parameter 0x%08X) "
-        "-> %u",
-        parameter, r0);
+    vita_hle_trace("sceGxmProgramParameterGetResourceIndex(parameter 0x%08X) "
+                   "-> %u",
+                   parameter, r0);
 }
 
 void vita_hle_sceGxmProgramParameterGetName(void) {
     const uint32_t parameter = r0;
     const uint32_t name = gxp_parameter_name(parameter);
     if (!name) {
-        vita_hle_trace(
-            "sceGxmProgramParameterGetName(invalid parameter "
-            "0x%08X) -> 0",
-            parameter);
+        vita_hle_trace("sceGxmProgramParameterGetName(invalid parameter "
+                       "0x%08X) -> 0",
+                       parameter);
         r0 = 0u;
         return;
     }
 
     r0 = name;
-    vita_hle_trace(
-        "sceGxmProgramParameterGetName(parameter 0x%08X) -> "
-        "0x%08X",
-        parameter, r0);
+    vita_hle_trace("sceGxmProgramParameterGetName(parameter 0x%08X) -> "
+                   "0x%08X",
+                   parameter, r0);
 }
 
 void vita_hle_sceGxmProgramParameterIsRegFormat(void) {
@@ -729,22 +693,18 @@ void vita_hle_sceGxmProgramParameterIsRegFormat(void) {
         return;
     }
 
-    const uint64_t varyings =
-        (uint64_t)program + 44u + varyings_offset;
+    const uint64_t varyings = (uint64_t)program + 44u + varyings_offset;
     const uint64_t end = (uint64_t)program + size;
-    if (varyings < program || varyings > end ||
-        end - varyings < 16u) {
+    if (varyings < program || varyings > end || end - varyings < 16u) {
         r0 = 0u;
         return;
     }
     const uint32_t register_bits = vita_read32(
-        (uint32_t)varyings + 8u +
-        (resource_index >= 32u ? 4u : 0u));
+        (uint32_t)varyings + 8u + (resource_index >= 32u ? 4u : 0u));
     r0 = (register_bits >> (resource_index & 31u)) & 1u;
-    vita_hle_trace(
-        "sceGxmProgramParameterIsRegFormat(program 0x%08X, "
-        "parameter 0x%08X, resource %u) -> %u",
-        program, parameter, resource_index, r0);
+    vita_hle_trace("sceGxmProgramParameterIsRegFormat(program 0x%08X, "
+                   "parameter 0x%08X, resource %u) -> %u",
+                   program, parameter, resource_index, r0);
 }
 
 void vita_hle_sceGxmShaderPatcherCreate(void) {
@@ -779,8 +739,7 @@ void vita_hle_sceGxmShaderPatcherCreate(void) {
 
     const uint32_t patcher = call_guest_callback_2(
         host_alloc_callback, user_data, GXM_SHADER_PATCHER_OBJECT_SIZE);
-    if (!patcher ||
-        !vita_mem_ptr(patcher, GXM_SHADER_PATCHER_OBJECT_SIZE)) {
+    if (!patcher || !vita_mem_ptr(patcher, GXM_SHADER_PATCHER_OBJECT_SIZE)) {
         r0 = SCE_GXM_ERROR_OUT_OF_MEMORY;
         return;
     }
@@ -796,12 +755,10 @@ void vita_hle_sceGxmShaderPatcherCreate(void) {
     created->address = patcher;
     for (uint32_t i = 0; i < 17u; i++)
         created->params[i] = vita_read32(params + i * 4u);
-    (void)vita_mem_set_guest(
-        patcher, 0, GXM_SHADER_PATCHER_OBJECT_SIZE);
+    (void)vita_mem_set_guest(patcher, 0, GXM_SHADER_PATCHER_OBJECT_SIZE);
     vita_write32(output, patcher);
-    vita_hle_trace(
-        "sceGxmShaderPatcherCreate(params 0x%08X) -> 0x%08X",
-        params, patcher);
+    vita_hle_trace("sceGxmShaderPatcherCreate(params 0x%08X) -> 0x%08X", params,
+                   patcher);
     r0 = 0;
 }
 
@@ -821,27 +778,44 @@ static gxm_registered_program *find_registered_program(uint32_t address) {
     return NULL;
 }
 
+static gxm_vertex_program *
+find_vertex_program(uint32_t patcher, const vita_gxp_translation_key *key) {
+    for (uint32_t i = 0u; i < g_gxm.vertex_program_count; i++) {
+        gxm_vertex_program *program = &g_gxm.vertex_programs[i];
+        if (program->patcher == patcher &&
+            memcmp(program->translation_key.bytes, key->bytes,
+                   sizeof(key->bytes)) == 0)
+            return program;
+    }
+    return NULL;
+}
+
+static int vertex_program_address_exists(uint32_t address) {
+    for (uint32_t i = 0u; i < g_gxm.vertex_program_count; i++) {
+        if (g_gxm.vertex_programs[i].address == address)
+            return 1;
+    }
+    return 0;
+}
+
 void vita_hle_sceGxmShaderPatcherRegisterProgram(void) {
     const uint32_t patcher_address = r0;
     const uint32_t program = r1;
     const uint32_t output = r2;
-    gxm_shader_patcher *patcher =
-        find_shader_patcher(patcher_address);
+    gxm_shader_patcher *patcher = find_shader_patcher(patcher_address);
     uint32_t program_size = 0u;
     if (!patcher || !gxp_program_size(program, &program_size) ||
         !vita_mem_ptr(output, 4u)) {
         r0 = SCE_GXM_ERROR_INVALID_POINTER;
         return;
     }
-    if (g_gxm.registered_program_count ==
-        GXM_REGISTERED_PROGRAM_LIMIT) {
+    if (g_gxm.registered_program_count == GXM_REGISTERED_PROGRAM_LIMIT) {
         r0 = SCE_GXM_ERROR_OUT_OF_MEMORY;
         return;
     }
 
     const uint32_t registration = call_guest_callback_2(
-        patcher->params[1], patcher->params[0],
-        GXM_REGISTERED_PROGRAM_SIZE);
+        patcher->params[1], patcher->params[0], GXM_REGISTERED_PROGRAM_SIZE);
     if (!registration ||
         !vita_mem_ptr(registration, GXM_REGISTERED_PROGRAM_SIZE)) {
         r0 = SCE_GXM_ERROR_OUT_OF_MEMORY;
@@ -862,10 +836,9 @@ void vita_hle_sceGxmShaderPatcherRegisterProgram(void) {
     registered->program_size = program_size;
     vita_write32(registration, program);
     vita_write32(output, registration);
-    vita_hle_trace(
-        "sceGxmShaderPatcherRegisterProgram(patcher 0x%08X, "
-        "program 0x%08X, size 0x%X) -> 0x%08X",
-        patcher_address, program, program_size, registration);
+    vita_hle_trace("sceGxmShaderPatcherRegisterProgram(patcher 0x%08X, "
+                   "program 0x%08X, size 0x%X) -> 0x%08X",
+                   patcher_address, program, program_size, registration);
     r0 = 0u;
 }
 
@@ -890,6 +863,7 @@ void vita_hle_sceGxmShaderPatcherCreateVertexProgram(void) {
     uint32_t output;
     const uint8_t *program_bytes;
     const uint8_t *attribute_bytes;
+    const uint8_t *stream_bytes;
     vita_gxp_program_view program;
     vita_usse_stream_view primary;
     vita_usse_stream_view secondary;
@@ -920,8 +894,7 @@ void vita_hle_sceGxmShaderPatcherCreateVertexProgram(void) {
         return;
     }
 
-    uint32_t validation =
-        validate_guest_array(attributes, attribute_count, 8u);
+    uint32_t validation = validate_guest_array(attributes, attribute_count, 8u);
     if (validation == 0u)
         validation = validate_guest_array(streams, stream_count, 4u);
     if (validation != 0u) {
@@ -929,9 +902,14 @@ void vita_hle_sceGxmShaderPatcherCreateVertexProgram(void) {
         return;
     }
 
-    attribute_bytes = attribute_count != 0u
-        ? (const uint8_t *)vita_mem_ptr(attributes, attribute_count * 8u)
-        : NULL;
+    attribute_bytes =
+        attribute_count != 0u
+            ? (const uint8_t *)vita_mem_ptr(attributes, attribute_count * 8u)
+            : NULL;
+    stream_bytes =
+        stream_count != 0u
+            ? (const uint8_t *)vita_mem_ptr(streams, stream_count * 4u)
+            : NULL;
     for (uint32_t i = 0; i < attribute_count; i++) {
         const uint8_t *attribute = attribute_bytes + (size_t)i * 8u;
         const uint32_t stream_index =
@@ -942,15 +920,14 @@ void vita_hle_sceGxmShaderPatcherCreateVertexProgram(void) {
         }
     }
 
-    program_bytes = (const uint8_t *)vita_mem_ptr(
-        registered->program, registered->program_size);
+    program_bytes = (const uint8_t *)vita_mem_ptr(registered->program,
+                                                  registered->program_size);
     if (!program_bytes) {
         r0 = SCE_GXM_ERROR_INVALID_POINTER;
         return;
     }
-    if (vita_gxp_parse(
-            program_bytes, registered->program_size, VITA_GXP_STAGE_VERTEX,
-            &program) != VITA_GXP_PARSE_OK ||
+    if (vita_gxp_parse(program_bytes, registered->program_size,
+                       VITA_GXP_STAGE_VERTEX, &program) != VITA_GXP_PARSE_OK ||
         program.declared_size != registered->program_size) {
         r0 = SCE_GXM_ERROR_INVALID_VALUE;
         return;
@@ -968,62 +945,184 @@ void vita_hle_sceGxmShaderPatcherCreateVertexProgram(void) {
         return;
     }
 
-    const char *first_unclassified_phase = census.unclassified != 0u
-        ? vita_usse_phase_name(census.first_unclassified_phase)
-        : "NONE";
-    const char *first_unclassified_family = census.unclassified != 0u
-        ? vita_usse_opcode_family_name(census.first_unclassified_family)
-        : "NONE";
-    const uint32_t first_unclassified_index = census.unclassified != 0u
-        ? census.first_unclassified_index
-        : 0u;
-    const char *first_illegal_phase = census.illegal != 0u
-        ? vita_usse_phase_name(census.first_illegal_phase)
-        : "NONE";
-    const char *first_illegal_family = census.illegal != 0u
-        ? vita_usse_opcode_family_name(census.first_illegal_family)
-        : "NONE";
-    const uint32_t first_illegal_index = census.illegal != 0u
-        ? census.first_illegal_index
-        : 0u;
+    const char *first_unclassified_phase =
+        census.unclassified != 0u
+            ? vita_usse_phase_name(census.first_unclassified_phase)
+            : "NONE";
+    const char *first_unclassified_family =
+        census.unclassified != 0u
+            ? vita_usse_opcode_family_name(census.first_unclassified_family)
+            : "NONE";
+    const uint32_t first_unclassified_index =
+        census.unclassified != 0u ? census.first_unclassified_index : 0u;
+    const char *first_illegal_phase =
+        census.illegal != 0u ? vita_usse_phase_name(census.first_illegal_phase)
+                             : "NONE";
+    const char *first_illegal_family =
+        census.illegal != 0u
+            ? vita_usse_opcode_family_name(census.first_illegal_family)
+            : "NONE";
+    const uint32_t first_illegal_index =
+        census.illegal != 0u ? census.first_illegal_index : 0u;
     vita_hle_trace(
         "sceGxmShaderPatcherCreateVertexProgram USSE census: "
         "total=%llu classified=%llu unclassified=%llu illegal=%llu "
         "first_unclassified=%s/%u/%s first_illegal=%s/%u/%s",
-        (unsigned long long)census.total,
-        (unsigned long long)census.classified,
+        (unsigned long long)census.total, (unsigned long long)census.classified,
         (unsigned long long)census.unclassified,
-        (unsigned long long)census.illegal,
-        first_unclassified_phase, first_unclassified_index,
-        first_unclassified_family, first_illegal_phase, first_illegal_index,
-        first_illegal_family);
+        (unsigned long long)census.illegal, first_unclassified_phase,
+        first_unclassified_index, first_unclassified_family,
+        first_illegal_phase, first_illegal_index, first_illegal_family);
     for (size_t family_index = 0;
-         family_index < (size_t)VITA_USSE_OPCODE_FAMILY_COUNT;
-         family_index++) {
+         family_index < (size_t)VITA_USSE_OPCODE_FAMILY_COUNT; family_index++) {
         if (census.family_counts[family_index] == 0u)
             continue;
         vita_hle_trace(
             "sceGxmShaderPatcherCreateVertexProgram USSE family: "
             "family=%s count=%llu",
-            vita_usse_opcode_family_name(
-                (vita_usse_opcode_family)family_index),
+            vita_usse_opcode_family_name((vita_usse_opcode_family)family_index),
             (unsigned long long)census.family_counts[family_index]);
     }
 
     r0 = SCE_GXM_ERROR_INVALID_VALUE;
     if (census.illegal != 0u) {
-        vita_trap_unimpl(
-            0u, 0u, "SceGxm::USSE_ILLEGAL instruction rejected");
+        vita_trap_unimpl(0u, 0u, "SceGxm::USSE_ILLEGAL instruction rejected");
         return;
     }
     if (census.unclassified != 0u) {
-        vita_trap_unimpl(
-            0u, 0u, "SceGxm::USSE_UNKNOWN instruction unsupported");
+        vita_trap_unimpl(0u, 0u,
+                         "SceGxm::USSE_UNKNOWN instruction unsupported");
         return;
     }
-    vita_trap_unimpl(
-        0u, 0u,
-        "SceGxm::vertex shader HLSL translation not implemented");
+
+    const vita_gxp_translation_request translation_request = {
+        &program,
+        VITA_GXP_TRANSLATOR_ABI_VERSION,
+        VITA_USSE_HLSL_ABI_VERSION,
+        VITA_GXP_REGISTER_INITIALIZATION_ZERO,
+        0u,
+        attribute_bytes,
+        (size_t)attribute_count * 8u,
+        stream_bytes,
+        (size_t)stream_count * 4u,
+    };
+    vita_gxp_translation_key translation_key;
+    const vita_gxp_translation_key_result key_result =
+        vita_gxp_make_translation_key(&translation_request, &translation_key);
+    if (key_result != VITA_GXP_TRANSLATION_KEY_OK) {
+        vita_hle_trace("sceGxmShaderPatcherCreateVertexProgram translation key "
+                       "rejected: %s",
+                       vita_gxp_translation_key_result_name(key_result));
+        r0 = SCE_GXM_ERROR_INVALID_VALUE;
+        return;
+    }
+
+    gxm_vertex_program *cached =
+        find_vertex_program(patcher_address, &translation_key);
+    if (cached) {
+        if (cached->reference_count == UINT32_MAX) {
+            r0 = SCE_GXM_ERROR_INVALID_VALUE;
+            return;
+        }
+        cached->reference_count++;
+        vita_write32(cached->address + 4u, cached->reference_count);
+        vita_write32(output, cached->address);
+        vita_hle_trace("sceGxmShaderPatcherCreateVertexProgram cache hit "
+                       "key=%02X%02X%02X%02X -> 0x%08X refs=%u",
+                       translation_key.bytes[0], translation_key.bytes[1],
+                       translation_key.bytes[2], translation_key.bytes[3],
+                       cached->address, cached->reference_count);
+        r0 = 0u;
+        return;
+    }
+    if (g_gxm.vertex_program_count == GXM_VERTEX_PROGRAM_LIMIT) {
+        r0 = SCE_GXM_ERROR_OUT_OF_MEMORY;
+        return;
+    }
+
+    const vita_usse_hlsl_options hlsl_options = {
+        VITA_USSE_HLSL_VERTEX,
+        VITA_USSE_HLSL_ABI_VERSION,
+        0u,
+    };
+    vita_usse_translate_failure translate_failure;
+    size_t hlsl_size = 0u;
+    vita_usse_translate_result translate_result =
+        vita_usse_translate_hlsl(&primary, &secondary, &hlsl_options, NULL, 0u,
+                                 &hlsl_size, &translate_failure);
+    if (translate_result != VITA_USSE_TRANSLATE_OK) {
+        vita_hle_trace(
+            "sceGxmShaderPatcherCreateVertexProgram translation "
+            "rejected: result=%s phase=%s index=%u family=%s "
+            "decode=%s field=%s",
+            vita_usse_translate_result_name(translate_result),
+            vita_usse_phase_name(translate_failure.decode.phase),
+            translate_failure.decode.instruction_index,
+            vita_usse_opcode_family_name(translate_failure.decode.family),
+            vita_usse_decode_result_name(translate_failure.decode.result),
+            translate_failure.field ? translate_failure.field : "NONE");
+        vita_trap_unimpl(0u, 0u, "SceGxm::USSE semantic translation rejected");
+        return;
+    }
+
+    char *hlsl = (char *)malloc(hlsl_size);
+    if (!hlsl) {
+        r0 = SCE_GXM_ERROR_OUT_OF_MEMORY;
+        return;
+    }
+    translate_result =
+        vita_usse_translate_hlsl(&primary, &secondary, &hlsl_options, hlsl,
+                                 hlsl_size, &hlsl_size, &translate_failure);
+    if (translate_result != VITA_USSE_TRANSLATE_OK) {
+        free(hlsl);
+        vita_hle_trace("sceGxmShaderPatcherCreateVertexProgram translation "
+                       "changed between passes: %s",
+                       vita_usse_translate_result_name(translate_result));
+        r0 = SCE_GXM_ERROR_INVALID_VALUE;
+        return;
+    }
+
+    const uint32_t vertex_program = call_guest_callback_2(
+        patcher->params[1], patcher->params[0], GXM_VERTEX_PROGRAM_SIZE);
+    if (!vertex_program ||
+        !vita_mem_ptr(vertex_program, GXM_VERTEX_PROGRAM_SIZE)) {
+        free(hlsl);
+        r0 = SCE_GXM_ERROR_OUT_OF_MEMORY;
+        return;
+    }
+    if (find_shader_patcher(vertex_program) ||
+        find_registered_program(vertex_program) ||
+        vertex_program_address_exists(vertex_program)) {
+        free(hlsl);
+        r0 = SCE_GXM_ERROR_INVALID_VALUE;
+        return;
+    }
+
+    (void)vita_mem_set_guest(vertex_program, 0, GXM_VERTEX_PROGRAM_SIZE);
+    vita_write32(vertex_program, registration_address);
+    vita_write32(vertex_program + 4u, 1u);
+    vita_write32(vertex_program + 8u, VITA_GXP_TRANSLATOR_ABI_VERSION);
+    vita_write32(vertex_program + 12u, VITA_USSE_HLSL_ABI_VERSION);
+    memcpy(vita_mem_ptr(vertex_program + 16u, sizeof(translation_key.bytes)),
+           translation_key.bytes, sizeof(translation_key.bytes));
+
+    gxm_vertex_program *created =
+        &g_gxm.vertex_programs[g_gxm.vertex_program_count++];
+    created->address = vertex_program;
+    created->patcher = patcher_address;
+    created->registration = registration_address;
+    created->reference_count = 1u;
+    created->translation_key = translation_key;
+    created->hlsl = hlsl;
+    created->hlsl_size = hlsl_size;
+    vita_write32(output, vertex_program);
+    vita_hle_trace(
+        "sceGxmShaderPatcherCreateVertexProgram key=%02X%02X%02X%02X "
+        "HLSL=%llu bytes -> 0x%08X",
+        translation_key.bytes[0], translation_key.bytes[1],
+        translation_key.bytes[2], translation_key.bytes[3],
+        (unsigned long long)hlsl_size, vertex_program);
+    r0 = 0u;
 }
 
 void vita_hle_sceGxmTextureInitLinear(void) {
@@ -1047,11 +1146,10 @@ void vita_hle_sceGxmTextureInitLinear(void) {
         UINT32_C(0x03E00090) |
         ((mip_count - 1u < 15u ? mip_count - 1u : 15u) << 17u) |
         (format & UINT32_C(0x80000000));
-    const uint32_t control1 =
-        ((height - 1u) & UINT32_C(0xFFF)) |
-        (((width - 1u) & UINT32_C(0xFFF)) << 12u) |
-        (format & UINT32_C(0x1F000000)) |
-        SCE_GXM_TEXTURE_LINEAR;
+    const uint32_t control1 = ((height - 1u) & UINT32_C(0xFFF)) |
+                              (((width - 1u) & UINT32_C(0xFFF)) << 12u) |
+                              (format & UINT32_C(0x1F000000)) |
+                              SCE_GXM_TEXTURE_LINEAR;
     const uint32_t control2 = data & UINT32_C(0xFFFFFFFC);
     const uint32_t control3 =
         UINT32_C(0x80000000) | ((format & UINT32_C(0x7000)) << 16u);
@@ -1060,9 +1158,8 @@ void vita_hle_sceGxmTextureInitLinear(void) {
     vita_write32(texture + 4u, control1);
     vita_write32(texture + 8u, control2);
     vita_write32(texture + 12u, control3);
-    vita_hle_trace(
-        "sceGxmTextureInitLinear(texture 0x%08X, data 0x%08X, "
-        "format 0x%08X, %ux%u, mips %u)",
-        texture, data, format, width, height, mip_count);
+    vita_hle_trace("sceGxmTextureInitLinear(texture 0x%08X, data 0x%08X, "
+                   "format 0x%08X, %ux%u, mips %u)",
+                   texture, data, format, width, height, mip_count);
     r0 = 0;
 }

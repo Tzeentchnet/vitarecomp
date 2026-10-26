@@ -27,7 +27,7 @@
 
 void vita_guest_thread_call_reset(void);
 
-static int   g_trace = -1;
+static int g_trace = -1;
 static FILE *g_out;
 
 /* Distinct traps already reported, so a loop does not bury the log. */
@@ -67,10 +67,14 @@ static int first_time(uint32_t key) {
     uint32_t h = (key * 2654435761u) & (SEEN_SLOTS - 1);
     for (uint32_t i = 0; i < SEEN_SLOTS; i++) {
         uint32_t s = (h + i) & (SEEN_SLOTS - 1);
-        if (g_seen[s] == key) return 0;
-        if (g_seen[s] == 0)   { g_seen[s] = key; return 1; }
+        if (g_seen[s] == key)
+            return 0;
+        if (g_seen[s] == 0) {
+            g_seen[s] = key;
+            return 1;
+        }
     }
-    return 1;   /* table full: report rather than lose it */
+    return 1; /* table full: report rather than lose it */
 }
 
 uint32_t vita_trap_count(void) { return g_hits; }
@@ -119,8 +123,7 @@ static void boundary_close(vita_guest_boundary_coordinator *coordinator,
     mtx_unlock(&coordinator->lock);
 }
 
-vita_guest_boundary_coordinator *
-vita_guest_boundary_retain_current(void) {
+vita_guest_boundary_coordinator *vita_guest_boundary_retain_current(void) {
     vita_guest_boundary_coordinator *coordinator;
     if (!g_boundary.active || !g_boundary.coordinator)
         return NULL;
@@ -135,8 +138,7 @@ vita_guest_boundary_retain_current(void) {
     return coordinator;
 }
 
-void vita_guest_boundary_release(
-    vita_guest_boundary_coordinator *coordinator) {
+void vita_guest_boundary_release(vita_guest_boundary_coordinator *coordinator) {
     int destroy = 0;
     if (!coordinator)
         return;
@@ -150,9 +152,9 @@ void vita_guest_boundary_release(
     }
 }
 
-int vita_guest_boundary_run_worker(
-    vita_guest_boundary_coordinator *coordinator,
-    vita_guest_worker_entry_fn entry, void *userdata) {
+int vita_guest_boundary_run_worker(vita_guest_boundary_coordinator *coordinator,
+                                   vita_guest_worker_entry_fn entry,
+                                   void *userdata) {
     jmp_buf jump;
     int active;
 
@@ -187,8 +189,7 @@ int vita_guest_boundary_run_worker(
 void vita_guest_boundary_poll(void) {
     vita_guest_boundary_coordinator *coordinator;
     int pending;
-    if (!g_boundary.active || !g_boundary.owner ||
-        !g_boundary.coordinator)
+    if (!g_boundary.active || !g_boundary.owner || !g_boundary.coordinator)
         return;
     coordinator = g_boundary.coordinator;
     if (!thrd_equal(coordinator->owner, thrd_current()))
@@ -205,6 +206,8 @@ static void boundary_fail(vita_strict_failure_kind kind,
                           uint32_t target_address, uint32_t nid,
                           const char *name) {
     vita_guest_call_result result;
+    vita_function_profile_note_strict_failure(
+        kind, source_address, raw_instruction, target_address, nid);
     if (!g_boundary.active || !g_boundary.coordinator)
         return;
     memset(&result, 0, sizeof(result));
@@ -249,9 +252,8 @@ void vita_guest_boundary_unresolved_variable(uint32_t address, uint32_t nid,
         name = "(unresolved NID)";
     if (trace_on()) {
         if (first_time(nid ? nid : address))
-            fprintf(g_out,
-                    "TRACE variable %s NID 0x%08X access 0x%08X\n",
-                    name, nid, address);
+            fprintf(g_out, "TRACE variable %s NID 0x%08X access 0x%08X\n", name,
+                    nid, address);
         return;
     }
     fprintf(stderr,

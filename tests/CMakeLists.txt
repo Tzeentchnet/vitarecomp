@@ -262,6 +262,137 @@ set_tests_properties(usse-census PROPERTIES
     LABELS "runtime;gxm;usse;shader;negative"
 )
 
+if(TARGET Vitarecomp::DXC)
+    set(_usse_shader_directory
+        "${CMAKE_CURRENT_BINARY_DIR}/usse-conformance-shaders")
+    set(_usse_compute_hlsl
+        "${_usse_shader_directory}/usse_compute.hlsl")
+    set(_usse_vertex_hlsl
+        "${_usse_shader_directory}/usse_vertex.hlsl")
+    set(_usse_compute_dxil
+        "${_usse_shader_directory}/usse_compute.dxil")
+    set(_usse_vertex_dxil
+        "${_usse_shader_directory}/usse_vertex.dxil")
+    set(_usse_compute_spirv
+        "${_usse_shader_directory}/usse_compute.spv")
+    set(_usse_vertex_spirv
+        "${_usse_shader_directory}/usse_vertex.spv")
+    set(_usse_shader_flags
+        -HV 2021
+        -Ges
+        -WX
+        -O3
+        -Qstrip_debug
+    )
+    add_custom_command(
+        OUTPUT "${_usse_compute_hlsl}" "${_usse_vertex_hlsl}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${_usse_shader_directory}"
+        COMMAND $<TARGET_FILE:test_usse>
+            --write-hlsl compute "${_usse_compute_hlsl}"
+        COMMAND $<TARGET_FILE:test_usse>
+            --write-hlsl vertex "${_usse_vertex_hlsl}"
+        DEPENDS test_usse
+        VERBATIM
+        COMMENT "Generating public synthetic USSE HLSL"
+    )
+    add_custom_command(
+        OUTPUT "${_usse_compute_dxil}"
+        COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+            ${_usse_shader_flags}
+            -Qstrip_reflect
+            -T cs_6_0
+            -E vita_main
+            -Fo "${_usse_compute_dxil}"
+            "${_usse_compute_hlsl}"
+        DEPENDS "${_usse_compute_hlsl}" Vitarecomp::DXC
+        VERBATIM
+        COMMENT "Compiling synthetic USSE compute DXIL"
+    )
+    add_custom_command(
+        OUTPUT "${_usse_vertex_dxil}"
+        COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+            ${_usse_shader_flags}
+            -Qstrip_reflect
+            -T vs_6_0
+            -E vita_main
+            -Fo "${_usse_vertex_dxil}"
+            "${_usse_vertex_hlsl}"
+        DEPENDS "${_usse_vertex_hlsl}" Vitarecomp::DXC
+        VERBATIM
+        COMMENT "Compiling synthetic USSE vertex DXIL"
+    )
+    add_custom_command(
+        OUTPUT "${_usse_compute_spirv}"
+        COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+            ${_usse_shader_flags}
+            -spirv
+            -fspv-target-env=vulkan1.3
+            -fspv-entrypoint-name=main
+            -fvk-use-dx-layout
+            -T cs_6_0
+            -E vita_main
+            -Fo "${_usse_compute_spirv}"
+            "${_usse_compute_hlsl}"
+        DEPENDS "${_usse_compute_hlsl}" Vitarecomp::DXC
+        VERBATIM
+        COMMENT "Compiling synthetic USSE compute SPIR-V"
+    )
+    add_custom_command(
+        OUTPUT "${_usse_vertex_spirv}"
+        COMMAND $<TARGET_FILE:Vitarecomp::DXC>
+            ${_usse_shader_flags}
+            -spirv
+            -fspv-target-env=vulkan1.3
+            -fspv-entrypoint-name=main
+            -fvk-use-dx-layout
+            -T vs_6_0
+            -E vita_main
+            -Fo "${_usse_vertex_spirv}"
+            "${_usse_vertex_hlsl}"
+        DEPENDS "${_usse_vertex_hlsl}" Vitarecomp::DXC
+        VERBATIM
+        COMMENT "Compiling synthetic USSE vertex SPIR-V"
+    )
+    add_custom_target(usse_conformance_shaders
+        DEPENDS
+            "${_usse_compute_dxil}"
+            "${_usse_vertex_dxil}"
+            "${_usse_compute_spirv}"
+            "${_usse_vertex_spirv}"
+    )
+    if(WIN32 AND
+       (VITARECOMP_BUILD_DX12_CONFORMANCE OR
+        VITARECOMP_BUILD_VULKAN_CONFORMANCE))
+        add_executable(test_usse_gpu test_usse_gpu.cpp)
+        add_dependencies(test_usse_gpu usse_conformance_shaders)
+        target_link_libraries(test_usse_gpu PRIVATE vitarecomp::gpu)
+        target_compile_features(test_usse_gpu PRIVATE cxx_std_20)
+        vitarecomp_project_warnings(test_usse_gpu)
+        if(MSVC)
+            target_compile_options(test_usse_gpu PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(test_usse_gpu PRIVATE -UNDEBUG)
+        endif()
+        if(VITARECOMP_BUILD_DX12_CONFORMANCE)
+            add_test(NAME gpu-dx12-warp-usse-semantic
+                COMMAND test_usse_gpu dx12 "${_usse_compute_dxil}")
+            set_tests_properties(gpu-dx12-warp-usse-semantic PROPERTIES
+                TIMEOUT 180
+                LABELS "gpu;dx12;warp;usse;semantic"
+            )
+        endif()
+        if(VITARECOMP_BUILD_VULKAN_CONFORMANCE)
+            add_test(NAME gpu-vulkan-usse-semantic
+                COMMAND test_usse_gpu vulkan "${_usse_compute_spirv}")
+            set_tests_properties(gpu-vulkan-usse-semantic PROPERTIES
+                TIMEOUT 180
+                LABELS "gpu;vulkan;usse;semantic"
+            )
+        endif()
+    endif()
+endif()
+
 add_executable(test_prior_aot test_prior_aot.c)
 find_package(Threads REQUIRED)
 target_link_libraries(test_prior_aot PRIVATE vitarecomp Threads::Threads)

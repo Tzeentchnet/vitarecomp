@@ -68,7 +68,10 @@ add_library(vitarecomp STATIC
     src/hle_gxm.c
     src/hle_ult.c
     src/gxp.c
+    src/sha256.c
     src/usse.c
+    src/usse_decode.c
+    src/usse_hlsl.c
     src/clock.c
     src/sched.c
     src/runtime.c
@@ -133,6 +136,7 @@ if(VITARECOMP_BUILD_GPU)
         src/gpu/gpu_runtime.cpp
         src/gpu/gpu_validation.cpp
         src/gpu/shader_contract.cpp
+        src/sha256.c
     )
 
     add_library(vitarecomp::gpu ALIAS vitarecomp_gpu)
@@ -142,6 +146,7 @@ if(VITARECOMP_BUILD_GPU)
             ${CMAKE_CURRENT_SOURCE_DIR}/include
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/src/gpu
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
     target_compile_features(vitarecomp_gpu PRIVATE cxx_std_20)
     target_compile_definitions(vitarecomp_gpu PRIVATE VITA_GPU_BUILD)

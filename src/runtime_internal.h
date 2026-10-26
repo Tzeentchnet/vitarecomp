@@ -4,8 +4,7 @@
 
 #include "vitarecomp/runtime.h"
 
-typedef struct vita_guest_boundary_coordinator
-    vita_guest_boundary_coordinator;
+typedef struct vita_guest_boundary_coordinator vita_guest_boundary_coordinator;
 typedef void (*vita_guest_worker_entry_fn)(void *userdata);
 
 typedef enum vita_counter_id {
@@ -28,14 +27,17 @@ void vita_guest_boundary_note_exit_requested(int status);
 void vita_guest_boundary_exit_requested(int status);
 void vita_guest_boundary_unresolved_variable(uint32_t address, uint32_t nid,
                                              const char *name);
-vita_guest_boundary_coordinator *
-vita_guest_boundary_retain_current(void);
-void vita_guest_boundary_release(
-    vita_guest_boundary_coordinator *coordinator);
-int vita_guest_boundary_run_worker(
-    vita_guest_boundary_coordinator *coordinator,
-    vita_guest_worker_entry_fn entry, void *userdata);
+vita_guest_boundary_coordinator *vita_guest_boundary_retain_current(void);
+void vita_guest_boundary_release(vita_guest_boundary_coordinator *coordinator);
+int vita_guest_boundary_run_worker(vita_guest_boundary_coordinator *coordinator,
+                                   vita_guest_worker_entry_fn entry,
+                                   void *userdata);
 void vita_guest_boundary_poll(void);
+void vita_function_profile_note_strict_failure(vita_strict_failure_kind kind,
+                                               uint32_t source_address,
+                                               uint32_t raw_instruction,
+                                               uint32_t target_address,
+                                               uint32_t nid);
 int vita_runtime_can_bind(void);
 void vita_binding_runtime_reset(void);
 

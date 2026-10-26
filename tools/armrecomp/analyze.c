@@ -13,18 +13,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* --- the visited bitmap ---------------------------------------------------- */
+/* --- the visited bitmap ----------------------------------------------------
+ */
 /* One bit per 2 bytes: the finest granularity an instruction can start on. */
 
 static int seen_get(const vf_result *r, uint32_t off, arm_mode mode) {
-    uint32_t i = (off >> 1) +
-                 (mode == ARM_T32 ? r->seen_bytes * 8u : 0u);
+    uint32_t i = (off >> 1) + (mode == ARM_T32 ? r->seen_bytes * 8u : 0u);
     return (r->seen[i >> 3] >> (i & 7)) & 1;
 }
 
 static void seen_set(vf_result *r, uint32_t off, arm_mode mode) {
-    uint32_t i = (off >> 1) +
-                 (mode == ARM_T32 ? r->seen_bytes * 8u : 0u);
+    uint32_t i = (off >> 1) + (mode == ARM_T32 ? r->seen_bytes * 8u : 0u);
     r->seen[i >> 3] |= (uint8_t)(1u << (i & 7));
 }
 
@@ -38,11 +37,19 @@ static void coverage_add(vf_result *r, uint32_t off, uint32_t width) {
     }
 }
 
-/* --- a queue of (address, mode) seeds -------------------------------------- */
+/* --- a queue of (address, mode) seeds --------------------------------------
+ */
 
-typedef struct { uint32_t addr; arm_mode mode; uint16_t heur; } seed;
+typedef struct {
+    uint32_t addr;
+    arm_mode mode;
+    uint16_t heur;
+} seed;
 
-typedef struct { seed *v; uint32_t n, cap; } seedq;
+typedef struct {
+    seed *v;
+    uint32_t n, cap;
+} seedq;
 
 static void sq_push(seedq *q, uint32_t addr, arm_mode mode, uint16_t heur) {
     if (q->n == q->cap) {
@@ -70,13 +77,15 @@ static uint32_t why_addr(void) {
     if (!read) {
         const char *e = getenv("VITARECOMP_WHY");
         read = 1;
-        if (e && *e) addr = (uint32_t)strtoul(e, NULL, 16) & ~1u;
+        if (e && *e)
+            addr = (uint32_t)strtoul(e, NULL, 16) & ~1u;
     }
     return addr;
 }
 
 static void why(uint32_t addr, const char *fmt, ...) {
-    if (!why_addr() || (addr & ~1u) != why_addr()) return;
+    if (!why_addr() || (addr & ~1u) != why_addr())
+        return;
     va_list ap;
     va_start(ap, fmt);
     fprintf(stderr, "why 0x%08X: ", addr & ~1u);
@@ -108,20 +117,27 @@ static int starts_like_code(const vm_image *img, uint32_t addr) {
     uint32_t a = addr;
     int unclaimed = 0;
     for (int k = 0; k < 12; k++) {
-        if (a < base || a + 2 > base + len) break;
+        if (a < base || a + 2 > base + len)
+            break;
         arm_insn in;
         int n = arm_decode(text, base, len, a, ARM_T32, &in);
-        if (n == 0) break;
+        if (n == 0)
+            break;
         if (in.cls == A_UNKNOWN || in.cls == A_UNDEF) {
-            if (k == 0) return 0;
+            if (k == 0)
+                return 0;
             unclaimed++;
         } else if (in.op == OP_NONE && in.cls != A_CALL && in.cls != A_BRANCH &&
-                   in.cls != A_RETURN && in.cls != A_INDIRECT && in.cls != A_NOP) {
+                   in.cls != A_RETURN && in.cls != A_INDIRECT &&
+                   in.cls != A_NOP) {
             unclaimed++;
         }
-        if (unclaimed >= 2) return 0;
-        if (in.cls == A_RETURN || in.cls == A_INDIRECT) break;
-        if (in.cls == A_BRANCH && !in.conditional) break;
+        if (unclaimed >= 2)
+            return 0;
+        if (in.cls == A_RETURN || in.cls == A_INDIRECT)
+            break;
+        if (in.cls == A_BRANCH && !in.conditional)
+            break;
         a += (uint32_t)n;
     }
     return 1;
@@ -133,12 +149,13 @@ static int starts_like_code(const vm_image *img, uint32_t addr) {
  * stack adjustment. Its absence is what makes a stored pointer's target weak
  * evidence of a function. */
 static int has_prologue(uint16_t h) {
-    return ((h & 0xFE00) == 0xB400)          /* push            */
-        || (h == 0xE92D)                     /* push.w / stmdb  */
-        || ((h & 0xFF80) == 0xB080);         /* sub sp, #imm    */
+    return ((h & 0xFE00) == 0xB400)     /* push            */
+           || (h == 0xE92D)             /* push.w / stmdb  */
+           || ((h & 0xFF80) == 0xB080); /* sub sp, #imm    */
 }
 
-static void add_func(vf_result *r, uint32_t addr, arm_mode mode, uint16_t reason) {
+static void add_func(vf_result *r, uint32_t addr, arm_mode mode,
+                     uint16_t reason) {
     if (r->count == r->cap) {
         r->cap = r->cap ? r->cap * 2 : 4096;
         r->funcs = (vf_func *)realloc(r->funcs, r->cap * sizeof(vf_func));
@@ -149,7 +166,8 @@ static void add_func(vf_result *r, uint32_t addr, arm_mode mode, uint16_t reason
     f->mode = mode;
     f->reasons = reason;
     f->from_heuristic = (reason & (VF_R_SHAPE | VF_R_WEAK_PTR)) ? VF_SHAPE
-                      : (reason & VF_R_RELOC) ? VF_RELOC : VF_PRINCIPLED;
+                        : (reason & VF_R_RELOC)                 ? VF_RELOC
+                                                                : VF_PRINCIPLED;
 }
 
 /* Does ARM code start here?
@@ -179,29 +197,44 @@ static int arm_code_ok(const vm_image *img, uint32_t target) {
     const uint32_t base = img->seg_vaddr, len = img->seg_len;
     uint32_t a = target;
     int seen = 0, plain = 0, returned = 0, ended = 0;
-    if (target & 3) return 0;
+    if (target & 3)
+        return 0;
     while (seen < 96 && !ended) {
         arm_insn in;
-        if (a < base || a + 4 > base + len) return 0;
-        if (arm_decode(text, base, len, a, ARM_A32, &in) == 0) return 0;
-        if (in.cls == A_UNKNOWN || in.cls == A_UNDEF || (in.cls == A_SYS && in.op == OP_NONE) ||
+        if (a < base || a + 4 > base + len)
+            return 0;
+        if (arm_decode(text, base, len, a, ARM_A32, &in) == 0)
+            return 0;
+        if (in.cls == A_UNKNOWN || in.cls == A_UNDEF ||
+            (in.cls == A_SYS && in.op == OP_NONE) ||
             (in.cls == A_SIMD && in.cond != ARM_COND_AL) ||
-            (in.op == OP_NONE && (in.cls == A_ALU || in.cls == A_LOAD || in.cls == A_STORE ||
-                                  in.cls == A_LOADM || in.cls == A_STOREM))) {
-            why(target, "as ARM code: refused, the word 0x%08X at 0x%08X (%s) is not one written code has", in.raw, a, in.mnemonic);
+            (in.op == OP_NONE &&
+             (in.cls == A_ALU || in.cls == A_LOAD || in.cls == A_STORE ||
+              in.cls == A_LOADM || in.cls == A_STOREM))) {
+            why(target,
+                "as ARM code: refused, the word 0x%08X at 0x%08X (%s) is not "
+                "one written code has",
+                in.raw, a, in.mnemonic);
             return 0;
         }
         seen++;
-        if (in.cond == ARM_COND_AL) plain++;
-        if ((in.cls == A_RETURN || in.cls == A_BRANCH || in.cls == A_INDIRECT) && !in.conditional) {
+        if (in.cond == ARM_COND_AL)
+            plain++;
+        if ((in.cls == A_RETURN || in.cls == A_BRANCH ||
+             in.cls == A_INDIRECT) &&
+            !in.conditional) {
             ended = 1;
             returned = in.cls == A_RETURN && in.op != OP_NONE;
         }
         a += 4;
     }
     if (plain * 5 < seen * 4 || !(returned || seen >= 48)) {
-        why(target, "as ARM code: refused, %d of its first %d words run unconditionally%s", plain, seen,
-            returned || seen >= 48 ? "" : ", and they neither return nor go on");
+        why(target,
+            "as ARM code: refused, %d of its first %d words run "
+            "unconditionally%s",
+            plain, seen,
+            returned || seen >= 48 ? ""
+                                   : ", and they neither return nor go on");
         return 0;
     }
     return 1;
@@ -223,11 +256,13 @@ static int arm_code_ok(const vm_image *img, uint32_t target) {
  * one bad function, it produces thousands of instructions of confident
  * nonsense: 152,919 of them before this check existed, against 1.58 million
  * real ones. */
-static int arm_seed_ok(const vm_image *img, const vm_module *mod, uint32_t target) {
+static int arm_seed_ok(const vm_image *img, const vm_module *mod,
+                       uint32_t target) {
     return vm_find_stub(mod, target) != NULL || arm_code_ok(img, target);
 }
 
-/* --- walking one function --------------------------------------------------- */
+/* --- walking one function ---------------------------------------------------
+ */
 /*
  * Follows local control flow from `start`, marking instruction starts and
  * queueing call targets as new functions. Branch targets are followed as local
@@ -240,7 +275,7 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
                  seedq *q, uint32_t start, arm_mode mode, vf_func *fn) {
     const uint8_t *text = img->data + img->seg_file;
     const uint32_t base = img->seg_vaddr;
-    const uint32_t len  = img->seg_len;
+    const uint32_t len = img->seg_len;
 
     /* Local block worklist. Bounded: a pathological function cannot make this
      * grow without bound because every block start is marked seen first. */
@@ -249,7 +284,11 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
 
     /* Guards that branch to their table: what the walk from each such
      * target should know about the register it is about to index with. */
-    struct { uint32_t addr; int8_t reg; uint32_t max; } guard[256];
+    struct {
+        uint32_t addr;
+        int8_t reg;
+        uint32_t max;
+    } guard[256];
     uint32_t nguard = 0;
 
     while (local.n) {
@@ -267,20 +306,27 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
         arm_insn prev[16];
         uint32_t nprev = 0;
         for (uint32_t g = 0; g < nguard; g++)
-            if (guard[g].addr == a) { arm_table_seed(&prev[0], guard[g].reg, guard[g].max); nprev = 1; break; }
+            if (guard[g].addr == a) {
+                arm_table_seed(&prev[0], guard[g].reg, guard[g].max);
+                nprev = 1;
+                break;
+            }
 
         /* MOVW halves waiting for their MOVT, per register. */
         uint32_t movw_val[16];
         uint16_t movw_ok = 0;
 
         for (;;) {
-            if (a < base || a >= base + len) break;
+            if (a < base || a >= base + len)
+                break;
             uint32_t off = a - base;
-            if (seen_get(r, off, s.mode)) break;  /* already decoded in this mode */
+            if (seen_get(r, off, s.mode))
+                break; /* already decoded in this mode */
 
             arm_insn in;
             int n = arm_decode(text, base, len, a, s.mode, &in);
-            if (n == 0) break;
+            if (n == 0)
+                break;
 
             /* A jump table whose length the guarding compare gives is a set
              * of local branches, and its targets are followed as such. One
@@ -288,14 +334,18 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
             if (in.cls == A_INDIRECT && (in.op == OP_TBB || in.op == OP_TBH)) {
                 uint32_t count = arm_table_count(prev, nprev, &in);
                 uint32_t tg[256];
-                uint32_t nt = count ? arm_table_targets(text, base, len, &in, count, tg, 256) : 0;
+                uint32_t nt = count ? arm_table_targets(text, base, len, &in,
+                                                        count, tg, 256)
+                                    : 0;
                 seen_set(r, off, s.mode);
                 r->insns_total++;
                 coverage_add(r, off, (uint32_t)n);
                 fn->insns++;
-                if (a + (uint32_t)n > fn->end) fn->end = a + (uint32_t)n;
+                if (a + (uint32_t)n > fn->end)
+                    fn->end = a + (uint32_t)n;
                 if (nt) {
-                    for (uint32_t i = 0; i < nt; i++) sq_push(&local, tg[i], s.mode, 0);
+                    for (uint32_t i = 0; i < nt; i++)
+                        sq_push(&local, tg[i], s.mode, 0);
                     r->jump_tables++;
                 } else {
                     r->indirect_sites++;
@@ -305,20 +355,28 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
 
             if (it_left > 0) {
                 it_left--;
-                if (in.cls == A_BRANCH || in.cls == A_RETURN || in.cls == A_INDIRECT)
+                if (in.cls == A_BRANCH || in.cls == A_RETURN ||
+                    in.cls == A_INDIRECT)
                     in.conditional = 1;
             }
             if (in.op == OP_IT)
-                it_left = (in.it_mask & 1) ? 4 : (in.it_mask & 2) ? 3 : (in.it_mask & 4) ? 2 : 1;
+                it_left = (in.it_mask & 1)   ? 4
+                          : (in.it_mask & 2) ? 3
+                          : (in.it_mask & 4) ? 2
+                                             : 1;
 
-            if (a == start) why(a, "walked as a function");
-            else why(a, "decoded inside the function walked from 0x%08X", start);
+            if (a == start)
+                why(a, "walked as a function");
+            else
+                why(a, "decoded inside the function walked from 0x%08X", start);
             seen_set(r, off, s.mode);
             r->insns_total++;
             coverage_add(r, off, (uint32_t)n);
             fn->insns++;
-            if (a + (uint32_t)n > fn->end) fn->end = a + (uint32_t)n;
-            if (in.cls == A_SIMD) r->simd_insns++;
+            if (a + (uint32_t)n > fn->end)
+                fn->end = a + (uint32_t)n;
+            if (in.cls == A_SIMD)
+                r->simd_insns++;
 
             /* A MOVW/MOVT pair builds a 32-bit constant in a register. When
              * the constant is a Thumb-tagged address into .text it is a
@@ -327,31 +385,42 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
              * and on a static module no relocation names it. The text
              * filter is the relocation seeds': an odd address can also be
              * the second byte of a string. */
-            if (in.op == OP_MOVT && in.rd >= 0 && in.rd < 16 && ((movw_ok >> in.rd) & 1)) {
+            if (in.op == OP_MOVT && in.rd >= 0 && in.rd < 16 &&
+                ((movw_ok >> in.rd) & 1)) {
                 uint32_t v = (movw_val[in.rd] & 0xFFFFu) | (in.imm << 16);
                 movw_ok &= (uint16_t)~(1u << in.rd);
-                if ((v & 1) && (v & ~1u) >= base && (v & ~1u) + 2 <= base + len) {
+                if ((v & 1) && (v & ~1u) >= base &&
+                    (v & ~1u) + 2 <= base + len) {
                     uint32_t t = v & ~1u;
-                    uint16_t h = (uint16_t)(text[t - base] | ((uint16_t)text[t - base + 1] << 8));
+                    uint16_t h =
+                        (uint16_t)(text[t - base] |
+                                   ((uint16_t)text[t - base + 1] << 8));
                     if (text_run(img, t) && !returns_soon(img, t)) {
-                        why(t, "a MOVW/MOVT pair builds it; refused, it lies in text");
+                        why(t, "a MOVW/MOVT pair builds it; refused, it lies "
+                               "in text");
                     } else if (!starts_like_code(img, t)) {
-                        why(t, "a MOVW/MOVT pair builds it; refused, what follows does not read as code");
+                        why(t, "a MOVW/MOVT pair builds it; refused, what "
+                               "follows does not read as code");
                     } else {
                         int strong = has_prologue(h);
-                        why(t, "a MOVW/MOVT pair builds it: seeded%s", strong ? "" : " weakly, no prologue");
-                        sq_push(q, t, ARM_T32, strong ? VF_R_POINTER : VF_R_WEAK_PTR);
+                        why(t, "a MOVW/MOVT pair builds it: seeded%s",
+                            strong ? "" : " weakly, no prologue");
+                        sq_push(q, t, ARM_T32,
+                                strong ? VF_R_POINTER : VF_R_WEAK_PTR);
                         r->seeds_pointer++;
-                        if (!strong) r->seeds_weak++;
+                        if (!strong)
+                            r->seeds_weak++;
                     }
                 }
-            } else if (in.op == OP_MOV && in.has_imm && in.width == 4 && !in.sets_flags &&
-                       in.rd >= 0 && in.rd < 16) {
+            } else if (in.op == OP_MOV && in.has_imm && in.width == 4 &&
+                       !in.sets_flags && in.rd >= 0 && in.rd < 16) {
                 movw_val[in.rd] = in.imm;
                 movw_ok |= (uint16_t)(1u << in.rd);
             } else if (in.rd >= 0 && in.rd < 16 &&
-                       ((in.op == OP_MOV && !in.has_imm && in.rm >= 0 && in.rm < 16 && !in.shift_amt) ||
-                        (in.op == OP_ADD && in.has_imm && in.imm == 0 && in.rn >= 0 && in.rn < 16))) {
+                       ((in.op == OP_MOV && !in.has_imm && in.rm >= 0 &&
+                         in.rm < 16 && !in.shift_amt) ||
+                        (in.op == OP_ADD && in.has_imm && in.imm == 0 &&
+                         in.rn >= 0 && in.rn < 16))) {
                 /* The scheduler may move the low half to another register
                  * before its MOVT: `movw r7, #0x7605; adds r5, r7, #0; movt
                  * r5, #0x8160` stores a thunk into a table in .bss, and the
@@ -368,20 +437,21 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
             }
 
             /* Calls seed new functions. An interworking call flips the mode of
-             * the callee, which is the whole reason mode travels with a seed. */
+             * the callee, which is the whole reason mode travels with a seed.
+             */
             if (in.cls == A_CALL) {
                 if (in.has_target) {
                     arm_mode cm = in.switches_mode
-                                ? (s.mode == ARM_T32 ? ARM_A32 : ARM_T32)
-                                : s.mode;
+                                      ? (s.mode == ARM_T32 ? ARM_A32 : ARM_T32)
+                                      : s.mode;
                     /* A mode-switching call is only followed into ARM when the
                      * target is a known import stub.
                      *
                      * The stubs are the module's ARM code — placeholder bodies
                      * the loader patches — and a BLX to one is the ordinary way
                      * a Thumb module calls firmware. A BLX-immediate pointing
-                     * anywhere else is, on this corpus, a misdecode: the tail of
-                     * .text is read-only data, and data decoded as Thumb
+                     * anywhere else is, on this corpus, a misdecode: the tail
+                     * of .text is read-only data, and data decoded as Thumb
                      * produces plausible BLX encodings.
                      *
                      * Refusing matters more here than for any other seed
@@ -413,11 +483,13 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
 
             /* In ARM any instruction may be conditional, a return among
              * them, and the function goes on after one that is. */
-            if (in.cls == A_RETURN && !(s.mode == ARM_A32 && in.conditional)) break;
+            if (in.cls == A_RETURN && !(s.mode == ARM_A32 && in.conditional))
+                break;
 
             if (in.cls == A_INDIRECT) {
                 r->indirect_sites++;
-                if (!(s.mode == ARM_A32 && in.conditional)) break;
+                if (!(s.mode == ARM_A32 && in.conditional))
+                    break;
             }
 
             /* A branch into the other instruction set (`bx pc`) is a transfer
@@ -426,25 +498,35 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
              * the stub check, because it was decoded in flow from a real
              * instruction, not manufactured by a linear sweep over data. */
             if (in.cls == A_BRANCH && in.has_target && in.switches_mode) {
-                sq_push(q, in.target, s.mode == ARM_T32 ? ARM_A32 : ARM_T32, VF_R_INTERWORK);
+                sq_push(q, in.target, s.mode == ARM_T32 ? ARM_A32 : ARM_T32,
+                        VF_R_INTERWORK);
                 r->seeds_interwork++;
-                if (!in.conditional) break;
+                if (!in.conditional)
+                    break;
                 a += (uint32_t)n;
                 continue;
             }
 
             if (in.cls == A_BRANCH && in.has_target && nguard < 256) {
-                int8_t greg; uint32_t gmax;
-                if (in.conditional ? arm_table_guard(prev, nprev, &in, &greg, &gmax)
-                                   : arm_table_guard_jump(prev, nprev, &in, &greg, &gmax)) {
+                int8_t greg;
+                uint32_t gmax;
+                if (in.conditional
+                        ? arm_table_guard(prev, nprev, &in, &greg, &gmax)
+                        : arm_table_guard_jump(prev, nprev, &in, &greg,
+                                               &gmax)) {
                     guard[nguard].addr = in.target;
-                    guard[nguard].reg  = greg;
-                    guard[nguard].max  = gmax;
+                    guard[nguard].reg = greg;
+                    guard[nguard].max = gmax;
                     nguard++;
                 }
             }
-            if (nprev < 16) prev[nprev++] = in;
-            else { for (uint32_t i = 1; i < 16; i++) prev[i - 1] = prev[i]; prev[15] = in; }
+            if (nprev < 16)
+                prev[nprev++] = in;
+            else {
+                for (uint32_t i = 1; i < 16; i++)
+                    prev[i - 1] = prev[i];
+                prev[15] = in;
+            }
 
             if (in.cls == A_BRANCH && in.has_target) {
                 sq_push(&local, in.target, s.mode, 0);
@@ -467,7 +549,7 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
                      * how newlib reaches most of its veneers. */
                     sq_push(q, in.target, s.mode, VF_R_TAIL);
                     r->seeds_tail++;
-                    break;                        /* unconditional: flow ends */
+                    break; /* unconditional: flow ends */
                 }
             }
 
@@ -478,7 +560,8 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
     free(local.v);
 }
 
-/* --- pointer-shape recovery ------------------------------------------------- */
+/* --- pointer-shape recovery -------------------------------------------------
+ */
 /*
  * With no relocations, stored function pointers can only be recognised by what
  * they look like. A candidate word must land inside the executable segment, be
@@ -493,13 +576,17 @@ static void walk(const vm_image *img, const vm_module *mod, vf_result *r,
 
 /* Does this word have the SHAPE of a pointer to Thumb code? Cheap, and
  * deliberately says nothing about whether a function is there. */
-static int code_ptr_shape(const vm_image *img, const uint8_t *p, uint32_t *out) {
-    uint32_t w = (uint32_t)p[0] | ((uint32_t)p[1] << 8)
-               | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-    if (!(w & 1)) return 0;                       /* Thumb pointers only */
+static int code_ptr_shape(const vm_image *img, const uint8_t *p,
+                          uint32_t *out) {
+    uint32_t w = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+                 ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    if (!(w & 1))
+        return 0; /* Thumb pointers only */
     uint32_t t = w & ~1u;
-    if (t < img->seg_vaddr || t >= img->seg_vaddr + img->seg_len) return 0;
-    if ((t - img->seg_vaddr) & 1) return 0;
+    if (t < img->seg_vaddr || t >= img->seg_vaddr + img->seg_len)
+        return 0;
+    if ((t - img->seg_vaddr) & 1)
+        return 0;
     *out = t;
     return 1;
 }
@@ -534,15 +621,23 @@ static uint32_t shape_run_len(const vm_image *img, const uint8_t *scan,
  * two words in front are what says so. Each one missed is a dispatch miss
  * the day an object of that class is destroyed. */
 static int vtable_head(const vm_image *img, const uint8_t *scan, uint32_t off) {
-    if (off < 8) return 0;
+    if (off < 8)
+        return 0;
     const uint8_t *p = scan + off - 8;
-    uint32_t top  = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-    uint32_t type = (uint32_t)p[4] | ((uint32_t)p[5] << 8) | ((uint32_t)p[6] << 16) | ((uint32_t)p[7] << 24);
-    if (top != 0 && top < 0xFFFFF000u) return 0;
-    if (!type || (type & 3)) return 0;
-    if (type >= img->seg_vaddr && type - img->seg_vaddr < img->seg_len) return 1;
+    uint32_t top = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+                   ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    uint32_t type = (uint32_t)p[4] | ((uint32_t)p[5] << 8) |
+                    ((uint32_t)p[6] << 16) | ((uint32_t)p[7] << 24);
+    if (top != 0 && top < 0xFFFFF000u)
+        return 0;
+    if (!type || (type & 3))
+        return 0;
+    if (type >= img->seg_vaddr && type - img->seg_vaddr < img->seg_len)
+        return 1;
     for (uint32_t i = 0; i < img->data_seg_count; i++)
-        if (type >= img->data_segs[i].vaddr && type - img->data_segs[i].vaddr < img->data_segs[i].len) return 1;
+        if (type >= img->data_segs[i].vaddr &&
+            type - img->data_segs[i].vaddr < img->data_segs[i].len)
+            return 1;
     return 0;
 }
 
@@ -551,12 +646,13 @@ static int vtable_head(const vm_image *img, const uint8_t *scan, uint32_t off) {
  * different things: candidates come from wherever the module stores pointers,
  * but a valid target is always code. */
 static uint32_t shape_scan_region(const vm_image *img, vf_result *r, seedq *q,
-                                  const uint8_t *scan, uint32_t scan_len, int enumerated) {
+                                  const uint8_t *scan, uint32_t scan_len,
+                                  int enumerated) {
     const uint8_t *text = img->data + img->seg_file;
     const uint32_t base = img->seg_vaddr;
-    const uint32_t len  = img->seg_len;
+    const uint32_t len = img->seg_len;
     uint32_t found = 0;
-    uint32_t run_left = 0;      /* words remaining in the current table */
+    uint32_t run_left = 0; /* words remaining in the current table */
 
     for (uint32_t off = 0; off + 4 <= scan_len; off += 4) {
         uint32_t t;
@@ -567,14 +663,18 @@ static uint32_t shape_scan_region(const vm_image *img, vf_result *r, seedq *q,
          * bounded and cheap. */
         if (run_left == 0) {
             uint32_t n = shape_run_len(img, scan, scan_len, off);
-            if (n >= SHAPE_RUN_MIN || (!enumerated && n && vtable_head(img, scan, off))) run_left = n;
+            if (n >= SHAPE_RUN_MIN ||
+                (!enumerated && n && vtable_head(img, scan, off)))
+                run_left = n;
         }
         int in_table = run_left > 0;
-        if (run_left) run_left--;
+        if (run_left)
+            run_left--;
 
-        if (!code_ptr_shape(img, scan + off, &t)) continue;
-        why(t, "a stored word at offset 0x%X of the scanned region holds it%s", off,
-            in_table ? ", in a table of such words" : "");
+        if (!code_ptr_shape(img, scan + off, &t))
+            continue;
+        why(t, "a stored word at offset 0x%X of the scanned region holds it%s",
+            off, in_table ? ", in a table of such words" : "");
 
         /* Something already decoded is not a discovery, and is not counted
          * as one. It may still be news: a function first met as the target
@@ -587,24 +687,36 @@ static uint32_t shape_scan_region(const vm_image *img, vf_result *r, seedq *q,
          * address had only been walked through. The same evidence is asked
          * of it as of a new one: a table, or a prologue. */
         if (seen_get(r, t - base, ARM_T32)) {
-            uint16_t h0 = (uint16_t)(text[t - base] | ((uint16_t)text[t - base + 1] << 8));
+            uint16_t h0 = (uint16_t)(text[t - base] |
+                                     ((uint16_t)text[t - base + 1] << 8));
             if (in_table || has_prologue(h0)) {
                 why(t, "already decoded; the stored word makes it a root");
                 sq_push(q, t, ARM_T32, VF_R_SHAPE);
                 r->shape_known++;
-            } else if (!enumerated && !(text_run(img, t) && !returns_soon(img, t)) && starts_like_code(img, t)) {
-                why(t, "already decoded; a lone word to code with no prologue names it weakly");
+            } else if (!enumerated &&
+                       !(text_run(img, t) && !returns_soon(img, t)) &&
+                       starts_like_code(img, t)) {
+                why(t, "already decoded; a lone word to code with no prologue "
+                       "names it weakly");
                 sq_push(q, t, ARM_T32, VF_R_WEAK_PTR);
                 r->seeds_weak++;
             } else {
-                why(t, "already decoded, and the lone word that names it does not point at what reads as a function");
+                why(t, "already decoded, and the lone word that names it does "
+                       "not point at what reads as a function");
             }
             continue;
         }
 
         arm_insn in;
-        if (arm_decode(text, base, len, t, ARM_T32, &in) == 0) { r->rejected_shape++; continue; }
-        if (in.cls == A_UNKNOWN || in.cls == A_UNDEF) { why(t, "refused: its first instruction does not decode"); r->rejected_shape++; continue; }
+        if (arm_decode(text, base, len, t, ARM_T32, &in) == 0) {
+            r->rejected_shape++;
+            continue;
+        }
+        if (in.cls == A_UNKNOWN || in.cls == A_UNDEF) {
+            why(t, "refused: its first instruction does not decode");
+            r->rejected_shape++;
+            continue;
+        }
 
         /* "Decodes as something" is far too weak a filter to be worth much:
          * the Thumb decoder almost never returns unknown, so nearly every
@@ -626,12 +738,17 @@ static uint32_t shape_scan_region(const vm_image *img, vf_result *r, seedq *q,
          * you would expect: leaves that start with `movw` because they store a
          * constant and save nothing, and one that is a bare `bx lr`. Each one
          * missed is a run-time trap in a table the program walks at startup. */
-        uint16_t h = (uint16_t)(text[t - base] | ((uint16_t)text[t - base + 1] << 8));
-        int prologue = ((h & 0xFE00) == 0xB400)          /* push            */
-                    || (h == 0xE92D)                     /* push.w / stmdb  */
-                    || ((h & 0xFF80) == 0xB080);         /* sub sp, #imm    */
+        uint16_t h =
+            (uint16_t)(text[t - base] | ((uint16_t)text[t - base + 1] << 8));
+        int prologue = ((h & 0xFE00) == 0xB400)     /* push            */
+                       || (h == 0xE92D)             /* push.w / stmdb  */
+                       || ((h & 0xFF80) == 0xB080); /* sub sp, #imm    */
 
-        if (!starts_like_code(img, t)) { why(t, "refused: what follows does not read as code"); r->rejected_shape++; continue; }
+        if (!starts_like_code(img, t)) {
+            why(t, "refused: what follows does not read as code");
+            r->rejected_shape++;
+            continue;
+        }
 
         /* Neither a prologue nor a table: one word in megabytes of data
          * that happens to be odd and to land in .text, or a callback kept
@@ -645,8 +762,16 @@ static uint32_t shape_scan_region(const vm_image *img, vf_result *r, seedq *q,
          * word they do not name is not a pointer, and a module linked at
          * zero is full of small odd numbers that land in its own .text. */
         if (!prologue && !in_table) {
-            if (enumerated) { why(t, "refused: no prologue, and the word is not in a table"); r->rejected_shape++; continue; }
-            if (text_run(img, t) && !returns_soon(img, t)) { why(t, "refused: no prologue, no table, and it lies in text"); r->rejected_shape++; continue; }
+            if (enumerated) {
+                why(t, "refused: no prologue, and the word is not in a table");
+                r->rejected_shape++;
+                continue;
+            }
+            if (text_run(img, t) && !returns_soon(img, t)) {
+                why(t, "refused: no prologue, no table, and it lies in text");
+                r->rejected_shape++;
+                continue;
+            }
             why(t, "seeded weakly: a lone stored word, no prologue");
             sq_push(q, t, ARM_T32, VF_R_WEAK_PTR);
             r->seeds_weak++;
@@ -664,8 +789,10 @@ static uint32_t shape_scan_region(const vm_image *img, vf_result *r, seedq *q,
 /* `enumerated`: the module has relocations, which name every pointer it
  * stores; the readings of this scan that rest on one or two words are then
  * left out, as more likely to be numbers than what the relocations missed. */
-static void shape_scan(const vm_image *img, vf_result *r, seedq *q, int enumerated) {
-    shape_scan_region(img, r, q, img->data + img->seg_file, img->seg_len, enumerated);
+static void shape_scan(const vm_image *img, vf_result *r, seedq *q,
+                       int enumerated) {
+    shape_scan_region(img, r, q, img->data + img->seg_file, img->seg_len,
+                      enumerated);
 
     /* The data segments, which is where a C++ module keeps the table of
      * static constructors. Nothing in .text points at them: the only reference
@@ -679,13 +806,15 @@ static void shape_scan(const vm_image *img, vf_result *r, seedq *q, int enumerat
      * hide which one is doing the work. */
     for (uint32_t i = 0; i < img->data_seg_count; i++) {
         const vm_seg *s = &img->data_segs[i];
-        if ((uint64_t)s->file + s->len > img->size) continue;
-        r->seeds_shape_data +=
-            shape_scan_region(img, r, q, img->data + s->file, s->len, enumerated);
+        if ((uint64_t)s->file + s->len > img->size)
+            continue;
+        r->seeds_shape_data += shape_scan_region(img, r, q, img->data + s->file,
+                                                 s->len, enumerated);
     }
 }
 
-/* --- relocation-backed pointers --------------------------------------------- */
+/* --- relocation-backed pointers ---------------------------------------------
+ */
 /*
  * On a relocatable module the stream names every word the linker filled with
  * an address. Whether such a word IS a pointer is settled; what remains is
@@ -727,10 +856,12 @@ static int text_run(const vm_image *img, uint32_t t) {
     int printable = 0, seen = 0;
     for (int k = -2; k < 6; k++) {
         uint32_t a = t + (uint32_t)k;
-        if (a < base || a >= base + len) continue;
+        if (a < base || a >= base + len)
+            continue;
         uint8_t c = text[a - base];
         seen++;
-        if (c >= 0x20 && c < 0x7F) printable++;
+        if (c >= 0x20 && c < 0x7F)
+            printable++;
     }
     return seen >= 6 && printable >= seen - 1;
 }
@@ -749,13 +880,18 @@ static int returns_soon(const vm_image *img, uint32_t addr) {
     const uint32_t base = img->seg_vaddr, len = img->seg_len;
     uint32_t a = addr;
     for (int k = 0; k < 6; k++) {
-        if (a < base || a + 2 > base + len) return 0;
+        if (a < base || a + 2 > base + len)
+            return 0;
         arm_insn in;
         int n = arm_decode(text, base, len, a, ARM_T32, &in);
-        if (n == 0 || in.cls == A_UNKNOWN || in.cls == A_UNDEF) return 0;
-        if (in.cls == A_RETURN) return !in.conditional;
-        if (in.cls == A_BRANCH || in.cls == A_CALL || in.cls == A_INDIRECT) return 0;
-        if (in.op == OP_NONE && in.cls != A_NOP) return 0;
+        if (n == 0 || in.cls == A_UNKNOWN || in.cls == A_UNDEF)
+            return 0;
+        if (in.cls == A_RETURN)
+            return !in.conditional;
+        if (in.cls == A_BRANCH || in.cls == A_CALL || in.cls == A_INDIRECT)
+            return 0;
+        if (in.op == OP_NONE && in.cls != A_NOP)
+            return 0;
         a += (uint32_t)n;
     }
     return 0;
@@ -763,8 +899,10 @@ static int returns_soon(const vm_image *img, uint32_t addr) {
 
 /* A relocated word holding a Thumb-tagged address into .text. */
 static int table_word(const vm_image *img, const vr_entry *e) {
-    if (e->code != VR_ABS32 && e->code != VR_TARGET1) return 0;
-    if (!(e->value & 1)) return 0;
+    if (e->code != VR_ABS32 && e->code != VR_TARGET1)
+        return 0;
+    if (!(e->value & 1))
+        return 0;
     uint32_t t = e->value & ~1u;
     return t >= img->seg_vaddr && t < img->seg_vaddr + img->seg_len;
 }
@@ -773,18 +911,22 @@ static void reloc_seeds(const vm_image *img, const vr_table *relocs,
                         vf_result *r, seedq *q) {
     const uint8_t *text = img->data + img->seg_file;
     const uint32_t base = img->seg_vaddr;
-    const uint32_t len  = img->seg_len;
+    const uint32_t len = img->seg_len;
 
     uint8_t *in_table = (uint8_t *)calloc(relocs->n, 1);
     if (in_table) {
         uint32_t i = 0;
         while (i < relocs->n) {
-            if (!table_word(img, &relocs->v[i])) { i++; continue; }
+            if (!table_word(img, &relocs->v[i])) {
+                i++;
+                continue;
+            }
             uint32_t j = i + 1;
             while (j < relocs->n && table_word(img, &relocs->v[j]) &&
                    relocs->v[j].patch == relocs->v[j - 1].patch + 4)
                 j++;
-            if (j - i >= RELOC_RUN_MIN) memset(in_table + i, 1, j - i);
+            if (j - i >= RELOC_RUN_MIN)
+                memset(in_table + i, 1, j - i);
             i = j;
         }
     }
@@ -801,12 +943,19 @@ static void reloc_seeds(const vm_image *img, const vr_table *relocs,
 
         uint32_t v = e->value;
         uint32_t t = v & ~1u;
-        if (t < base || t >= base + len) continue;
+        if (t < base || t >= base + len)
+            continue;
 
-        if (!(v & 1)) { r->reloc_ptrs_even++; continue; }
+        if (!(v & 1)) {
+            r->reloc_ptrs_even++;
+            continue;
+        }
         r->reloc_ptrs_code++;
 
-        if (t + 2 > base + len) { r->rejected_reloc++; continue; }
+        if (t + 2 > base + len) {
+            r->rejected_reloc++;
+            continue;
+        }
 
         arm_insn in;
         if (arm_decode(text, base, len, t, ARM_T32, &in) == 0 ||
@@ -815,27 +964,38 @@ static void reloc_seeds(const vm_image *img, const vr_table *relocs,
             continue;
         }
 
-        uint16_t h = (uint16_t)(text[t - base] | ((uint16_t)text[t - base + 1] << 8));
-        int prologue = ((h & 0xFE00) == 0xB400)          /* push            */
-                    || (h == 0xE92D)                     /* push.w / stmdb  */
-                    || ((h & 0xFF80) == 0xB080);         /* sub sp, #imm    */
+        uint16_t h =
+            (uint16_t)(text[t - base] | ((uint16_t)text[t - base + 1] << 8));
+        int prologue = ((h & 0xFE00) == 0xB400)     /* push            */
+                       || (h == 0xE92D)             /* push.w / stmdb  */
+                       || ((h & 0xFF80) == 0xB080); /* sub sp, #imm    */
         int tabled = in_table && in_table[i];
-        if (!prologue && !tabled && looks_like_text(h) && !returns_soon(img, t)) { r->rejected_reloc++; continue; }
-        if (!starts_like_code(img, t)) { r->rejected_reloc++; continue; }
+        if (!prologue && !tabled && looks_like_text(h) &&
+            !returns_soon(img, t)) {
+            r->rejected_reloc++;
+            continue;
+        }
+        if (!starts_like_code(img, t)) {
+            r->rejected_reloc++;
+            continue;
+        }
 
         /* Neither a prologue nor a table around it: as likely a record at an
          * odd offset as a leaf function. Walked, not a root. */
         int strong = prologue || tabled;
         sq_push(q, t, ARM_T32, strong ? VF_R_RELOC : VF_R_WEAK_PTR);
         r->seeds_reloc++;
-        if (tabled)  r->seeds_reloc_table++;
-        if (!strong) r->seeds_weak++;
+        if (tabled)
+            r->seeds_reloc_table++;
+        if (!strong)
+            r->seeds_weak++;
     }
 
     free(in_table);
 }
 
-/* --- entry point ------------------------------------------------------------ */
+/* --- entry point ------------------------------------------------------------
+ */
 
 int vf_discover(const vm_image *img, const vm_module *mod,
                 const vr_table *relocs, vf_result *out) {
@@ -844,7 +1004,10 @@ int vf_discover(const vm_image *img, const vm_module *mod,
     out->seen_bytes = (img->seg_len / 2 + 7) / 8 + 1;
     out->seen = (uint8_t *)calloc(out->seen_bytes * 2u, 1);
     out->covered = (uint8_t *)calloc(out->seen_bytes, 1);
-    if (!out->seen || !out->covered) { vf_free(out); return 1; }
+    if (!out->seen || !out->covered) {
+        vf_free(out);
+        return 1;
+    }
 
     seedq q = {0};
     const uint32_t base = img->seg_vaddr;
@@ -870,29 +1033,52 @@ int vf_discover(const vm_image *img, const vm_module *mod,
         for (uint32_t i = 0; i < mod->export_count; i++) {
             const vm_export *item = &mod->exports[i];
             uint32_t address = item->address;
-            if (item->kind != VM_EXPORT_FUNCTION) continue;
+            if (item->kind != VM_EXPORT_FUNCTION)
+                continue;
             if ((address & ~1u) < base ||
                 (address & ~1u) - base >= img->seg_len) {
                 free(q.v);
                 vf_free(out);
                 return 1;
             }
-            sq_push(&q, address & ~1u,
-                    (address & 1u) ? ARM_T32 : ARM_A32, VF_R_EXPORT);
+            sq_push(&q, address & ~1u, (address & 1u) ? ARM_T32 : ARM_A32,
+                    VF_R_EXPORT);
             out->seeds_export++;
         }
     }
 
-    /* 3. Linear harvest of call targets. Recursive descent alone stalls almost
+    /* 3. EHABI unwind entries. Their PREL31 function references were decoded
+     *    and bounded by vm_parse(), including the mode bit. Table order is
+     *    retained so function ordering remains deterministic. */
+    if (mod->have_info) {
+        for (uint32_t i = 0; i < mod->unwind_entry_count; i++) {
+            uint32_t key = mod->unwind_entries[i].dispatch_key;
+            uint32_t address = key & ~1u;
+            uint32_t width = (key & 1u) ? 2u : 4u;
+            if (address < base ||
+                (uint64_t)address + width > (uint64_t)base + img->seg_len ||
+                (!(key & 1u) && (address & 3u))) {
+                free(q.v);
+                vf_free(out);
+                return 1;
+            }
+            sq_push(&q, address, (key & 1u) ? ARM_T32 : ARM_A32, VF_R_UNWIND);
+            out->seeds_unwind++;
+        }
+    }
+
+    /* 4. Linear harvest of call targets. Recursive descent alone stalls almost
      *    immediately — the same lesson psprecomp learned when descent from the
      *    entry point found 47 instructions. */
     {
         const uint8_t *text = img->data + img->seg_file;
         for (uint32_t off = 0; off + 4 <= img->seg_len; off += 2) {
             arm_insn in;
-            if (arm_decode(text, base, img->seg_len, base + off, ARM_T32, &in) == 0) continue;
-            if (in.cls == A_CALL && in.has_target &&
-                in.target >= base && in.target < base + img->seg_len) {
+            if (arm_decode(text, base, img->seg_len, base + off, ARM_T32,
+                           &in) == 0)
+                continue;
+            if (in.cls == A_CALL && in.has_target && in.target >= base &&
+                in.target < base + img->seg_len) {
                 /* Same rule as the descent above. This sweep decodes every
                  * halfword of .text including its data, so it is the site that
                  * manufactures bogus mode switches in bulk. */
@@ -900,7 +1086,8 @@ int vf_discover(const vm_image *img, const vm_module *mod,
                     out->seeds_arm_refused++;
                     continue;
                 }
-                sq_push(&q, in.target, in.switches_mode ? ARM_A32 : ARM_T32, VF_R_CALL);
+                sq_push(&q, in.target, in.switches_mode ? ARM_A32 : ARM_T32,
+                        VF_R_CALL);
             }
         }
     }
@@ -919,21 +1106,31 @@ int vf_discover(const vm_image *img, const vm_module *mod,
      * while the emitter still emitted calls to them: the generated C compiled
      * and then failed to link, naming symbols that were never defined. */
     uint8_t *fseen = (uint8_t *)calloc(out->seen_bytes * 2u, 1);
-    if (!fseen) { free(q.v); return 1; }
+    if (!fseen) {
+        free(q.v);
+        return 1;
+    }
     /* Function index + 1 per halfword of .text, so a seed that names an
      * address already registered can add its reason to the record. */
     uint32_t slots = img->seg_len / 2 + 1;
     uint32_t *fidx = (uint32_t *)calloc(slots * 2u, sizeof(uint32_t));
-    if (!fidx) { free(fseen); free(q.v); return 1; }
+    if (!fidx) {
+        free(fseen);
+        free(q.v);
+        return 1;
+    }
 
-    #define FN_SLOT(a, m) ((((m) == ARM_T32) ? slots : 0u) + (((a) - base) >> 1))
-    #define FN_MARK(a, m) (fseen[FN_SLOT((a), (m)) >> 3] |= (uint8_t)(1u << (FN_SLOT((a), (m)) & 7)))
-    #define FN_TEST(a, m) ((fseen[FN_SLOT((a), (m)) >> 3] >> (FN_SLOT((a), (m)) & 7)) & 1)
+#define FN_SLOT(a, m) ((((m) == ARM_T32) ? slots : 0u) + (((a) - base) >> 1))
+#define FN_MARK(a, m)                                                          \
+    (fseen[FN_SLOT((a), (m)) >> 3] |= (uint8_t)(1u << (FN_SLOT((a), (m)) & 7)))
+#define FN_TEST(a, m)                                                          \
+    ((fseen[FN_SLOT((a), (m)) >> 3] >> (FN_SLOT((a), (m)) & 7)) & 1)
 
     uint32_t head = 0;
     while (head < q.n) {
         seed s = q.v[head++];
-        if (s.addr < base || s.addr >= base + img->seg_len) continue;
+        if (s.addr < base || s.addr >= base + img->seg_len)
+            continue;
         if (FN_TEST(s.addr, s.mode)) {
             out->funcs[fidx[FN_SLOT(s.addr, s.mode)] - 1].reasons |= s.heur;
             continue;
@@ -945,17 +1142,19 @@ int vf_discover(const vm_image *img, const vm_module *mod,
         walk(img, mod, out, &q, s.addr, s.mode, &out->funcs[out->count - 1]);
     }
 
-    /* 4. Relocation-backed pointers, after the calls have been followed, so
+    /* 5. Relocation-backed pointers, after the calls have been followed, so
      *    the count says what the stream ADDED: a function reachable by BL is
      *    credited to the call that reaches it, and one found only because a
      *    relocated word names it is credited here. Enumeration where the
      *    module is relocatable; nothing where it is not. */
     uint32_t before = q.n;
-    if (relocs && relocs->n) reloc_seeds(img, relocs, out, &q);
+    if (relocs && relocs->n)
+        reloc_seeds(img, relocs, out, &q);
     head = before;
     while (head < q.n) {
         seed s = q.v[head++];
-        if (s.addr < base || s.addr >= base + img->seg_len) continue;
+        if (s.addr < base || s.addr >= base + img->seg_len)
+            continue;
         if (FN_TEST(s.addr, s.mode)) {
             out->funcs[fidx[FN_SLOT(s.addr, s.mode)] - 1].reasons |= s.heur;
             continue;
@@ -967,14 +1166,15 @@ int vf_discover(const vm_image *img, const vm_module *mod,
         walk(img, mod, out, &q, s.addr, s.mode, &out->funcs[out->count - 1]);
     }
 
-    /* 5. Shape recovery, after everything principled has been exhausted, so it
+    /* 6. Shape recovery, after everything principled has been exhausted, so it
      *    only ever adds what the reliable seeds could not reach. */
     before = q.n;
     shape_scan(img, out, &q, relocs && relocs->n);
     head = before;
     while (head < q.n) {
         seed s = q.v[head++];
-        if (s.addr < base || s.addr >= base + img->seg_len) continue;
+        if (s.addr < base || s.addr >= base + img->seg_len)
+            continue;
         if (FN_TEST(s.addr, s.mode)) {
             out->funcs[fidx[FN_SLOT(s.addr, s.mode)] - 1].reasons |= s.heur;
             continue;
@@ -986,9 +1186,9 @@ int vf_discover(const vm_image *img, const vm_module *mod,
         walk(img, mod, out, &q, s.addr, s.mode, &out->funcs[out->count - 1]);
     }
 
-    #undef FN_MARK
-    #undef FN_TEST
-    #undef FN_SLOT
+#undef FN_MARK
+#undef FN_TEST
+#undef FN_SLOT
 
     free(fidx);
     free(fseen);

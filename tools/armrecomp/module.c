@@ -20,8 +20,8 @@ static uint16_t r16(const uint8_t *p) {
 }
 
 static uint32_t r32(const uint8_t *p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
-         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
 }
 
 static int stub_cmp(const void *a, const void *b) {
@@ -30,7 +30,8 @@ static int stub_cmp(const void *a, const void *b) {
 }
 
 static int fail(char *err, size_t errsz, const char *msg) {
-    if (err && errsz) snprintf(err, errsz, "%s", msg);
+    if (err && errsz)
+        snprintf(err, errsz, "%s", msg);
     return 1;
 }
 
@@ -38,16 +39,14 @@ static int address_in_range(uint32_t address, uint32_t base, uint32_t size) {
     return address >= base && (uint64_t)address < (uint64_t)base + size;
 }
 
-static int export_address_is_executable(const vm_image *img,
-                                        uint32_t address) {
-    return address_in_range(
-        address & ~1u, img->seg_vaddr, img->seg_len);
+static int export_address_is_executable(const vm_image *img, uint32_t address) {
+    return address_in_range(address & ~1u, img->seg_vaddr, img->seg_len);
 }
 
 static int export_address_is_data(const vm_image *img, uint32_t address) {
     for (uint32_t i = 0; i < img->data_seg_count; i++) {
-        uint32_t size = img->data_segs[i].mem_len
-            ? img->data_segs[i].mem_len : img->data_segs[i].len;
+        uint32_t size = img->data_segs[i].mem_len ? img->data_segs[i].mem_len
+                                                  : img->data_segs[i].len;
         if (address_in_range(address, img->data_segs[i].vaddr, size))
             return 1;
     }
@@ -61,21 +60,25 @@ static int parse_fail(vm_module *out, char *err, size_t errsz,
 }
 
 const uint8_t *vm_ptr(const vm_image *img, uint32_t off, uint32_t need) {
-    if (off > img->seg_len) return NULL;
-    if ((uint64_t)off + need > img->seg_len) return NULL;
+    if (off > img->seg_len)
+        return NULL;
+    if ((uint64_t)off + need > img->seg_len)
+        return NULL;
     uint64_t file = (uint64_t)img->seg_file + off;
-    if (file + need > img->size) return NULL;
+    if (file + need > img->size)
+        return NULL;
     return img->data + file;
 }
 
 const uint8_t *vm_va(const vm_image *img, uint32_t vaddr, uint32_t need) {
-    if (vaddr < img->seg_vaddr) return NULL;
+    if (vaddr < img->seg_vaddr)
+        return NULL;
     return vm_ptr(img, vaddr - img->seg_vaddr, need);
 }
 
-static const uint8_t *vm_segment_offset(
-    const vm_image *img, uint32_t selector, uint32_t offset, uint32_t need,
-    uint32_t *address) {
+static const uint8_t *vm_segment_offset(const vm_image *img, uint32_t selector,
+                                        uint32_t offset, uint32_t need,
+                                        uint32_t *address) {
     uint32_t file;
     uint32_t length;
     uint32_t base;
@@ -92,7 +95,8 @@ static const uint8_t *vm_segment_offset(
                 break;
             }
         }
-        if (!segment) return NULL;
+        if (!segment)
+            return NULL;
         file = segment->file;
         length = segment->len;
         base = segment->vaddr;
@@ -101,35 +105,105 @@ static const uint8_t *vm_segment_offset(
         (uint64_t)file + offset + need > img->size ||
         (uint64_t)base + offset > UINT32_MAX)
         return NULL;
-    if (address) *address = base + offset;
+    if (address)
+        *address = base + offset;
     return img->data + file + offset;
 }
 
 /* Copy a NUL-terminated string named by an ABSOLUTE virtual address. Library
  * name strings sit just past the end of the import table, in the same
  * segment. */
-static int read_name_va(const vm_image *img, uint32_t vaddr,
-                        char *dst, size_t cap) {
+static int read_name_va(const vm_image *img, uint32_t vaddr, char *dst,
+                        size_t cap) {
     dst[0] = '\0';
-    if (!vaddr) return 0;
+    if (!vaddr)
+        return 0;
     const uint8_t *p = vm_va(img, vaddr, 1);
-    if (!p) return 1;
+    if (!p)
+        return 1;
 
-    uint32_t off  = vaddr - img->seg_vaddr;
+    uint32_t off = vaddr - img->seg_vaddr;
     uint32_t room = img->seg_len - off;
     const uint8_t *end = (const uint8_t *)memchr(p, 0, room);
-    if (!end) return 1;
+    if (!end)
+        return 1;
     size_t n = (size_t)(end - p);
-    if (n >= cap) return 1;
+    if (n >= cap)
+        return 1;
     memcpy(dst, p, n + 1);
+    return 0;
+}
+
+static int decode_prel31(uint32_t place, uint32_t encoded, uint32_t *target) {
+    if (encoded & 0x80000000u)
+        return 1;
+    int64_t displacement =
+        encoded & 0x40000000u
+            ? (int64_t)(encoded & 0x7FFFFFFFu) - INT64_C(0x80000000)
+            : (int64_t)encoded;
+    int64_t result = (int64_t)place + displacement;
+    if (result < 0 || result > UINT32_MAX)
+        return 1;
+    *target = (uint32_t)result;
+    return 0;
+}
+
+/* Decode the function word of every EHABI index entry up front. This keeps
+ * malformed metadata on vm_parse()'s explicit error path instead of letting
+ * discovery silently skip a bad root. */
+static int parse_unwind_entries(const vm_image *img, vm_module *out, char *err,
+                                size_t errsz) {
+    const vm_module_info *m = &out->info;
+    uint32_t bytes = m->exidx_end - m->exidx_top;
+    uint32_t count = bytes / 8u;
+    if (!count)
+        return 0;
+
+    const uint8_t *table = vm_ptr(img, m->exidx_top, bytes);
+    if (!table)
+        return fail(err, errsz,
+                    ".ARM.exidx table lies outside executable segment");
+    out->unwind_entries =
+        (vm_unwind_entry *)calloc(count, sizeof(*out->unwind_entries));
+    if (!out->unwind_entries)
+        return fail(err, errsz, "out of memory parsing .ARM.exidx");
+
+    uint32_t previous_address = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        uint64_t place64 =
+            (uint64_t)img->seg_vaddr + m->exidx_top + (uint64_t)i * 8u;
+        uint32_t key;
+        if (place64 > UINT32_MAX ||
+            decode_prel31((uint32_t)place64, r32(table + i * 8u), &key))
+            return fail(
+                err, errsz,
+                ".ARM.exidx entry has invalid PREL31 function reference");
+
+        uint32_t address = key & ~1u;
+        uint32_t width = (key & 1u) ? 2u : 4u;
+        if (address < img->seg_vaddr ||
+            (uint64_t)address + width > (uint64_t)img->seg_vaddr + img->seg_len)
+            return fail(err, errsz,
+                        ".ARM.exidx function lies outside executable segment");
+        if (!(key & 1u) && (address & 3u))
+            return fail(err, errsz,
+                        ".ARM.exidx ARM function is not word-aligned");
+        if (i && address < previous_address)
+            return fail(err, errsz,
+                        ".ARM.exidx function references are not ordered");
+
+        out->unwind_entries[i].dispatch_key = key;
+        previous_address = address;
+    }
+    out->unwind_entry_count = count;
     return 0;
 }
 
 /* Preserve the complete export identity table for generated-module sidecars.
  * Discovery still consumes the original tables, but composition must be able
  * to reject an export identity supplied by more than one module. */
-static int parse_exports(const vm_image *img, vm_module *out,
-                         char *err, size_t errsz) {
+static int parse_exports(const vm_image *img, vm_module *out, char *err,
+                         size_t errsz) {
     const vm_module_info *m = &out->info;
     uint32_t p = m->export_top;
     uint32_t total = 0;
@@ -141,7 +215,8 @@ static int parse_exports(const vm_image *img, vm_module *out,
         if (remaining < 0x20)
             return fail(err, errsz, "truncated export entry");
         const uint8_t *e = vm_ptr(img, p, 0x20);
-        if (!e) return fail(err, errsz, "export entry lies outside the segment");
+        if (!e)
+            return fail(err, errsz, "export entry lies outside the segment");
 
         uint16_t size = r16(e + 0x00);
         uint16_t nfunc = r16(e + 0x06);
@@ -156,9 +231,7 @@ static int parse_exports(const vm_image *img, vm_module *out,
         uint32_t ntab = r32(e + 0x18);
         uint32_t etab = r32(e + 0x1C);
         const uint8_t *nids = count ? vm_va(img, ntab, count * 4) : NULL;
-        const uint8_t *entries = count
-            ? vm_va(img, etab, count * 4)
-            : NULL;
+        const uint8_t *entries = count ? vm_va(img, etab, count * 4) : NULL;
         if (count && (!nids || !entries))
             return fail(err, errsz, "export tables are incomplete");
         for (uint32_t i = 0; i < nfunc; i++) {
@@ -174,8 +247,8 @@ static int parse_exports(const vm_image *img, vm_module *out,
         p += size;
     }
 
-    out->exports = (vm_export *)calloc(total ? total : 1,
-                                       sizeof(*out->exports));
+    out->exports =
+        (vm_export *)calloc(total ? total : 1, sizeof(*out->exports));
     if (!out->exports)
         return fail(err, errsz, "out of memory parsing exports");
     out->export_count = total;
@@ -190,19 +263,16 @@ static int parse_exports(const vm_image *img, vm_module *out,
         uint16_t ntls = r16(e + 0x0A);
         uint32_t count = (uint32_t)nfunc + nvar + ntls;
         uint32_t library_nid = r32(e + 0x0C);
-        const uint8_t *nids = count
-            ? vm_va(img, r32(e + 0x18), count * 4)
-            : NULL;
-        const uint8_t *entries = count
-            ? vm_va(img, r32(e + 0x1C), count * 4)
-            : NULL;
+        const uint8_t *nids =
+            count ? vm_va(img, r32(e + 0x18), count * 4) : NULL;
+        const uint8_t *entries =
+            count ? vm_va(img, r32(e + 0x1C), count * 4) : NULL;
         for (uint32_t i = 0; i < count; i++) {
             vm_export *item = &out->exports[cursor++];
             vita_binding_export_kind declared_kind =
-                i < nfunc ? VITA_BINDING_EXPORT_FUNCTION
-                : i < (uint32_t)nfunc + nvar
-                ? VITA_BINDING_EXPORT_VARIABLE
-                : VITA_BINDING_EXPORT_TLS_VARIABLE;
+                i < nfunc                    ? VITA_BINDING_EXPORT_FUNCTION
+                : i < (uint32_t)nfunc + nvar ? VITA_BINDING_EXPORT_VARIABLE
+                                             : VITA_BINDING_EXPORT_TLS_VARIABLE;
             item->library_nid = library_nid;
             item->nid = r32(nids + i * 4);
             item->address = r32(entries + i * 4);
@@ -222,10 +292,11 @@ static int parse_exports(const vm_image *img, vm_module *out,
     return 0;
 }
 
-int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
-             char *err, size_t errsz) {
+int vm_parse(const vm_image *img, uint32_t entry, vm_module *out, char *err,
+             size_t errsz) {
     memset(out, 0, sizeof(*out));
-    if (err && errsz) err[0] = '\0';
+    if (err && errsz)
+        err[0] = '\0';
 
     /* e_entry carries a program-header selector in its top two bits. */
     uint32_t seg = entry >> 30;
@@ -234,30 +305,31 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
         return fail(err, errsz, "module info is not in the executable segment");
 
     const uint8_t *mi = vm_ptr(img, off, 0x5C);
-    if (!mi) return fail(err, errsz, "module info offset lies outside the segment");
+    if (!mi)
+        return fail(err, errsz, "module info offset lies outside the segment");
 
     vm_module_info *m = &out->info;
     m->attributes = r16(mi + 0x00);
-    m->version    = r16(mi + 0x02);
+    m->version = r16(mi + 0x02);
     memcpy(m->name, mi + 0x04, 27);
-    m->name[27]   = '\0';
-    m->type       = mi[0x1F];
+    m->name[27] = '\0';
+    m->type = mi[0x1F];
 
-    m->gp_value     = r32(mi + 0x20);
-    m->export_top   = r32(mi + 0x24);
-    m->export_end   = r32(mi + 0x28);
-    m->import_top   = r32(mi + 0x2C);
-    m->import_end   = r32(mi + 0x30);
-    m->module_nid   = r32(mi + 0x34);
-    m->tls_start    = r32(mi + 0x38);
-    m->tls_filesz   = r32(mi + 0x3C);
-    m->tls_memsz    = r32(mi + 0x40);
+    m->gp_value = r32(mi + 0x20);
+    m->export_top = r32(mi + 0x24);
+    m->export_end = r32(mi + 0x28);
+    m->import_top = r32(mi + 0x2C);
+    m->import_end = r32(mi + 0x30);
+    m->module_nid = r32(mi + 0x34);
+    m->tls_start = r32(mi + 0x38);
+    m->tls_filesz = r32(mi + 0x3C);
+    m->tls_memsz = r32(mi + 0x40);
     m->module_start = r32(mi + 0x44);
-    m->module_stop  = r32(mi + 0x48);
-    m->exidx_top    = r32(mi + 0x4C);
-    m->exidx_end    = r32(mi + 0x50);
-    m->extab_top    = r32(mi + 0x54);
-    m->extab_end    = r32(mi + 0x58);
+    m->module_stop = r32(mi + 0x48);
+    m->exidx_top = r32(mi + 0x4C);
+    m->exidx_end = r32(mi + 0x50);
+    m->extab_top = r32(mi + 0x54);
+    m->extab_end = r32(mi + 0x58);
 
     /* Structural checks. These are cheap and they are the difference between
      * "the bytes parsed" and "the bytes mean what we think". A misread layout
@@ -268,6 +340,13 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
         return fail(err, errsz, "export/import table bounds are inverted");
     if (m->export_end > img->seg_len || m->import_end > img->seg_len)
         return fail(err, errsz, "export/import table extends past the segment");
+    if (m->exidx_top > m->exidx_end)
+        return fail(err, errsz, ".ARM.exidx table bounds are inverted");
+    if (m->exidx_end > img->seg_len)
+        return fail(err, errsz,
+                    ".ARM.exidx table extends past executable segment");
+    if ((m->exidx_top & 3u) || ((m->exidx_end - m->exidx_top) & 7u))
+        return fail(err, errsz, ".ARM.exidx table is misaligned");
     if (m->module_start != 0xFFFFFFFFu) {
         uint32_t start_seg = m->module_start >> 30;
         uint32_t start_off = m->module_start & 0x3FFFFFFFu;
@@ -304,6 +383,11 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
             return fail(err, errsz, "TLS file image lies outside its segment");
     }
 
+    if (parse_unwind_entries(img, out, err, errsz)) {
+        vm_free(out);
+        return 1;
+    }
+
     if (parse_exports(img, out, err, errsz)) {
         vm_free(out);
         return 1;
@@ -328,8 +412,7 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
                               "import entry lies outside the segment");
 
         uint16_t size = r16(e + 0x00);
-        if ((size != 0x24 && size != 0x34) ||
-            size > m->import_end - p)
+        if ((size != 0x24 && size != 0x34) || size > m->import_end - p)
             return parse_fail(out, err, errsz, "invalid import entry size");
 
         e = vm_ptr(img, p, size);
@@ -346,7 +429,7 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
         memset(im, 0, sizeof(*im));
 
         im->num_funcs = r16(e + 0x06);
-        im->num_vars  = r16(e + 0x08);
+        im->num_vars = r16(e + 0x08);
         if (r16(e + 0x0A) != 0)
             return parse_fail(out, err, errsz,
                               "TLS variable imports are unsupported");
@@ -354,29 +437,27 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
         /* Note vm_va, not vm_ptr: the pointers inside an import entry are
          * absolute virtual addresses. */
         if (size >= 0x34) {
-            im->library_nid      = r32(e + 0x10);
-            if (read_name_va(img, r32(e + 0x14),
-                             im->name, sizeof(im->name)))
+            im->library_nid = r32(e + 0x10);
+            if (read_name_va(img, r32(e + 0x14), im->name, sizeof(im->name)))
                 return parse_fail(out, err, errsz,
                                   "import library name is invalid");
-            im->func_nid_table   = r32(e + 0x1C);
+            im->func_nid_table = r32(e + 0x1C);
             im->func_entry_table = r32(e + 0x20);
-            im->var_nid_table    = r32(e + 0x24);
-            im->var_entry_table  = r32(e + 0x28);
+            im->var_nid_table = r32(e + 0x24);
+            im->var_entry_table = r32(e + 0x28);
         } else {
-            im->library_nid      = r32(e + 0x0C);
-            if (read_name_va(img, r32(e + 0x10),
-                             im->name, sizeof(im->name)))
+            im->library_nid = r32(e + 0x0C);
+            if (read_name_va(img, r32(e + 0x10), im->name, sizeof(im->name)))
                 return parse_fail(out, err, errsz,
                                   "import library name is invalid");
-            im->func_nid_table   = r32(e + 0x14);
+            im->func_nid_table = r32(e + 0x14);
             im->func_entry_table = r32(e + 0x18);
-            im->var_nid_table    = r32(e + 0x1C);
-            im->var_entry_table  = r32(e + 0x20);
+            im->var_nid_table = r32(e + 0x1C);
+            im->var_entry_table = r32(e + 0x20);
         }
 
         out->total_func_imports += im->num_funcs;
-        out->total_var_imports  += im->num_vars;
+        out->total_var_imports += im->num_vars;
         out->import_count++;
         p += size;
     }
@@ -392,15 +473,17 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
      * dispatch key while also storing an aligned address for decoder lookups.
      */
     if (out->total_func_imports) {
-        out->stubs = (vm_stub *)calloc(out->total_func_imports, sizeof(vm_stub));
-        if (!out->stubs) return fail(err, errsz, "out of memory");
+        out->stubs =
+            (vm_stub *)calloc(out->total_func_imports, sizeof(vm_stub));
+        if (!out->stubs)
+            return fail(err, errsz, "out of memory");
 
         for (int i = 0; i < out->import_count; i++) {
             const vm_import *im = &out->imports[i];
-            const uint8_t *nt = vm_va(img, im->func_nid_table,
-                                      (uint32_t)im->num_funcs * 4);
-            const uint8_t *et = vm_va(img, im->func_entry_table,
-                                      (uint32_t)im->num_funcs * 4);
+            const uint8_t *nt =
+                vm_va(img, im->func_nid_table, (uint32_t)im->num_funcs * 4);
+            const uint8_t *et =
+                vm_va(img, im->func_entry_table, (uint32_t)im->num_funcs * 4);
             if (im->num_funcs && (!nt || !et))
                 return parse_fail(out, err, errsz,
                                   "function import tables are incomplete");
@@ -410,19 +493,19 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
                     return parse_fail(out, err, errsz,
                                       "function import count is inconsistent");
                 vm_stub *s = &out->stubs[out->stub_count];
-                s->lib_nid  = im->library_nid;
+                s->lib_nid = im->library_nid;
                 s->func_nid = r32(nt + k * 4);
                 if (im->func_entry_table > UINT32_MAX - k * 4)
-                    return parse_fail(
-                        out, err, errsz,
-                        "function import target site overflows");
+                    return parse_fail(out, err, errsz,
+                                      "function import target site overflows");
                 s->target_site = im->func_entry_table + k * 4;
                 s->dispatch_key = r32(et + k * 4);
                 s->addr = s->dispatch_key & ~1u;
                 if (s->addr < img->seg_vaddr ||
                     s->addr - img->seg_vaddr >= img->seg_len)
-                    return parse_fail(out, err, errsz,
-                                      "function import stub lies outside executable segment");
+                    return parse_fail(
+                        out, err, errsz,
+                        "function import stub lies outside executable segment");
                 out->stub_count++;
             }
         }
@@ -438,13 +521,17 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
     /* Each entry names a mixed-width variable-relocation block. */
     if (out->total_var_imports) {
         out->vars = (vm_var *)calloc(out->total_var_imports, sizeof(vm_var));
-        if (!out->vars) return fail(err, errsz, "out of memory");
+        if (!out->vars)
+            return fail(err, errsz, "out of memory");
 
         for (int i = 0; i < out->import_count; i++) {
             const vm_import *im = &out->imports[i];
-            if (!im->num_vars) continue;
-            const uint8_t *nt = vm_va(img, im->var_nid_table,   (uint32_t)im->num_vars * 4);
-            const uint8_t *et = vm_va(img, im->var_entry_table, (uint32_t)im->num_vars * 4);
+            if (!im->num_vars)
+                continue;
+            const uint8_t *nt =
+                vm_va(img, im->var_nid_table, (uint32_t)im->num_vars * 4);
+            const uint8_t *et =
+                vm_va(img, im->var_entry_table, (uint32_t)im->num_vars * 4);
             if (!nt || !et)
                 return parse_fail(out, err, errsz,
                                   "variable import tables are incomplete");
@@ -456,37 +543,40 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
                 vm_var *v = &out->vars[out->var_count++];
                 v->lib_nid = im->library_nid;
                 v->var_nid = r32(nt + k * 4);
-                v->stub    = r32(et + k * 4);
+                v->stub = r32(et + k * 4);
 
                 const uint8_t *hdr = vm_va(img, v->stub, 4);
                 if (!hdr)
-                    return parse_fail(out, err, errsz,
-                                      "variable import relocation block is missing");
+                    return parse_fail(
+                        out, err, errsz,
+                        "variable import relocation block is missing");
                 uint32_t bytes = (r32(hdr) >> 4) & 0x00FFFFFFu;
                 if (bytes < 4)
-                    return parse_fail(out, err, errsz,
-                                      "variable import relocation block has invalid size");
+                    return parse_fail(
+                        out, err, errsz,
+                        "variable import relocation block has invalid size");
                 const uint8_t *block = vm_va(img, v->stub, bytes);
                 if (!block)
-                    return parse_fail(out, err, errsz,
-                                      "variable import relocation block is incomplete");
+                    return parse_fail(
+                        out, err, errsz,
+                        "variable import relocation block is incomplete");
                 {
                     vita_var_reloc_table relocations;
                     vita_reloc_error relocation_error;
                     vita_reloc_status relocation_status =
-                        vita_var_reloc_parse_block(
-                            block, bytes, &relocations, &relocation_error);
+                        vita_var_reloc_parse_block(block, bytes, &relocations,
+                                                   &relocation_error);
                     if (relocation_status != VITA_RELOC_OK) {
                         vita_var_reloc_free(&relocations);
-                        return parse_fail(
-                            out, err, errsz,
-                            relocation_error.message[0]
-                                ? relocation_error.message
-                                : "variable import relocation block is invalid");
+                        return parse_fail(out, err, errsz,
+                                          relocation_error.message[0]
+                                              ? relocation_error.message
+                                              : "variable import relocation "
+                                                "block is invalid");
                     }
                     if (relocations.n)
-                        v->sites = (vm_var_site *)calloc(
-                            relocations.n, sizeof(vm_var_site));
+                        v->sites = (vm_var_site *)calloc(relocations.n,
+                                                         sizeof(vm_var_site));
                     if (relocations.n && !v->sites) {
                         vita_var_reloc_free(&relocations);
                         return parse_fail(out, err, errsz, "out of memory");
@@ -495,14 +585,13 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
                         const vita_var_reloc_entry *relocation_entry =
                             &relocations.v[s];
                         uint32_t address;
-                        if (!vm_segment_offset(
-                                img, relocation_entry->patch_seg,
-                                relocation_entry->offset, 4,
-                                &address)) {
+                        if (!vm_segment_offset(img, relocation_entry->patch_seg,
+                                               relocation_entry->offset, 4,
+                                               &address)) {
                             vita_var_reloc_free(&relocations);
-                            return parse_fail(
-                                out, err, errsz,
-                                "variable import site lies outside its patch segment");
+                            return parse_fail(out, err, errsz,
+                                              "variable import site lies "
+                                              "outside its patch segment");
                         }
                         if (relocation_entry->code != 2 &&
                             relocation_entry->code != 0x2F &&
@@ -515,8 +604,7 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
                         v->sites[v->site_count].addr = address;
                         v->sites[v->site_count].addend =
                             relocation_entry->addend;
-                        v->sites[v->site_count].code =
-                            relocation_entry->code;
+                        v->sites[v->site_count].code = relocation_entry->code;
                         v->site_count++;
                     }
                     vita_var_reloc_free(&relocations);
@@ -534,12 +622,14 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
 }
 
 void vm_free(vm_module *m) {
-    if (!m) return;
+    if (!m)
+        return;
     m->metadata_complete = 0;
     free(m->stubs);
     m->stubs = NULL;
     m->stub_count = 0;
-    for (uint32_t i = 0; i < m->var_count; i++) free(m->vars[i].sites);
+    for (uint32_t i = 0; i < m->var_count; i++)
+        free(m->vars[i].sites);
     free(m->vars);
     m->vars = NULL;
     m->var_count = 0;
@@ -549,16 +639,24 @@ void vm_free(vm_module *m) {
     m->function_export_count = 0;
     m->variable_export_count = 0;
     m->tls_variable_export_count = 0;
+    free(m->unwind_entries);
+    m->unwind_entries = NULL;
+    m->unwind_entry_count = 0;
 }
 
 const vm_stub *vm_find_stub(const vm_module *m, uint32_t addr) {
-    if (!m || !m->stubs) return NULL;
+    if (!m || !m->stubs)
+        return NULL;
     uint32_t lo = 0, hi = m->stub_count;
     addr &= ~1u;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2;
-        if (m->stubs[mid].addr == addr) return &m->stubs[mid];
-        if (m->stubs[mid].addr <  addr) lo = mid + 1; else hi = mid;
+        if (m->stubs[mid].addr == addr)
+            return &m->stubs[mid];
+        if (m->stubs[mid].addr < addr)
+            lo = mid + 1;
+        else
+            hi = mid;
     }
     return NULL;
 }

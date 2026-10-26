@@ -19,13 +19,15 @@
 #error "tests must be built with asserts enabled (NDEBUG is defined)"
 #endif
 
-/* --- shifts ----------------------------------------------------------------- */
+/* --- shifts -----------------------------------------------------------------
+ */
 
 static void test_shifts(void) {
     /* The headline case. C leaves a shift by >= the width undefined, and on x86
      * the hardware masks the count to 5 bits — so the naive `v << n` returns
      * the operand UNCHANGED for n == 32, which is the opposite of ARM's answer.
-     * This is invisible until a shift amount is computed rather than constant. */
+     * This is invisible until a shift amount is computed rather than constant.
+     */
     assert(vita_lsl(1u, 32) == 0u);
     assert(vita_lsl(0xFFFFFFFFu, 32) == 0u);
     assert(vita_lsl(1u, 33) == 0u);
@@ -40,19 +42,20 @@ static void test_shifts(void) {
     assert(vita_asr(0x80000000u, 99) == 0xFFFFFFFFu);
     assert(vita_asr(0x7FFFFFFFu, 32) == 0u);
     assert(vita_asr(0x80000000u, 31) == 0xFFFFFFFFu);
-    assert(vita_asr(0xFFFFFFF0u, 4)  == 0xFFFFFFFFu);
-    assert(vita_asr(0x00000010u, 4)  == 1u);
-    assert(vita_asr(0x12345678u, 0)  == 0x12345678u);
+    assert(vita_asr(0xFFFFFFF0u, 4) == 0xFFFFFFFFu);
+    assert(vita_asr(0x00000010u, 4) == 1u);
+    assert(vita_asr(0x12345678u, 0) == 0x12345678u);
 
     /* ROR by 32 is the identity, not zero. */
     assert(vita_ror(0x12345678u, 32) == 0x12345678u);
-    assert(vita_ror(0x00000001u, 1)  == 0x80000000u);
+    assert(vita_ror(0x00000001u, 1) == 0x80000000u);
     assert(vita_ror(0x80000000u, 31) == 0x00000001u);
 
     printf("  shifts (>=32 defined)          ok\n");
 }
 
-/* --- flags ------------------------------------------------------------------ */
+/* --- flags ------------------------------------------------------------------
+ */
 
 static void test_flags_add(void) {
     vita_flags_add(1u, 1u, 2u);
@@ -79,15 +82,16 @@ static void test_flags_sub(void) {
      * opposite of the intuitive reading and of several other architectures, and
      * getting it backwards inverts every unsigned comparison in the program. */
     vita_flags_sub(5u, 3u, 2u);
-    assert(flag_c);                 /* 5 >= 3, no borrow -> carry SET   */
+    assert(flag_c); /* 5 >= 3, no borrow -> carry SET   */
 
     vita_flags_sub(3u, 5u, (uint32_t)-2);
-    assert(!flag_c);                /* 3 < 5, borrowed   -> carry CLEAR */
+    assert(!flag_c); /* 3 < 5, borrowed   -> carry CLEAR */
 
     vita_flags_sub(5u, 5u, 0u);
-    assert(flag_c && flag_z);       /* equal: no borrow, and zero       */
+    assert(flag_c && flag_z); /* equal: no borrow, and zero       */
 
-    /* Signed overflow on subtraction: positive minus negative going negative. */
+    /* Signed overflow on subtraction: positive minus negative going negative.
+     */
     vita_flags_sub(0x7FFFFFFFu, 0xFFFFFFFFu, 0x80000000u);
     assert(flag_v);
 
@@ -111,45 +115,74 @@ static void test_flags_adc(void) {
     printf("  flags: adc carry-in edge case  ok\n");
 }
 
-/* --- condition codes -------------------------------------------------------- */
+/* --- condition codes --------------------------------------------------------
+ */
 
 static void test_conditions(void) {
     /* eq / ne */
-    flag_z = 1; assert(vita_cond(0x0)); assert(!vita_cond(0x1));
-    flag_z = 0; assert(!vita_cond(0x0)); assert(vita_cond(0x1));
+    flag_z = 1;
+    assert(vita_cond(0x0));
+    assert(!vita_cond(0x1));
+    flag_z = 0;
+    assert(!vita_cond(0x0));
+    assert(vita_cond(0x1));
 
     /* cs / cc */
-    flag_c = 1; assert(vita_cond(0x2)); assert(!vita_cond(0x3));
-    flag_c = 0; assert(!vita_cond(0x2)); assert(vita_cond(0x3));
+    flag_c = 1;
+    assert(vita_cond(0x2));
+    assert(!vita_cond(0x3));
+    flag_c = 0;
+    assert(!vita_cond(0x2));
+    assert(vita_cond(0x3));
 
     /* The signed conditions depend on N and V agreeing, which is the part that
      * is easy to write as a plain comparison and get wrong. */
-    flag_n = 0; flag_v = 0; assert(vita_cond(0xA));  /* ge */
-    flag_n = 1; flag_v = 1; assert(vita_cond(0xA));  /* ge: both set */
-    flag_n = 1; flag_v = 0; assert(!vita_cond(0xA));
-    flag_n = 1; flag_v = 0; assert(vita_cond(0xB));  /* lt */
+    flag_n = 0;
+    flag_v = 0;
+    assert(vita_cond(0xA)); /* ge */
+    flag_n = 1;
+    flag_v = 1;
+    assert(vita_cond(0xA)); /* ge: both set */
+    flag_n = 1;
+    flag_v = 0;
+    assert(!vita_cond(0xA));
+    flag_n = 1;
+    flag_v = 0;
+    assert(vita_cond(0xB)); /* lt */
 
     /* gt is ge AND not-zero; le is its complement. */
-    flag_n = 0; flag_v = 0; flag_z = 0; assert(vita_cond(0xC));
-    flag_z = 1;                          assert(!vita_cond(0xC));
-    flag_z = 1;                          assert(vita_cond(0xD));
+    flag_n = 0;
+    flag_v = 0;
+    flag_z = 0;
+    assert(vita_cond(0xC));
+    flag_z = 1;
+    assert(!vita_cond(0xC));
+    flag_z = 1;
+    assert(vita_cond(0xD));
 
     /* hi is carry AND not-zero — distinct from cs. */
-    flag_c = 1; flag_z = 0; assert(vita_cond(0x8));
-    flag_c = 1; flag_z = 1; assert(!vita_cond(0x8));
-    flag_c = 1; flag_z = 1; assert(vita_cond(0x9));  /* ls */
+    flag_c = 1;
+    flag_z = 0;
+    assert(vita_cond(0x8));
+    flag_c = 1;
+    flag_z = 1;
+    assert(!vita_cond(0x8));
+    flag_c = 1;
+    flag_z = 1;
+    assert(vita_cond(0x9)); /* ls */
 
-    assert(vita_cond(0xE));              /* al is always true */
+    assert(vita_cond(0xE)); /* al is always true */
 
     printf("  condition codes, all 16        ok\n");
 }
 
-/* --- sign extension and byte reversal --------------------------------------- */
+/* --- sign extension and byte reversal ---------------------------------------
+ */
 
 static void test_extends(void) {
     assert(vita_sxtb(0x7F) == 0x7Fu);
     assert(vita_sxtb(0x80) == 0xFFFFFF80u);
-    assert(vita_sxtb(0x12345680u) == 0xFFFFFF80u);   /* high bits ignored */
+    assert(vita_sxtb(0x12345680u) == 0xFFFFFF80u); /* high bits ignored */
     assert(vita_sxth(0x7FFF) == 0x7FFFu);
     assert(vita_sxth(0x8000) == 0xFFFF8000u);
     assert(vita_uxtb(0x1234) == 0x34u);
@@ -158,19 +191,20 @@ static void test_extends(void) {
     printf("  extends and rev                ok\n");
 }
 
-/* --- bitfields -------------------------------------------------------------- */
+/* --- bitfields --------------------------------------------------------------
+ */
 
 /* Expected values are the architecture's definition, not what the code
  * happens to return. The two that matter are the width-32 mask, where the
  * obvious `(1u << 32) - 1` is undefined, and SBFX's sign, which comes from the
  * top bit of the FIELD and not of the register. */
 static void test_bitfields(void) {
-    assert(vita_bf_mask(0)  == 0x00000000u);
-    assert(vita_bf_mask(8)  == 0x000000FFu);
+    assert(vita_bf_mask(0) == 0x00000000u);
+    assert(vita_bf_mask(8) == 0x000000FFu);
     assert(vita_bf_mask(32) == 0xFFFFFFFFu);
 
     assert(vita_ubfx(0xDEADBEEFu, 4, 8) == 0xEEu);
-    assert(vita_ubfx(0xDEADBEEFu, 0, 32) == 0xDEADBEEFu);   /* the UB case */
+    assert(vita_ubfx(0xDEADBEEFu, 0, 32) == 0xDEADBEEFu); /* the UB case */
     assert(vita_ubfx(0x80000000u, 31, 1) == 1u);
 
     /* Field 0x8 with width 4: its top bit is set, so it sign-extends — even
@@ -181,7 +215,7 @@ static void test_bitfields(void) {
 
     /* BFI preserves everything outside the field, which is what makes it a
      * read-modify-write of the destination rather than an assignment. */
-    assert(vita_bfi(0xFFFFFFFFu, 0x0u, 4, 8) == 0xFFFFF00Fu);   /* bfc */
+    assert(vita_bfi(0xFFFFFFFFu, 0x0u, 4, 8) == 0xFFFFF00Fu); /* bfc */
     assert(vita_bfi(0x00000000u, 0xFFu, 4, 8) == 0x00000FF0u);
     /* Source bits above the field width are discarded, not spilled. */
     assert(vita_bfi(0x00000000u, 0xFFFFu, 4, 8) == 0x00000FF0u);
@@ -242,6 +276,71 @@ static void boundary_exit_entry(void) {
     g_entry_progress = 1;
     vita_runtime_request_exit(37);
     g_entry_progress = 2;
+}
+
+static void function_profile_trap_entry(void) {
+    vita_trace_fn(UINT32_C(0x81001001));
+    vita_trace_fn(UINT32_C(0x81002000));
+    vita_trace_fn(UINT32_C(0x81001001));
+    vita_trace_fn(UINT32_C(0x81003001));
+    vita_trace_fn(UINT32_C(0x81002000));
+    vita_trap_unimpl(UINT32_C(0x81004000), UINT32_C(0xFFFFFFFF),
+                     "synthetic profile boundary");
+}
+
+static void test_function_profile(void) {
+    vita_guest_call_result result;
+    vita_function_profile_summary summary;
+    vita_function_profile_entry entries[3];
+    size_t entry_count = 0u;
+
+    vita_function_profile_set_enabled(1);
+    vita_function_profile_reset();
+    assert(vita_function_profile_is_enabled());
+    assert(vita_guest_call(function_profile_trap_entry, &result) == VITA_OK);
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+
+    assert(vita_function_profile_snapshot(NULL, 0u, &entry_count, &summary) ==
+           VITA_OK);
+    assert(entry_count == 3u);
+    assert(summary.event_count == 5u);
+    assert(summary.dropped_events == 0u);
+    assert(summary.tracked_function_count == 3u);
+    assert(summary.first_trap.captured == 1u);
+    assert(summary.first_trap.kind ==
+           VITA_STRICT_FAILURE_UNTRANSLATED_INSTRUCTION);
+    assert(summary.first_trap.source_address == UINT32_C(0x81004000));
+    assert(summary.first_trap.sequence == 5u);
+    assert(summary.first_trap.recent_count == 5u);
+    assert(summary.first_trap.recent_addresses[0] == UINT32_C(0x81002000));
+    assert(summary.first_trap.recent_addresses[1] == UINT32_C(0x81003001));
+    assert(summary.first_trap.recent_addresses[2] == UINT32_C(0x81001001));
+
+    assert(vita_function_profile_snapshot(entries, 2u, &entry_count,
+                                          &summary) == VITA_ERROR_LIMIT);
+    assert(vita_function_profile_snapshot(entries, 3u, &entry_count,
+                                          &summary) == VITA_OK);
+    assert(entries[0].address == UINT32_C(0x81002000));
+    assert(entries[0].first_trap_distance == 0u);
+    assert(entries[0].hit_count == 2u);
+    assert(entries[0].first_sequence == 2u);
+    assert(entries[0].last_sequence == 5u);
+    assert(entries[1].address == UINT32_C(0x81003001));
+    assert(entries[1].first_trap_distance == 1u);
+    assert(entries[1].hit_count == 1u);
+    assert(entries[2].address == UINT32_C(0x81001001));
+    assert(entries[2].first_trap_distance == 2u);
+    assert(entries[2].hit_count == 2u);
+
+    vita_function_profile_set_enabled(0);
+    vita_function_profile_reset();
+    vita_trace_fn(UINT32_C(0x81005001));
+    assert(vita_function_profile_snapshot(NULL, 0u, &entry_count, &summary) ==
+           VITA_OK);
+    assert(entry_count == 0u);
+    assert(summary.event_count == 0u);
+    assert(!vita_function_profile_is_enabled());
+    printf("  native function trap ranking   ok\n");
 }
 
 static void test_guest_boundary(void) {
@@ -342,17 +441,23 @@ static void mark_c(void) { g_called = 3; }
 
 static void test_dispatch(void) {
     static const vita_dispatch_entry sorted[] = {
-        { 0x81000100u, mark_a },   /* ARM */
-        { 0x81000101u, mark_b },   /* Thumb, same aligned address */
-        { 0x81000301u, mark_c },
+        {0x81000100u, mark_a}, /* ARM */
+        {0x81000101u, mark_b}, /* Thumb, same aligned address */
+        {0x81000301u, mark_c},
     };
     vita_dispatch_init(sorted, 3);
 
-    g_called = 0; vita_dispatch(0, 0x81000100u); assert(g_called == 1);
-    g_called = 0; vita_dispatch(0, 0x81000301u); assert(g_called == 3);
+    g_called = 0;
+    vita_dispatch(0, 0x81000100u);
+    assert(g_called == 1);
+    g_called = 0;
+    vita_dispatch(0, 0x81000301u);
+    assert(g_called == 3);
 
     /* ARM and Thumb at one aligned address are distinct dispatch keys. */
-    g_called = 0; vita_dispatch(0, 0x81000101u); assert(g_called == 2);
+    g_called = 0;
+    vita_dispatch(0, 0x81000101u);
+    assert(g_called == 2);
 
     assert(vita_dispatch_hits() == 3);
     assert(vita_dispatch_misses() == 0);
@@ -360,8 +465,8 @@ static void test_dispatch(void) {
     /* An unsorted table is refused outright: count goes to zero, so every
      * lookup misses loudly instead of some lookups missing quietly. */
     static const vita_dispatch_entry unsorted[] = {
-        { 0x81000301u, mark_c },
-        { 0x81000100u, mark_a },
+        {0x81000301u, mark_c},
+        {0x81000100u, mark_a},
     };
     vita_dispatch_init(unsorted, 2);
     g_called = 0;
@@ -401,45 +506,67 @@ static void test_hle_libc(void) {
 
     /* strlen measures inside guest memory. */
     const char *msg = "cardgame";
-    for (uint32_t i = 0; i <= 8; i++) vita_write8(GBASE + 0x100 + i, (uint8_t)msg[i]);
-    r0 = GBASE + 0x100; vita_hle_strlen();
+    for (uint32_t i = 0; i <= 8; i++)
+        vita_write8(GBASE + 0x100 + i, (uint8_t)msg[i]);
+    r0 = GBASE + 0x100;
+    vita_hle_strlen();
     assert(r0 == 8);
 
     /* strcpy copies the terminator too, which is why it needs len + 1. */
-    r0 = GBASE + 0x200; r1 = GBASE + 0x100; vita_hle_strcpy();
-    r0 = GBASE + 0x200; vita_hle_strlen();
+    r0 = GBASE + 0x200;
+    r1 = GBASE + 0x100;
+    vita_hle_strcpy();
+    r0 = GBASE + 0x200;
+    vita_hle_strlen();
     assert(r0 == 8);
     assert(vita_read8(GBASE + 0x208) == 0);
 
     /* memcpy returns nothing we check, but must move the bytes. */
-    r0 = GBASE + 0x300; r1 = GBASE + 0x100; r2 = 9; vita_hle_memcpy();
-    r0 = GBASE + 0x300; r1 = GBASE + 0x100; r2 = 9; vita_hle_memcmp();
+    r0 = GBASE + 0x300;
+    r1 = GBASE + 0x100;
+    r2 = 9;
+    vita_hle_memcpy();
+    r0 = GBASE + 0x300;
+    r1 = GBASE + 0x100;
+    r2 = 9;
+    vita_hle_memcmp();
     assert(r0 == 0);
 
     /* strncpy pads the WHOLE remainder with NULs, not just one. */
-    for (uint32_t i = 0; i < 16; i++) vita_write8(GBASE + 0x400 + i, 0xAA);
-    r0 = GBASE + 0x400; r1 = GBASE + 0x100; r2 = 12; vita_hle_strncpy();
+    for (uint32_t i = 0; i < 16; i++)
+        vita_write8(GBASE + 0x400 + i, 0xAA);
+    r0 = GBASE + 0x400;
+    r1 = GBASE + 0x100;
+    r2 = 12;
+    vita_hle_strncpy();
     assert(vita_read8(GBASE + 0x408) == 0);
     assert(vita_read8(GBASE + 0x40B) == 0);
-    assert(vita_read8(GBASE + 0x40C) == 0xAA);   /* and no further */
+    assert(vita_read8(GBASE + 0x40C) == 0xAA); /* and no further */
 
     /* strchr returns a GUEST pointer, not a host one. */
-    r0 = GBASE + 0x100; r1 = 'g'; vita_hle_strchr();
+    r0 = GBASE + 0x100;
+    r1 = 'g';
+    vita_hle_strchr();
     assert(r0 == GBASE + 0x104);
-    r0 = GBASE + 0x100; r1 = 'z'; vita_hle_strchr();
+    r0 = GBASE + 0x100;
+    r1 = 'z';
+    vita_hle_strchr();
     assert(r0 == 0);
 
     /* The heap hands out guest addresses inside its region, 8-aligned. */
     uint32_t used0 = vita_heap_used();
-    r0 = 10; vita_hle_malloc();
+    r0 = 10;
+    vita_hle_malloc();
     uint32_t a = r0;
     assert(a >= GBASE + 32 * 1024 && a < GBASE + 48 * 1024);
     assert((a & 7u) == 0);
-    r0 = 10; vita_hle_malloc();
-    assert(r0 != a);                              /* distinct allocations */
+    r0 = 10;
+    vita_hle_malloc();
+    assert(r0 != a); /* distinct allocations */
     assert(vita_heap_used() > used0);
-    r0 = 0; vita_hle_malloc();
-    assert(r0 == 0);                              /* malloc(0) is NULL here */
+    r0 = 0;
+    vita_hle_malloc();
+    assert(r0 == 0); /* malloc(0) is NULL here */
 
     /* errno needs an address the guest can write through. */
     vita_hle__sceLibcErrnoLoc();
@@ -451,9 +578,14 @@ static void test_hle_libc(void) {
     /* A static-init guard reports "run the constructor" exactly once. */
     uint32_t guard = GBASE + 0x500;
     vita_write8(guard, 0);
-    r0 = guard; vita_hle___cxa_guard_acquire(); assert(r0 == 1);
-    r0 = guard; vita_hle___cxa_guard_release();
-    r0 = guard; vita_hle___cxa_guard_acquire(); assert(r0 == 0);
+    r0 = guard;
+    vita_hle___cxa_guard_acquire();
+    assert(r0 == 1);
+    r0 = guard;
+    vita_hle___cxa_guard_release();
+    r0 = guard;
+    vita_hle___cxa_guard_acquire();
+    assert(r0 == 0);
 
     /* None of the above should have touched anything unbacked. */
     assert(vita_mem_bad_access == 0);
@@ -462,20 +594,20 @@ static void test_hle_libc(void) {
     printf("  hle: SceLibc over guest memory ok\n");
 }
 
-/* --- memory ----------------------------------------------------------------- */
+/* --- memory -----------------------------------------------------------------
+ */
 
 static void test_memory(void) {
     const vita_mem_strict_range strict_range = {
-        UINT32_C(0x81002000), UINT32_C(0x1000),
-        UINT32_C(0xAABBCCDD), "SceSynthetic::unresolvedVariable"
-    };
+        UINT32_C(0x81002000), UINT32_C(0x1000), UINT32_C(0xAABBCCDD),
+        "SceSynthetic::unresolvedVariable"};
     vita_guest_call_result result;
     assert(vita_mem_init(0x81000000u, 64 * 1024) == 0);
     vita_mem_bad_access = 0;
 
     vita_write32(0x81000000u, 0xDEADBEEFu);
     assert(vita_read32(0x81000000u) == 0xDEADBEEFu);
-    assert(vita_read8(0x81000000u) == 0xEFu);        /* little-endian */
+    assert(vita_read8(0x81000000u) == 0xEFu); /* little-endian */
     assert(vita_read16(0x81000002u) == 0xDEADu);
 
     /* Unaligned access is legal on ARMv7 and must not fault or be reordered. */
@@ -486,7 +618,7 @@ static void test_memory(void) {
     /* Out of range is COUNTED, not silently absorbed and not a wild write. */
     vita_read32(0x90000000u);
     assert(vita_mem_bad_access == 1);
-    vita_write32(0x80000000u, 1u);                   /* below the base */
+    vita_write32(0x80000000u, 1u); /* below the base */
     assert(vita_mem_bad_access == 2);
 
     /* An access straddling the end of the region is refused rather than
@@ -503,8 +635,8 @@ static void test_memory(void) {
     assert(result.failure.source_address == 0);
     assert(result.failure.target_address == UINT32_C(0x81002010));
     assert(result.failure.nid == UINT32_C(0xAABBCCDD));
-    assert(strcmp(result.failure.name,
-                  "SceSynthetic::unresolvedVariable") == 0);
+    assert(strcmp(result.failure.name, "SceSynthetic::unresolvedVariable") ==
+           0);
     vita_mem_clear_strict_ranges();
     g_entry_progress = 0;
     assert(vita_guest_call(boundary_variable_entry, &result) == VITA_OK);
@@ -527,6 +659,7 @@ int main(void) {
     test_dispatch();
     test_hle_libc();
     test_memory();
+    test_function_profile();
     test_guest_boundary();
     printf("all runtime tests passed\n");
     return 0;

@@ -1,4 +1,4 @@
-/* module.h — .sce_module_info, and the export/import tables it points at.
+/* module.h — .sce_module_info and the metadata tables it points at.
  *
  * e_entry does NOT point at code on Vita. It points at this structure, which
  * then names the real entry points and the module's export and import tables.
@@ -23,25 +23,25 @@
 /* Offsets inside the module tables are relative to the segment base, not
  * absolute, so both bases are needed to resolve one. */
 typedef struct {
-    uint32_t file;            /* p_offset  */
-    uint32_t vaddr;           /* p_vaddr   */
-    uint32_t len;             /* p_filesz  */
-    uint32_t mem_len;         /* p_memsz, for composed load ranges */
-    uint32_t align;           /* p_align, retained for TLS contracts */
+    uint32_t file;    /* p_offset  */
+    uint32_t vaddr;   /* p_vaddr   */
+    uint32_t len;     /* p_filesz  */
+    uint32_t mem_len; /* p_memsz, for composed load ranges */
+    uint32_t align;   /* p_align, retained for TLS contracts */
     uint32_t program_header_index;
 } vm_seg;
 
 #define VM_MAX_DATA_SEGS 8
 
 typedef struct {
-    const uint8_t *data;      /* the whole ELF file                     */
-    size_t         size;
-    uint32_t       seg_file;  /* p_offset of the executable segment     */
-    uint32_t       seg_vaddr; /* p_vaddr of the executable segment      */
-    uint32_t       seg_len;   /* p_filesz                               */
-    uint32_t       seg_mem_len; /* p_memsz, for composed load ranges     */
-    uint32_t       seg_align; /* p_align                                */
-    uint32_t       seg_program_header_index;
+    const uint8_t *data; /* the whole ELF file                     */
+    size_t size;
+    uint32_t seg_file;    /* p_offset of the executable segment     */
+    uint32_t seg_vaddr;   /* p_vaddr of the executable segment      */
+    uint32_t seg_len;     /* p_filesz                               */
+    uint32_t seg_mem_len; /* p_memsz, for composed load ranges     */
+    uint32_t seg_align;   /* p_align                                */
+    uint32_t seg_program_header_index;
 
     /* The other PT_LOAD segments — the writable data the module ships with.
      *
@@ -55,15 +55,15 @@ typedef struct {
      * They matter because the C++ static-constructor table lives here, not in
      * .text — so a discovery pass that only sweeps the executable segment
      * cannot see the first code the program runs. */
-    vm_seg         data_segs[VM_MAX_DATA_SEGS];
-    uint32_t       data_seg_count;
+    vm_seg data_segs[VM_MAX_DATA_SEGS];
+    uint32_t data_seg_count;
 } vm_image;
 
 typedef struct {
     uint16_t attributes;
-    uint16_t version;         /* 0x0101                                 */
-    char     name[28];
-    uint8_t  type;
+    uint16_t version; /* 0x0101                                 */
+    char name[28];
+    uint8_t type;
     uint32_t gp_value;
     uint32_t export_top, export_end;
     uint32_t import_top, import_end;
@@ -77,12 +77,12 @@ typedef struct {
 /* One imported library, and the functions taken from it. */
 typedef struct {
     uint32_t library_nid;
-    char     name[64];
+    char name[64];
     uint16_t num_funcs;
     uint16_t num_vars;
-    uint32_t func_nid_table;    /* segment-relative */
+    uint32_t func_nid_table; /* segment-relative */
     uint32_t func_entry_table;
-    uint32_t var_nid_table;     /* absolute, like the function tables */
+    uint32_t var_nid_table; /* absolute, like the function tables */
     uint32_t var_entry_table;
 } vm_import;
 
@@ -95,9 +95,9 @@ typedef struct {
  * this table. Without it every firmware call looks like an internal call to a
  * function whose body is a placeholder the loader was supposed to overwrite. */
 typedef struct {
-    uint32_t addr;        /* stub address in .text, mode bit cleared */
-    uint32_t dispatch_key;/* stub address with the imported entry's mode bit */
-    uint32_t target_site; /* import-table entry word, before stub sorting */
+    uint32_t addr;         /* stub address in .text, mode bit cleared */
+    uint32_t dispatch_key; /* stub address with the imported entry's mode bit */
+    uint32_t target_site;  /* import-table entry word, before stub sorting */
     uint32_t lib_nid;
     uint32_t func_nid;
 } vm_stub;
@@ -106,8 +106,9 @@ typedef struct {
  * a word (ABS32, code 2) or a MOVW/MOVT pair (codes 0x2F and 0x30). */
 typedef struct {
     uint32_t addr;
-    uint32_t addend;    /* added to the variable's address: 8 for a vtable pointer */
-    uint8_t  code;
+    uint32_t
+        addend; /* added to the variable's address: 8 for a vtable pointer */
+    uint8_t code;
 } vm_var_site;
 
 /* One imported variable. A function import is a call the loader redirects;
@@ -118,11 +119,11 @@ typedef struct {
  * second the offset into the executable segment. Unbound, every site holds
  * a placeholder that points back at the block. */
 typedef struct {
-    uint32_t     lib_nid;
-    uint32_t     var_nid;
-    uint32_t     stub;          /* the placeholder block */
+    uint32_t lib_nid;
+    uint32_t var_nid;
+    uint32_t stub; /* the placeholder block */
     vm_var_site *sites;
-    uint32_t     site_count;
+    uint32_t site_count;
 } vm_var;
 
 enum {
@@ -134,44 +135,54 @@ enum {
 typedef struct {
     uint32_t library_nid;
     uint32_t nid;
-    uint32_t address;       /* raw table value; function mode bit retained */
-    uint8_t  kind;          /* one of VM_EXPORT_* */
+    uint32_t address; /* raw table value; function mode bit retained */
+    uint8_t kind;     /* one of VM_EXPORT_* */
 } vm_export;
+
+/* One decoded .ARM.exidx function reference. EHABI PREL31 relocation results
+ * retain the function's ARM/Thumb mode in bit zero. */
+typedef struct {
+    uint32_t dispatch_key;
+} vm_unwind_entry;
 
 #define VM_MAX_IMPORTS 256
 
 typedef struct {
     vm_module_info info;
-    int            have_info;
-    int            metadata_complete; /* module/import/export tables validated */
-    vm_import      imports[VM_MAX_IMPORTS];
-    int            import_count;
-    int            import_truncated;   /* more than VM_MAX_IMPORTS present */
-    uint32_t       total_func_imports;
+    int have_info;
+    int metadata_complete; /* module/import/export tables validated */
+    vm_import imports[VM_MAX_IMPORTS];
+    int import_count;
+    int import_truncated; /* more than VM_MAX_IMPORTS present */
+    uint32_t total_func_imports;
 
-    vm_stub       *stubs;              /* sorted by addr; free with vm_free() */
-    uint32_t       stub_count;
+    vm_stub *stubs; /* sorted by addr; free with vm_free() */
+    uint32_t stub_count;
 
-    vm_var        *vars;               /* imported variables; free with vm_free() */
-    uint32_t       var_count;
-    uint32_t       total_var_imports;
+    vm_var *vars; /* imported variables; free with vm_free() */
+    uint32_t var_count;
+    uint32_t total_var_imports;
 
-    vm_export     *exports;             /* complete function/variable export table */
-    uint32_t       export_count;
-    uint32_t       function_export_count;
-    uint32_t       variable_export_count;
-    uint32_t       tls_variable_export_count;
+    vm_export *exports; /* complete function/variable export table */
+    uint32_t export_count;
+    uint32_t function_export_count;
+    uint32_t variable_export_count;
+    uint32_t tls_variable_export_count;
+
+    vm_unwind_entry *unwind_entries; /* table order, mode bit retained */
+    uint32_t unwind_entry_count;
 } vm_module;
 
 void vm_free(vm_module *m);
 
-/* Look up a call target. Returns NULL when the address is not an import stub. */
+/* Look up a call target. Returns NULL when the address is not an import stub.
+ */
 const vm_stub *vm_find_stub(const vm_module *m, uint32_t addr);
 
 /* Parse the module info at `entry` (the raw e_entry value; the segment index in
  * its top two bits is honoured). Returns 0 on success. */
-int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
-             char *err, size_t errsz);
+int vm_parse(const vm_image *img, uint32_t entry, vm_module *out, char *err,
+             size_t errsz);
 
 /* Two resolvers, because the module uses two conventions and they are not
  * interchangeable:

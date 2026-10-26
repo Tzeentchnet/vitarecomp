@@ -92,24 +92,20 @@ static const vita_usse_family_match FAMILY_MATCHES[] = {
 };
 
 static const char *const FAMILY_NAMES[] = {
-    "UNKNOWN",   "VMAD2",     "V32NMAD", "V16NMAD", "VMAD",
-    "VDP",       "VDUAL",     "VCOMP",   "VMOV",    "VPCK",
-    "VTST",      "VTSTMSK",   "VBW",     "SOP2",    "SOP2M",
-    "SOP3",      "I8MAD",     "I16MAD",  "I32MAD",  "ILLEGAL22",
-    "ILLEGAL23", "ILLEGAL24", "I8MAD2",  "I32MAD2", "ILLEGAL27",
-    "SMP",       "PHAS",      "NOP",     "BR",      "SMLSI",
-    "SMBO",      "KILL",      "LIMM",    "DEPTHF",  "SPEC",
-    "VLDST",
+    "UNKNOWN",   "VMAD2",     "V32NMAD",   "V16NMAD",   "VMAD",   "VDP",
+    "VDUAL",     "VCOMP",     "VMOV",      "VPCK",      "VTST",   "VTSTMSK",
+    "VBW",       "SOP2",      "SOP2M",     "SOP3",      "I8MAD",  "I16MAD",
+    "I32MAD",    "ILLEGAL22", "ILLEGAL23", "ILLEGAL24", "I8MAD2", "I32MAD2",
+    "ILLEGAL27", "SMP",       "PHAS",      "NOP",       "BR",     "SMLSI",
+    "SMBO",      "KILL",      "LIMM",      "DEPTHF",    "SPEC",   "VLDST",
 };
 
-_Static_assert(
-    sizeof(FAMILY_MATCHES) / sizeof(FAMILY_MATCHES[0]) ==
-        (size_t)VITA_USSE_OPCODE_FAMILY_COUNT - 1u,
-    "every non-UNKNOWN USSE family must have one matcher");
-_Static_assert(
-    sizeof(FAMILY_NAMES) / sizeof(FAMILY_NAMES[0]) ==
-        (size_t)VITA_USSE_OPCODE_FAMILY_COUNT,
-    "every USSE family must have one static name");
+_Static_assert(sizeof(FAMILY_MATCHES) / sizeof(FAMILY_MATCHES[0]) ==
+                   (size_t)VITA_USSE_OPCODE_FAMILY_COUNT - 1u,
+               "every non-UNKNOWN USSE family must have one matcher");
+_Static_assert(sizeof(FAMILY_NAMES) / sizeof(FAMILY_NAMES[0]) ==
+                   (size_t)VITA_USSE_OPCODE_FAMILY_COUNT,
+               "every USSE family must have one static name");
 
 static uint64_t read_u64_le(const uint8_t *bytes) {
     uint64_t value = 0;
@@ -135,9 +131,9 @@ static int family_is_illegal(vita_usse_opcode_family family) {
            family == VITA_USSE_OPCODE_ILLEGAL27;
 }
 
-static vita_usse_census_result census_stream(
-    const vita_usse_stream_view *stream, vita_usse_phase phase,
-    vita_usse_census *census) {
+static vita_usse_census_result
+census_stream(const vita_usse_stream_view *stream, vita_usse_phase phase,
+              vita_usse_census *census) {
     const uint64_t required_size =
         (uint64_t)stream->instruction_count * UINT64_C(8);
     if ((stream->instruction_count != 0u && !stream->bytes) ||
@@ -145,9 +141,8 @@ static vita_usse_census_result census_stream(
         return VITA_USSE_CENSUS_STREAM_OUT_OF_RANGE;
 
     for (uint32_t i = 0; i < stream->instruction_count; i++) {
-        const vita_usse_opcode_family family =
-            vita_usse_classify_word(
-                read_u64_le(stream->bytes + (size_t)i * 8u));
+        const vita_usse_opcode_family family = vita_usse_classify_word(
+            read_u64_le(stream->bytes + (size_t)i * 8u));
         census->total++;
         census->family_counts[family]++;
         if (family == VITA_USSE_OPCODE_UNKNOWN) {
@@ -172,9 +167,10 @@ static vita_usse_census_result census_stream(
     return VITA_USSE_CENSUS_OK;
 }
 
-vita_usse_census_result vita_usse_census_program(
-    const vita_usse_stream_view *primary,
-    const vita_usse_stream_view *secondary, vita_usse_census *census) {
+vita_usse_census_result
+vita_usse_census_program(const vita_usse_stream_view *primary,
+                         const vita_usse_stream_view *secondary,
+                         vita_usse_census *census) {
     vita_usse_census measured = {0};
     vita_usse_census_result result;
 
@@ -201,8 +197,8 @@ vita_usse_census_result vita_usse_census_program(
 const char *vita_usse_opcode_family_name(vita_usse_opcode_family family) {
     const uint32_t family_index = (uint32_t)family;
     return family_index < (uint32_t)VITA_USSE_OPCODE_FAMILY_COUNT
-        ? FAMILY_NAMES[family_index]
-        : "INVALID";
+               ? FAMILY_NAMES[family_index]
+               : "INVALID";
 }
 
 const char *vita_usse_phase_name(vita_usse_phase phase) {
@@ -213,6 +209,119 @@ const char *vita_usse_phase_name(vita_usse_phase phase) {
         return "PRIMARY";
     case VITA_USSE_PHASE_SECONDARY:
         return "SECONDARY";
+    }
+    return "INVALID";
+}
+
+const char *
+vita_usse_semantic_operation_name(vita_usse_semantic_operation operation) {
+    switch (operation) {
+    case VITA_USSE_SEMANTIC_INVALID:
+        return "INVALID";
+    case VITA_USSE_SEMANTIC_FMA:
+        return "FMA";
+    case VITA_USSE_SEMANTIC_MUL:
+        return "MUL";
+    case VITA_USSE_SEMANTIC_ADD:
+        return "ADD";
+    case VITA_USSE_SEMANTIC_FRACT:
+        return "FRACT";
+    case VITA_USSE_SEMANTIC_DDX:
+        return "DDX";
+    case VITA_USSE_SEMANTIC_DDY:
+        return "DDY";
+    case VITA_USSE_SEMANTIC_MIN:
+        return "MIN";
+    case VITA_USSE_SEMANTIC_MAX:
+        return "MAX";
+    case VITA_USSE_SEMANTIC_DOT:
+        return "DOT";
+    case VITA_USSE_SEMANTIC_PACK:
+        return "PACK";
+    case VITA_USSE_SEMANTIC_PHASE:
+        return "PHASE";
+    case VITA_USSE_SEMANTIC_NOP:
+        return "NOP";
+    case VITA_USSE_SEMANTIC_EMIT:
+        return "EMIT";
+    }
+    return "INVALID";
+}
+
+const char *vita_usse_register_bank_name(vita_usse_register_bank bank) {
+    switch (bank) {
+    case VITA_USSE_REGISTER_INVALID:
+        return "INVALID";
+    case VITA_USSE_REGISTER_TEMPORARY:
+        return "TEMPORARY";
+    case VITA_USSE_REGISTER_PRIMARY:
+        return "PRIMARY";
+    case VITA_USSE_REGISTER_OUTPUT:
+        return "OUTPUT";
+    case VITA_USSE_REGISTER_SECONDARY:
+        return "SECONDARY";
+    case VITA_USSE_REGISTER_INTERNAL:
+        return "INTERNAL";
+    case VITA_USSE_REGISTER_CONSTANT:
+        return "CONSTANT";
+    case VITA_USSE_REGISTER_IMMEDIATE:
+        return "IMMEDIATE";
+    case VITA_USSE_REGISTER_INDEX:
+        return "INDEX";
+    case VITA_USSE_REGISTER_INDEXED1:
+        return "INDEXED1";
+    case VITA_USSE_REGISTER_INDEXED2:
+        return "INDEXED2";
+    case VITA_USSE_REGISTER_GLOBAL:
+        return "GLOBAL";
+    }
+    return "INVALID";
+}
+
+const char *vita_usse_decode_result_name(vita_usse_decode_result result) {
+    switch (result) {
+    case VITA_USSE_DECODE_OK:
+        return "OK";
+    case VITA_USSE_DECODE_INVALID_ARGUMENT:
+        return "INVALID_ARGUMENT";
+    case VITA_USSE_DECODE_UNKNOWN_FAMILY:
+        return "UNKNOWN_FAMILY";
+    case VITA_USSE_DECODE_ILLEGAL_FAMILY:
+        return "ILLEGAL_FAMILY";
+    case VITA_USSE_DECODE_UNSUPPORTED_FAMILY:
+        return "UNSUPPORTED_FAMILY";
+    case VITA_USSE_DECODE_RESERVED_ENCODING:
+        return "RESERVED_ENCODING";
+    case VITA_USSE_DECODE_INVALID_REGISTER:
+        return "INVALID_REGISTER";
+    case VITA_USSE_DECODE_INVALID_SWIZZLE:
+        return "INVALID_SWIZZLE";
+    case VITA_USSE_DECODE_UNSUPPORTED_FORMAT:
+        return "UNSUPPORTED_FORMAT";
+    case VITA_USSE_DECODE_UNSUPPORTED_CONTROL:
+        return "UNSUPPORTED_CONTROL";
+    }
+    return "INVALID";
+}
+
+const char *vita_usse_translate_result_name(vita_usse_translate_result result) {
+    switch (result) {
+    case VITA_USSE_TRANSLATE_OK:
+        return "OK";
+    case VITA_USSE_TRANSLATE_INVALID_ARGUMENT:
+        return "INVALID_ARGUMENT";
+    case VITA_USSE_TRANSLATE_STREAM_OUT_OF_RANGE:
+        return "STREAM_OUT_OF_RANGE";
+    case VITA_USSE_TRANSLATE_DECODE_ERROR:
+        return "DECODE_ERROR";
+    case VITA_USSE_TRANSLATE_UNSUPPORTED_SEMANTIC:
+        return "UNSUPPORTED_SEMANTIC";
+    case VITA_USSE_TRANSLATE_INVALID_PROGRAM_ORDER:
+        return "INVALID_PROGRAM_ORDER";
+    case VITA_USSE_TRANSLATE_OUTPUT_TOO_SMALL:
+        return "OUTPUT_TOO_SMALL";
+    case VITA_USSE_TRANSLATE_INTERNAL_ERROR:
+        return "INTERNAL_ERROR";
     }
     return "INVALID";
 }

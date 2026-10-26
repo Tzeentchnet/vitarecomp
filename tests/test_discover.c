@@ -1,4 +1,7 @@
-/* test_discover.c — what discovery makes of stored pointers.
+/* test_discover.c — function roots and what discovery makes of stored pointers.
+ *
+ * Public synthetic module metadata first exercises bounded .ARM.exidx PREL31
+ * roots, mode-bearing keys, duplicate reason merging, and explicit rejection.
  *
  * A function nothing calls directly is known only by a word that holds its
  * address, and whether such a word is believed decides whether the function
@@ -38,21 +41,40 @@
 static uint8_t g_image[SIZE];
 static vm_module g_module;
 
-static void put16(uint32_t at, uint16_t v) { g_image[at] = (uint8_t)v; g_image[at + 1] = (uint8_t)(v >> 8); }
-static void put32(uint32_t at, uint32_t v) { put16(at, (uint16_t)v); put16(at + 2, (uint16_t)(v >> 16)); }
+static void put16(uint32_t at, uint16_t v) {
+    g_image[at] = (uint8_t)v;
+    g_image[at + 1] = (uint8_t)(v >> 8);
+}
+static void put32(uint32_t at, uint32_t v) {
+    put16(at, (uint16_t)v);
+    put16(at + 2, (uint16_t)(v >> 16));
+}
 
 static void build(vm_image *img) {
-    for (uint32_t at = 0; at < SIZE; at += 2) put16(at, 0xBF00);        /* nop */
+    memset(&g_module, 0, sizeof(g_module));
+    for (uint32_t at = 0; at < SIZE; at += 2)
+        put16(at, 0xBF00); /* nop */
 
     /* movw r1, #0x9418; movt r1, #0x818b; adds r1, #8; str r1, [r0]; bx lr */
-    put16(0x10, 0xF249); put16(0x12, 0x4118); put16(0x14, 0xF2C8); put16(0x16, 0x118B);
-    put16(0x18, 0x3108); put16(0x1A, 0x6001); put16(0x1C, 0x4770);
+    put16(0x10, 0xF249);
+    put16(0x12, 0x4118);
+    put16(0x14, 0xF2C8);
+    put16(0x16, 0x118B);
+    put16(0x18, 0x3108);
+    put16(0x1A, 0x6001);
+    put16(0x1C, 0x4770);
     /* push {r4, lr}; pop {r4, pc} */
-    put16(0x20, 0xB510); put16(0x22, 0xBD10);
+    put16(0x20, 0xB510);
+    put16(0x22, 0xBD10);
     /* movs r0, #0x81; adds r0, #0x90; bx lr */
-    put16(0x30, 0x2081); put16(0x32, 0x3090); put16(0x34, 0x4770);
+    put16(0x30, 0x2081);
+    put16(0x32, 0x3090);
+    put16(0x34, 0x4770);
     /* ldr r0, [r0, #4]; bx lr, three times over */
-    for (uint32_t at = 0x3C; at < 0x48; at += 4) { put16(at, 0x6840); put16(at + 2, 0x4770); }
+    for (uint32_t at = 0x3C; at < 0x48; at += 4) {
+        put16(at, 0x6840);
+        put16(at + 2, 0x4770);
+    }
     memcpy(g_image + 0x60, "The quick brown fox", 20);
 
     /* the virtual table: offset to top, type information, two functions */
@@ -82,7 +104,8 @@ static void build(vm_image *img) {
 /* Why discovery has a function at `addr`: its VF_R_* bits, 0 for none. */
 static unsigned reasons(const vf_result *r, uint32_t addr) {
     for (uint32_t i = 0; i < r->count; i++)
-        if (r->funcs[i].addr == addr) return r->funcs[i].reasons ? r->funcs[i].reasons : 0x8000u;
+        if (r->funcs[i].addr == addr)
+            return r->funcs[i].reasons ? r->funcs[i].reasons : 0x8000u;
     return 0;
 }
 
@@ -93,24 +116,168 @@ static unsigned mode_reasons(const vf_result *r, uint32_t addr, arm_mode mode) {
     return 0;
 }
 
+static unsigned mode_count(const vf_result *r, uint32_t addr, arm_mode mode) {
+    unsigned count = 0;
+    for (uint32_t i = 0; i < r->count; i++)
+        if (r->funcs[i].addr == addr && r->funcs[i].mode == mode)
+            count++;
+    return count;
+}
+
+static uint32_t prel31(uint32_t place, uint32_t target) {
+    int64_t displacement = (int64_t)target - place;
+    assert(displacement >= -INT64_C(0x40000000));
+    assert(displacement < INT64_C(0x40000000));
+    return (uint32_t)displacement & 0x7FFFFFFFu;
+}
+
+static void build_module_image(vm_image *img) {
+    memset(g_image, 0, sizeof(g_image));
+    memset(img, 0, sizeof(*img));
+    img->data = g_image;
+    img->size = SIZE;
+    img->seg_vaddr = BASE;
+    img->seg_len = SIZE;
+    put16(0x02, 0x0101);
+    put32(0x44, UINT32_MAX);
+}
+
+static void put_unwind_entry(uint32_t table_offset, uint32_t target) {
+    put32(table_offset, prel31(BASE + table_offset, target));
+    put32(table_offset + 4, 1u); /* EXIDX_CANTUNWIND */
+}
+
+static void test_unwind_roots(void) {
+    vm_image img;
+    vm_module mod;
+    vf_result r;
+    char err[128];
+
+    build_module_image(&img);
+    put32(0x4C, 0x180);
+    put32(0x50, 0x190);
+    put16(0x60, 0x4770);      /* Thumb: bx lr */
+    put32(0x70, 0xE12FFF1Eu); /* ARM: bx lr */
+    put_unwind_entry(0x180, BASE + 0x61);
+    put_unwind_entry(0x188, BASE + 0x70);
+
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) == 0);
+    assert(mod.unwind_entry_count == 2);
+    assert(mod.unwind_entries[0].dispatch_key == BASE + 0x61);
+    assert(mod.unwind_entries[1].dispatch_key == BASE + 0x70);
+    assert(vf_discover(&img, &mod, NULL, &r) == 0);
+    assert(r.seeds_unwind == 2);
+    assert(mode_reasons(&r, BASE + 0x60, ARM_T32) & VF_R_UNWIND);
+    assert(mode_reasons(&r, BASE + 0x70, ARM_A32) & VF_R_UNWIND);
+    assert(r.funcs[0].addr == BASE + 0x60 && r.funcs[0].mode == ARM_T32);
+    assert(r.funcs[1].addr == BASE + 0x70 && r.funcs[1].mode == ARM_A32);
+    vf_free(&r);
+    vm_free(&mod);
+    printf("  .ARM.exidx mode-bearing roots  ok\n");
+}
+
+static void test_unwind_duplicate_reasons(void) {
+    vm_image img;
+    vm_module mod;
+    vf_result r;
+    char err[128];
+
+    build_module_image(&img);
+    put16(0x60, 0x4770);
+
+    put32(0x24, 0x80);
+    put32(0x28, 0xA0);
+    put16(0x80, 0x20);
+    put16(0x86, 1);
+    put32(0x98, BASE + 0xA0);
+    put32(0x9C, BASE + 0xA4);
+    put32(0xA0, 0x11223344u);
+    put32(0xA4, BASE + 0x61);
+
+    put32(0x4C, 0x180);
+    put32(0x50, 0x190);
+    put_unwind_entry(0x180, BASE + 0x61);
+    put_unwind_entry(0x188, BASE + 0x61);
+
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) == 0);
+    assert(mod.unwind_entry_count == 2);
+    assert(vf_discover(&img, &mod, NULL, &r) == 0);
+    assert(r.seeds_export == 1);
+    assert(r.seeds_unwind == 2);
+    assert(mode_count(&r, BASE + 0x60, ARM_T32) == 1);
+    assert((mode_reasons(&r, BASE + 0x60, ARM_T32) &
+            (VF_R_EXPORT | VF_R_UNWIND)) == (VF_R_EXPORT | VF_R_UNWIND));
+    vf_free(&r);
+    vm_free(&mod);
+    printf("  unwind duplicate reason merge ok\n");
+}
+
+static void test_unwind_rejections(void) {
+    vm_image img;
+    vm_module mod;
+    char err[128];
+
+    build_module_image(&img);
+    put32(0x4C, 0x180);
+    put32(0x50, 0x18C);
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) != 0);
+    assert(strstr(err, ".ARM.exidx") && strstr(err, "misaligned"));
+
+    build_module_image(&img);
+    put32(0x4C, 0x180);
+    put32(0x50, SIZE + 8u);
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) != 0);
+    assert(strstr(err, ".ARM.exidx") && strstr(err, "past"));
+
+    build_module_image(&img);
+    put32(0x4C, 0x180);
+    put32(0x50, 0x188);
+    put_unwind_entry(0x180, BASE + SIZE + 1u);
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) != 0);
+    assert(strstr(err, ".ARM.exidx") && strstr(err, "outside"));
+
+    build_module_image(&img);
+    put32(0x4C, 0x180);
+    put32(0x50, 0x188);
+    put_unwind_entry(0x180, BASE + 0x62);
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) != 0);
+    assert(strstr(err, ".ARM.exidx") && strstr(err, "word-aligned"));
+
+    build_module_image(&img);
+    put32(0x4C, 0x180);
+    put32(0x50, 0x188);
+    put32(0x180, 0x80000000u);
+    put32(0x184, 1u);
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) != 0);
+    assert(strstr(err, ".ARM.exidx") && strstr(err, "PREL31"));
+    printf("  malformed unwind metadata     ok\n");
+}
+
 int main(void) {
     vm_image img;
     vf_result r;
     printf("discovery:\n");
 
+    test_unwind_roots();
+    test_unwind_duplicate_reasons();
+    test_unwind_rejections();
+
     build(&img);
     assert(vf_discover(&img, &g_module, NULL, &r) == 0);
-    assert(reasons(&r, BASE + 0x10) & VF_R_SHAPE);                      /* by the table's head */
+    assert(reasons(&r, BASE + 0x10) & VF_R_SHAPE); /* by the table's head */
     assert(reasons(&r, BASE + 0x20) & VF_R_SHAPE);
-    assert(reasons(&r, BASE + 0x30) & VF_R_WEAK_PTR);                   /* walked */
-    assert(!(reasons(&r, BASE + 0x30) & VF_R_ROOTS));                   /* and no root by that alone */
-    assert(reasons(&r, BASE + 0x40) & VF_R_WEAK_PTR);                   /* printable, and it returns */
-    assert(reasons(&r, BASE + 0x64) == 0);                              /* printable, and it does not */
+    assert(reasons(&r, BASE + 0x30) & VF_R_WEAK_PTR); /* walked */
+    assert(!(reasons(&r, BASE + 0x30) &
+             VF_R_ROOTS)); /* and no root by that alone */
+    assert(reasons(&r, BASE + 0x40) &
+           VF_R_WEAK_PTR);                 /* printable, and it returns */
+    assert(reasons(&r, BASE + 0x64) == 0); /* printable, and it does not */
     assert(r.seeds_weak == 2);
     vf_free(&r);
     printf("  a module without relocations   ok\n");
 
-    /* the same bytes in a module whose relocations name its pointers, and name none of these */
+    /* the same bytes in a module whose relocations name its pointers, and name
+     * none of these */
     vr_entry none;
     vr_table relocs;
     memset(&none, 0, sizeof(none));
@@ -120,8 +287,9 @@ int main(void) {
     relocs.n = relocs.cap = 1;
     build(&img);
     assert(vf_discover(&img, &g_module, &relocs, &r) == 0);
-    assert(reasons(&r, BASE + 0x10) == 0);                              /* two words are not a table */
-    assert(reasons(&r, BASE + 0x20) & VF_R_SHAPE);                      /* a prologue still is a function */
+    assert(reasons(&r, BASE + 0x10) == 0); /* two words are not a table */
+    assert(reasons(&r, BASE + 0x20) &
+           VF_R_SHAPE); /* a prologue still is a function */
     assert(reasons(&r, BASE + 0x30) == 0);
     assert(reasons(&r, BASE + 0x40) == 0);
     assert(reasons(&r, BASE + 0x64) == 0);

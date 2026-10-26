@@ -59,6 +59,35 @@ typedef struct vita_guest_call_result {
     vita_strict_failure failure;
 } vita_guest_call_result;
 
+#define VITA_FUNCTION_PROFILE_RECENT_LIMIT 64u
+
+typedef struct vita_function_profile_entry {
+    uint32_t address;
+    uint32_t first_trap_distance;
+    uint64_t hit_count;
+    uint64_t first_sequence;
+    uint64_t last_sequence;
+} vita_function_profile_entry;
+
+typedef struct vita_function_profile_trap {
+    uint32_t captured;
+    vita_strict_failure_kind kind;
+    uint32_t source_address;
+    uint32_t raw_instruction;
+    uint32_t target_address;
+    uint32_t nid;
+    uint64_t sequence;
+    uint32_t recent_count;
+    uint32_t recent_addresses[VITA_FUNCTION_PROFILE_RECENT_LIMIT];
+} vita_function_profile_trap;
+
+typedef struct vita_function_profile_summary {
+    uint64_t event_count;
+    uint64_t dropped_events;
+    uint32_t tracked_function_count;
+    vita_function_profile_trap first_trap;
+} vita_function_profile_summary;
+
 typedef enum vita_diag_severity {
     VITA_DIAG_TRACE,
     VITA_DIAG_INFO,
@@ -90,7 +119,8 @@ typedef struct vita_diagnostic {
     const char *message;
 } vita_diagnostic;
 
-typedef void (*vita_diagnostic_fn)(const vita_diagnostic *event, void *userdata);
+typedef void (*vita_diagnostic_fn)(const vita_diagnostic *event,
+                                   void *userdata);
 typedef void (*vita_exit_fn)(int status, void *userdata);
 
 typedef struct vita_runtime_config {
@@ -166,6 +196,20 @@ int vita_runtime_exit_requested(int *status);
  * reentrant calls return VITA_ERROR_BUSY without disturbing the active call.
  * Calls on separate threads use separate boundary state. */
 int vita_guest_call(vita_guest_entry_fn entry, vita_guest_call_result *result);
+
+/*
+ * Profiling is disabled by default. Enable and reset it before a private
+ * native title run. Snapshots rank first-trap-adjacent functions first, then
+ * remaining functions by descending hit count. A NULL entries pointer with
+ * zero capacity queries the required count.
+ */
+void vita_function_profile_set_enabled(int enabled);
+int vita_function_profile_is_enabled(void);
+void vita_function_profile_reset(void);
+vita_result
+vita_function_profile_snapshot(vita_function_profile_entry *entries,
+                               size_t entry_capacity, size_t *entry_count,
+                               vita_function_profile_summary *summary);
 
 /* Invoke one entry on the root guest thread while an outer vita_guest_call
  * owns strict-failure handling. A guest sceKernelExitThread ends only this
