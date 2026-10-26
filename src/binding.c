@@ -275,16 +275,24 @@ static vita_binding_export_view *find_export(
     return NULL;
 }
 
-static binding_provider *find_provider(binding_provider *items, size_t count,
-                                       uint32_t library_nid,
-                                       uint32_t variable_nid) {
+typedef enum provider_lookup_status {
+    PROVIDER_LOOKUP_NOT_FOUND = 0,
+    PROVIDER_LOOKUP_FOUND,
+    PROVIDER_LOOKUP_AMBIGUOUS,
+    PROVIDER_LOOKUP_TARGET_MISMATCH
+} provider_lookup_status;
+
+static provider_lookup_status find_provider(
+    binding_provider *items, size_t count,
+    uint32_t library_nid, uint32_t variable_nid,
+    uint32_t target_address, binding_provider **match,
+    binding_provider **related) {
+    *match = NULL;
+    *related = NULL;
     size_t low = 0, high = count;
     while (low < high) {
         size_t middle = low + (high - low) / 2;
         binding_provider *item = &items[middle];
-        if (item->provider.library_nid == library_nid &&
-            item->provider.variable_nid == variable_nid)
-            return item;
         if (item->provider.library_nid < library_nid ||
             (item->provider.library_nid == library_nid &&
              item->provider.variable_nid < variable_nid))
@@ -292,7 +300,30 @@ static binding_provider *find_provider(binding_provider *items, size_t count,
         else
             high = middle;
     }
-    return NULL;
+    const size_t first = low;
+    while (low < count &&
+           items[low].provider.library_nid == library_nid &&
+           items[low].provider.variable_nid == variable_nid) {
+        if (target_address &&
+            items[low].provider.address == target_address) {
+            *match = &items[low];
+            return PROVIDER_LOOKUP_FOUND;
+        }
+        low++;
+    }
+    if (first == low)
+        return PROVIDER_LOOKUP_NOT_FOUND;
+    if (target_address) {
+        *related = &items[first];
+        return PROVIDER_LOOKUP_TARGET_MISMATCH;
+    }
+    if (low - first != 1u) {
+        *match = &items[first];
+        *related = &items[first + 1u];
+        return PROVIDER_LOOKUP_AMBIGUOUS;
+    }
+    *match = &items[first];
+    return PROVIDER_LOOKUP_FOUND;
 }
 
 static int same_variable_key(const vita_var_import *generated,
@@ -578,7 +609,9 @@ vita_binding_status vita_binding_install_module_set(
         if (providers[i - 1].provider.library_nid ==
                 providers[i].provider.library_nid &&
             providers[i - 1].provider.variable_nid ==
-                providers[i].provider.variable_nid) {
+                providers[i].provider.variable_nid &&
+            providers[i - 1].provider.address ==
+                providers[i].provider.address) {
             status = binding_fail(
                 error, VITA_BINDING_ERROR_DUPLICATE_VARIABLE_PROVIDER,
                 VITA_BINDING_RECORD_VARIABLE_PROVIDER,
@@ -894,7 +927,8 @@ vita_binding_status vita_binding_install_module_set(
             vita_binding_variable_resolution resolution =
                 VITA_BINDING_VARIABLE_UNREFERENCED;
             vita_binding_export_view *export_item;
-            binding_provider *provider;
+            binding_provider *provider = NULL;
+            binding_provider *provider_related = NULL;
 
             for (uint32_t v = 0; v < post_link->variable_import_count; v++) {
                 if (!same_variable_key(variable,
@@ -932,9 +966,30 @@ vita_binding_status vita_binding_install_module_set(
             export_item = find_export(
                 result.exports, export_count,
                 variable->lib_nid, variable->var_nid);
-            provider = find_provider(
+            const provider_lookup_status provider_status = find_provider(
                 providers, variable_provider_count,
-                variable->lib_nid, variable->var_nid);
+                variable->lib_nid, variable->var_nid,
+                metadata->target_address, &provider, &provider_related);
+            if (provider_status == PROVIDER_LOOKUP_AMBIGUOUS) {
+                status = binding_fail(
+                    error, VITA_BINDING_ERROR_AMBIGUOUS_VARIABLE,
+                    VITA_BINDING_RECORD_VARIABLE_IMPORT, (uint32_t)i,
+                    metadata_index, VITA_BINDING_INDEX_NONE);
+                set_related(error, VITA_BINDING_INDEX_NONE,
+                            provider_related->record_index);
+                goto fail;
+            }
+            if (provider_status == PROVIDER_LOOKUP_TARGET_MISMATCH &&
+                (!export_item || !metadata->target_address ||
+                 export_item->address != metadata->target_address)) {
+                status = binding_fail(
+                    error, VITA_BINDING_ERROR_VARIABLE_TARGET_MISMATCH,
+                    VITA_BINDING_RECORD_VARIABLE_IMPORT, (uint32_t)i,
+                    metadata_index, VITA_BINDING_INDEX_NONE);
+                set_related(error, VITA_BINDING_INDEX_NONE,
+                            provider_related->record_index);
+                goto fail;
+            }
             if (export_item && provider) {
                 const int export_matches =
                     metadata->target_address &&

@@ -29,6 +29,10 @@
 #define DD_FIRST UINT32_C(0x40300000)
 #define MAX_DDS 32
 
+#define CONSOLE_STDOUT 1
+#define CONSOLE_STDERR 2
+#define CONSOLE_STDIN  3
+
 typedef struct fd_entry {
     int used;
     int console;
@@ -44,6 +48,7 @@ static once_flag g_once = ONCE_FLAG_INIT;
 static mtx_t g_lock;
 static fd_entry g_fds[MAX_FDS];
 static dd_entry g_dds[MAX_DDS];
+static uint32_t g_standard_fds[3];
 
 static void io_once(void) {
     (void)mtx_init(&g_lock, mtx_plain);
@@ -96,6 +101,45 @@ static int dd_index(uint32_t descriptor) {
     return g_dds[index].used ? index : -1;
 }
 
+static uint32_t standard_descriptor(unsigned int stream, int console) {
+    call_once(&g_once, io_once);
+    mtx_lock(&g_lock);
+    if (g_standard_fds[stream] != 0u) {
+        uint32_t descriptor = g_standard_fds[stream];
+        mtx_unlock(&g_lock);
+        return descriptor;
+    }
+
+    int index;
+    for (index = 0; index < MAX_FDS && g_fds[index].used; index++) {}
+    if (index == MAX_FDS) {
+        mtx_unlock(&g_lock);
+        return SCE_ERROR_ERRNO_EBADF;
+    }
+
+    g_fds[index].used = 1;
+    g_fds[index].console = console;
+    g_standard_fds[stream] = FD_FIRST + (uint32_t)index;
+    uint32_t descriptor = g_standard_fds[stream];
+    mtx_unlock(&g_lock);
+    return descriptor;
+}
+
+/* SceUID sceKernelGetStdin(void) */
+void vita_hle_sceKernelGetStdin(void) {
+    r0 = standard_descriptor(0u, CONSOLE_STDIN);
+}
+
+/* SceUID sceKernelGetStdout(void) */
+void vita_hle_sceKernelGetStdout(void) {
+    r0 = standard_descriptor(1u, CONSOLE_STDOUT);
+}
+
+/* SceUID sceKernelGetStderr(void) */
+void vita_hle_sceKernelGetStderr(void) {
+    r0 = standard_descriptor(2u, CONSOLE_STDERR);
+}
+
 void vita_io_mount(const char *prefix, const char *host_dir) {
     (void)vita_vfs_mount(prefix, host_dir, VITA_VFS_MOUNT_READ_ONLY);
 }
@@ -132,7 +176,8 @@ void vita_hle_sceIoOpen(void) {
     memset(&entry, 0, sizeof(entry));
     int result = VITA_OK;
     if (strncmp(path, "tty", 3) == 0) {
-        entry.console = path[3] == '1' ? 2 : 1;
+        entry.console =
+            path[3] == '1' ? CONSOLE_STDERR : CONSOLE_STDOUT;
     } else {
         result = vita_vfs_open(path, vfs_flags(r1), &entry.file);
     }
@@ -157,6 +202,11 @@ void vita_hle_sceIoClose(void) {
         return;
     }
     vita_vfs_file *file = g_fds[index].file;
+    for (unsigned int stream = 0u; stream < 3u; stream++) {
+        if (g_standard_fds[stream] == r0) {
+            g_standard_fds[stream] = 0u;
+        }
+    }
     memset(&g_fds[index], 0, sizeof(g_fds[index]));
     mtx_unlock(&g_lock);
     vita_vfs_close(file);
@@ -215,7 +265,11 @@ void vita_hle_sceIoWrite(void) {
         return;
     }
     if (console) {
-        FILE *stream = console == 2 ? stderr : stdout;
+        if (console == CONSOLE_STDIN) {
+            r0 = SCE_ERROR_ERRNO_EBADF;
+            return;
+        }
+        FILE *stream = console == CONSOLE_STDERR ? stderr : stdout;
         size_t written = fwrite(buffer, 1, size, stream);
         fflush(stream);
         r0 = (uint32_t)written;
@@ -442,6 +496,7 @@ void vita_io_shutdown(void) {
     memcpy(dirs, g_dds, sizeof(dirs));
     memset(g_fds, 0, sizeof(g_fds));
     memset(g_dds, 0, sizeof(g_dds));
+    memset(g_standard_fds, 0, sizeof(g_standard_fds));
     mtx_unlock(&g_lock);
     for (int i = 0; i < MAX_FDS; i++)
         if (files[i].used) vita_vfs_close(files[i].file);

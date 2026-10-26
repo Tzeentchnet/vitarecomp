@@ -747,6 +747,42 @@ void vita_hle_sceFiosOverlayAdd(void) {
     r0 = SCE_FIOS_OK;
 }
 
+/* int sceFiosOverlayGetList02(SceUID processId, uint32_t minOrder,
+ * uint32_t maxOrder, SceFiosOverlayID *pOutIDs, uint32_t maxIDs,
+ * uint32_t *pActualIDs) */
+void vita_hle_sceFiosOverlayGetList02(void) {
+    uint32_t min_order = r1;
+    uint32_t max_order = r2;
+    uint32_t out_ids = r3;
+    uint32_t max_ids = vita_read32(sp);
+    uint32_t actual_ids = vita_read32(sp + 4u);
+    uint32_t capacity =
+        max_ids < MAX_OVERLAYS ? max_ids : MAX_OVERLAYS;
+    if ((out_ids != 0u && capacity != 0u &&
+         !vita_mem_ptr(out_ids, (size_t)capacity * sizeof(uint32_t))) ||
+        (actual_ids != 0u && !vita_mem_ptr(actual_ids, sizeof(uint32_t)))) {
+        r0 = SCE_FIOS_ERROR_BAD_ARG;
+        return;
+    }
+
+    uint32_t count = 0u;
+    for (uint32_t index = 0u; index < MAX_OVERLAYS; index++) {
+        if (!g_overlay[index].used ||
+            g_overlay[index].order < min_order ||
+            g_overlay[index].order > max_order) {
+            continue;
+        }
+        if (out_ids != 0u && count < max_ids) {
+            vita_write32(out_ids + count * sizeof(uint32_t), index + 1u);
+        }
+        count++;
+    }
+    if (actual_ids != 0u) {
+        vita_write32(actual_ids, count);
+    }
+    r0 = SCE_FIOS_OK;
+}
+
 /* int sceFiosOverlayRemove(SceFiosOverlayID id) */
 void vita_hle_sceFiosOverlayRemove(void) {
     if (r0 == 0 || r0 > MAX_OVERLAYS || !g_overlay[r0 - 1].used) { r0 = SCE_FIOS_ERROR_BAD_ARG; return; }

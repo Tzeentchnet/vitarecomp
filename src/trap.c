@@ -25,6 +25,8 @@
 #include <string.h>
 #include <threads.h>
 
+void vita_guest_thread_call_reset(void);
+
 static int   g_trace = -1;
 static FILE *g_out;
 
@@ -295,6 +297,7 @@ int vita_guest_call(vita_guest_entry_fn entry, vita_guest_call_result *result) {
         }
     }
 
+    vita_guest_thread_call_reset();
     boundary_close(coordinator, result);
     boundary_context_reset();
     vita_guest_boundary_release(coordinator);

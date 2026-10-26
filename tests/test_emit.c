@@ -148,13 +148,15 @@ static void test_module_metadata_failures(void) {
     put32(bytes, 0x98, BASE + 0xC8);
     put32(bytes, 0xC0, 0xAABBCCDDu);
     put32(bytes, 0xC4, 0xAABBCCDDu);
-    put32(bytes, 0xC8, BASE + 0x150);
+    put32(bytes, 0xC8, BASE + 0x151);
     put32(bytes, 0xCC, BASE + 0x140);
     assert(vm_parse(&img, 0, &mod, err, sizeof(err)) == 0);
     assert(mod.stub_count == 2);
     assert(mod.stubs[0].addr == BASE + 0x140);
+    assert(mod.stubs[0].dispatch_key == BASE + 0x140);
     assert(mod.stubs[0].target_site == BASE + 0xCC);
     assert(mod.stubs[1].addr == BASE + 0x150);
+    assert(mod.stubs[1].dispatch_key == BASE + 0x151);
     assert(mod.stubs[1].target_site == BASE + 0xC8);
     assert(mod.stubs[0].func_nid == mod.stubs[1].func_nid);
     vm_free(&mod);
@@ -356,7 +358,8 @@ int main(void) {
     memset(&stub, 0, sizeof(stub));
     memset(&var, 0, sizeof(var));
     memset(&var_site, 0, sizeof(var_site));
-    stub.addr = BASE + 0x80;
+    stub.addr = BASE + 0x90;
+    stub.dispatch_key = BASE + 0x90;
     stub.target_site = BASE + 0xA4;
     stub.lib_nid = 0x10203040u;
     stub.func_nid = 0xAABBCCDDu;
@@ -464,7 +467,10 @@ int main(void) {
     assert(strstr(versioned_sidecar,
                   "\"exports\": {\"count\": 0"));
     assert(strstr(versioned_sidecar, "\"key\": \"0x00001061\""));
-    assert(strstr(versioned_sidecar, "\"key\": \"0x00001081\""));
+    assert(strstr(versioned_sidecar, "\"key\": \"0x00001090\""));
+    assert(strstr(versioned_sidecar,
+                  "\"key\": \"0x00001090\", \"stubAddress\": "
+                  "\"0x00001090\""));
     assert(strstr(versioned_sidecar, "\"kind\": \"functionImport\""));
     assert(strstr(versioned_sidecar,
                   "\"targetSite\": \"0x000010A4\""));

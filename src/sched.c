@@ -83,8 +83,40 @@ static int      g_quiesced;
 static void   (*g_leave)(void);     /* what the running thread does before the baton leaves it (sched.h) */
 static VITA_TLS vthread *g_host_thread;
 static VITA_TLS jmp_buf *g_worker_stop;
+static VITA_TLS struct {
+    int active;
+    int status;
+    jmp_buf *jump;
+} g_root_call;
+
+static void init_once(void);
 
 void vita_sched_on_handover(void (*leave)(void)) { g_leave = leave; }
+
+void vita_guest_thread_call_reset(void) {
+    memset(&g_root_call, 0, sizeof(g_root_call));
+}
+
+int vita_guest_thread_call(vita_guest_entry_fn entry, int *status) {
+    jmp_buf jump;
+    if (!entry || !status)
+        return VITA_ERROR_INVALID_ARGUMENT;
+    if (!vita_runtime_is_initialized())
+        return VITA_ERROR_NOT_INITIALIZED;
+    init_once();
+    if (g_root_call.active || g_host_thread != &g_t[0])
+        return VITA_ERROR_BUSY;
+
+    g_root_call.active = 1;
+    g_root_call.jump = &jump;
+    if (setjmp(jump) == 0) {
+        vita_call(entry);
+        g_root_call.status = (int)r0;
+    }
+    *status = g_root_call.status;
+    vita_guest_thread_call_reset();
+    return VITA_OK;
+}
 
 static uint64_t now_us(void) { return vita_clock_us(); }
 
@@ -694,6 +726,10 @@ void vita_thread_exit(int status) {
         vita_hle_trace("thread \"%s\" (0x%08X) ends with %d",
                        cur->name, cur->uid, status);
     if (cur == &g_t[0]) {
+        if (g_root_call.active && g_root_call.jump) {
+            g_root_call.status = status;
+            longjmp(*g_root_call.jump, 1);
+        }
         vita_host_exit(status);
         return;
     }
@@ -985,6 +1021,7 @@ void vita_sched_quiesce(void) {
 }
 
 void vita_sched_shutdown(void) {
+    vita_guest_thread_call_reset();
     vita_sched_quiesce();
     call_once(&g_boot_once, boot_once);
     mtx_lock(&g_boot_lock);

@@ -388,9 +388,8 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
      * that calls it. Pairing them is what lets the emitter turn a BL into a
      * named firmware call.
      *
-     * Stub addresses carry the Thumb bit, since they are branch destinations.
-     * It is cleared here so lookups compare against the same value the decoder
-     * produces for a branch target.
+     * Stub addresses retain their ARM/Thumb mode in bit zero. Keep that exact
+     * dispatch key while also storing an aligned address for decoder lookups.
      */
     if (out->total_func_imports) {
         out->stubs = (vm_stub *)calloc(out->total_func_imports, sizeof(vm_stub));
@@ -418,7 +417,8 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
                         out, err, errsz,
                         "function import target site overflows");
                 s->target_site = im->func_entry_table + k * 4;
-                s->addr     = r32(et + k * 4) & ~1u;
+                s->dispatch_key = r32(et + k * 4);
+                s->addr = s->dispatch_key & ~1u;
                 if (s->addr < img->seg_vaddr ||
                     s->addr - img->seg_vaddr >= img->seg_len)
                     return parse_fail(out, err, errsz,

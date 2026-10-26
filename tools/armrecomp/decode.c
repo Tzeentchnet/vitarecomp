@@ -2410,7 +2410,7 @@ void arm_table_seed(arm_insn *out, int8_t reg, uint32_t max) {
 uint32_t arm_table_targets(const uint8_t *code, uint32_t code_addr, uint32_t code_len,
                            const arm_insn *tb, uint32_t count, uint32_t *out, uint32_t max) {
     if (tb->rn != 15 || tb->addr + 4 < code_addr) return 0;
-    uint32_t pc = (tb->addr + 4) & ~3u;
+    uint32_t pc = tb->addr + 4;
     uint32_t n = 0;
     int half = tb->op == OP_TBH;
     for (uint32_t i = 0; i < count && n < max; i++) {

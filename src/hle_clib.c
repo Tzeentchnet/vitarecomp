@@ -208,7 +208,8 @@ static void format_to_guest(uint32_t dst, uint32_t cap, uint32_t fmt, vita_vargs
         if (take > sizeof(out) - 1) take = sizeof(out) - 1;
         void *d = gp(dst, take + 1, "snprintf dst");
         if (d) {
-            (void)vita_mem_copy_to_guest(dst, out, take + 1);
+            if (take) (void)vita_mem_copy_to_guest(dst, out, take);
+            vita_write8(dst + take, 0);
         }
     }
     r0 = (uint32_t)n;
@@ -216,6 +217,12 @@ static void format_to_guest(uint32_t dst, uint32_t cap, uint32_t fmt, vita_vargs
 
 /* int sceClibPrintf(const char *fmt, ...) */
 void vita_hle_sceClibPrintf(void) {
+    vita_vargs v = { 1, 0, 0 };
+    format_to_console(r0, &v);
+}
+
+/* int printf(const char *fmt, ...) */
+void vita_hle_printf(void) {
     vita_vargs v = { 1, 0, 0 };
     format_to_console(r0, &v);
 }
@@ -232,8 +239,20 @@ void vita_hle_sceClibSnprintf(void) {
     format_to_guest(r0, r1, r2, &v);
 }
 
+/* int snprintf(char *dst, size_t n, const char *fmt, ...) */
+void vita_hle_snprintf(void) {
+    vita_vargs v = { 3, 0, 0 };
+    format_to_guest(r0, r1, r2, &v);
+}
+
 /* int sceClibVsnprintf(char *dst, SceSize n, const char *fmt, va_list ap) */
 void vita_hle_sceClibVsnprintf(void) {
+    vita_vargs v = { 0, 0, r3 };
+    format_to_guest(r0, r1, r2, &v);
+}
+
+/* int vsnprintf(char *dst, size_t n, const char *fmt, va_list ap) */
+void vita_hle_vsnprintf(void) {
     vita_vargs v = { 0, 0, r3 };
     format_to_guest(r0, r1, r2, &v);
 }

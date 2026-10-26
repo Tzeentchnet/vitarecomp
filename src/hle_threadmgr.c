@@ -671,6 +671,46 @@ uint32_t vita_thread_tls_base_impl(void) {
     return b ? b + data_offset : 0;
 }
 
+/* void *__tls_get_addr(const { uint32_t module, offset; } *index) */
+void vita_hle___tls_get_addr(void) {
+    uint32_t descriptor = r0;
+    if (!vita_mem_ptr(descriptor, 8u)) {
+        r0 = 0u;
+        vita_trap_unimpl(descriptor, 8u,
+                         "SceLibc::__tls_get_addr descriptor");
+        return;
+    }
+
+    uint32_t module_id = vita_read32(descriptor);
+    uint32_t offset = vita_read32(descriptor + 4u);
+    uint32_t module_index = 0u;
+    if (module_id == UINT32_MAX && g_tls_module_count == 1u) {
+        module_index = 0u;
+    } else if (module_id != 0u && module_id <= g_tls_module_count) {
+        module_index = module_id - 1u;
+    } else {
+        r0 = 0u;
+        vita_trap_unimpl(descriptor, module_id,
+                         "SceLibc::__tls_get_addr module");
+        return;
+    }
+
+    const tls_module *module = &g_tls_modules[module_index];
+    uint32_t base = vita_thread_tls_base_impl();
+    if (!base || offset >= module->memsz ||
+        module->offset > UINT32_MAX - base ||
+        offset > UINT32_MAX - base - module->offset) {
+        r0 = 0u;
+        vita_trap_unimpl(descriptor, offset,
+                         "SceLibc::__tls_get_addr offset");
+        return;
+    }
+    r0 = base + module->offset + offset;
+    vita_hle_trace(
+        "__tls_get_addr(0x%08X: module 0x%08X, offset 0x%X) -> 0x%08X",
+        descriptor, module_id, offset, r0);
+}
+
 void vita_thread_tls_release(uint32_t *slot) {
     if (!slot || !*slot) return;
     tls_arena_free(*slot);

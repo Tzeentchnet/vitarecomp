@@ -2435,7 +2435,7 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
     while (fi < fs->n || si < mod->stub_count) {
         int take_stub;
         uint32_t stub_key = si < mod->stub_count
-            ? mod->stubs[si].addr | 1u
+            ? mod->stubs[si].dispatch_key
             : 0u;
         if (fi >= fs->n) take_stub = 1;
         else if (si >= mod->stub_count) take_stub = 0;
@@ -2503,7 +2503,7 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
                    "\"0x%08X\", \"targetSite\": \"0x%08X\", "
                    "\"libraryNid\": \"0x%08X\", "
                    "\"functionNid\": \"0x%08X\", \"name\": ",
-                s->addr | 1u, s->addr, s->target_site,
+                s->dispatch_key, s->addr, s->target_site,
                 s->lib_nid, s->func_nid);
         json_string(j, full_name);
         fputs(", \"symbol\": ", j);
@@ -2958,7 +2958,9 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
         uint32_t fi = 0, si = 0;
         while (fi < fs.n || si < mod->stub_count) {
             int take_stub;
-            uint32_t stub_key = si < mod->stub_count ? mod->stubs[si].addr | 1u : 0u;
+            uint32_t stub_key = si < mod->stub_count
+                ? mod->stubs[si].dispatch_key
+                : 0u;
             if (fi >= fs.n)                            take_stub = 1;
             else if (si >= mod->stub_count)            take_stub = 0;
             else if (stub_key < fs.v[fi])              take_stub = 1;
@@ -3009,7 +3011,7 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
             import_target_symbol(target, sizeof(target), s, module_id);
             fprintf(f,
                     "    { 0x%08Xu, 0x%08Xu, 0x%08Xu, 0x%08Xu, ",
-                    s->lib_nid, s->func_nid, s->addr | 1u,
+                    s->lib_nid, s->func_nid, s->dispatch_key,
                     s->target_site);
             c_string(f, full_name);
             fprintf(f, ", 1u, &%s },\n", target);

@@ -36,6 +36,10 @@
 #define HEAP_BASE   UINT32_C(0x10000000)
 #define HEAP_SIZE   UINT32_C(0x00200000)
 #define MSPACE_BASE UINT32_C(0x10300000)
+#define CDRAM_BASE  UINT32_C(0x10400000)
+#define CDRAM_SIZE  UINT32_C(0x00200000)
+#define PHYCONT_BASE UINT32_C(0x10700000)
+#define PHYCONT_SIZE UINT32_C(0x00100000)
 #define SYSMEM_BASE UINT32_C(0x10800000)
 #define SYSMEM_SIZE UINT32_C(0x00400000)
 #define KERNEL_BASE UINT32_C(0x10C00000)
@@ -46,6 +50,39 @@
 
 void vita_hle_memcpy(void);
 void vita_hle_strlen(void);
+void vita_hle_printf(void);
+void vita_hle_snprintf(void);
+void vita_hle_vsnprintf(void);
+void vita_hle_sceAppUtilSystemParamGetInt(void);
+void vita_hle_sceAppUtilSystemParamGetString(void);
+void vita_hle_sceGxmCreateContext(void);
+void vita_hle_sceGxmFinish(void);
+void vita_hle_sceGxmGetNotificationRegion(void);
+void vita_hle_sceGxmInitialize(void);
+void vita_hle_sceGxmMapFragmentUsseMemory(void);
+void vita_hle_sceGxmMapMemory(void);
+void vita_hle_sceGxmMapVertexUsseMemory(void);
+void vita_hle_sceGxmProgramCheck(void);
+void vita_hle_sceGxmProgramFindParameterByName(void);
+void vita_hle_sceGxmProgramGetDefaultUniformBufferSize(void);
+void vita_hle_sceGxmProgramGetParameterCount(void);
+void vita_hle_sceGxmProgramGetParameter(void);
+void vita_hle_sceGxmProgramGetSize(void);
+void vita_hle_sceGxmProgramGetType(void);
+void vita_hle_sceGxmProgramIsNativeColorUsed(void);
+void vita_hle_sceGxmProgramParameterGetArraySize(void);
+void vita_hle_sceGxmProgramParameterGetCategory(void);
+void vita_hle_sceGxmProgramParameterGetComponentCount(void);
+void vita_hle_sceGxmProgramParameterGetContainerIndex(void);
+void vita_hle_sceGxmProgramParameterGetName(void);
+void vita_hle_sceGxmProgramParameterGetResourceIndex(void);
+void vita_hle_sceGxmProgramParameterGetType(void);
+void vita_hle_sceGxmProgramParameterIsRegFormat(void);
+void vita_hle_sceGxmShaderPatcherCreate(void);
+void vita_hle_sceGxmShaderPatcherRegisterProgram(void);
+void vita_hle_sceGxmSetFragmentProgram(void);
+void vita_hle_sceGxmSetVertexProgram(void);
+void vita_hle_sceGxmTextureInitLinear(void);
 void vita_hle_calloc(void);
 void vita_hle_free(void);
 void vita_hle_sinf(void);
@@ -61,6 +98,7 @@ void vita_hle_sceClibMspaceMalloc(void);
 void vita_hle_sceClibMspaceFree(void);
 
 void vita_hle_sceKernelAllocMemBlock(void);
+void vita_hle_sceKernelGetFreeMemorySize(void);
 void vita_hle_sceKernelGetMemBlockBase(void);
 void vita_hle_sceKernelFreeMemBlock(void);
 
@@ -94,6 +132,9 @@ void vita_hle_sceFiosArchiveUnmountSync(void);
 void vita_hle_sceFiosOpIsDone(void);
 void vita_hle_sceFiosOpGetError(void);
 void vita_hle_sceFiosOpDelete(void);
+void vita_hle_sceFiosOverlayAdd(void);
+void vita_hle_sceFiosOverlayGetList02(void);
+void vita_hle_sceFiosOverlayRemove(void);
 
 void vita_hle_sceUltWaitingQueueResourcePoolGetWorkAreaSize(void);
 void vita_hle__sceUltWaitingQueueResourcePoolCreate(void);
@@ -148,6 +189,8 @@ static uint32_t g_boundary_worker_entry;
 static uint32_t g_boundary_worker_uid;
 static uint32_t g_worker_after_stop;
 static uint32_t g_owner_after_stop;
+static uint32_t g_patcher_alloc_user_data;
+static uint32_t g_patcher_alloc_size;
 static uint32_t g_shutdown_ready_uid;
 static uint32_t g_shutdown_waiting_uid;
 static uint32_t g_shutdown_running_uid;
@@ -329,6 +372,14 @@ static void destructor_entry(void) {
     g_destructor_argument = r0;
 }
 
+static void patcher_alloc_entry(void) {
+    g_patcher_alloc_user_data = r0;
+    g_patcher_alloc_size = r1;
+    r0 = MEMORY_BASE +
+        (r1 == UINT32_C(0x100) ? UINT32_C(0x18000)
+                               : UINT32_C(0x18100));
+}
+
 static const vita_dispatch_entry DISPATCH[] = {
     { UINT32_C(0x1001), worker_entry },
     { UINT32_C(0x2001), callback_entry },
@@ -339,6 +390,7 @@ static const vita_dispatch_entry DISPATCH[] = {
     { UINT32_C(0x7001), worker_exit_entry },
     { UINT32_C(0x8001), shutdown_waiter_entry },
     { UINT32_C(0x9001), shutdown_running_entry },
+    { UINT32_C(0xA001), patcher_alloc_entry },
 };
 
 static void test_memory(void) {
@@ -433,6 +485,60 @@ static void test_allocators_and_libc(void) {
     vita_hle_strlen();
     assert(r0 == 7);
 
+    put_string(MEMORY_BASE + 0x1320, "value=%u\n");
+    r0 = MEMORY_BASE + 0x1320;
+    r1 = 42;
+    vita_hle_printf();
+    assert(r0 == 9);
+
+    put_string(MEMORY_BASE + 0x1340, "value=%u/%s");
+    put_string(MEMORY_BASE + 0x1360, "bounded");
+    vita_write32(MEMORY_BASE + 0x1380, 42);
+    vita_write32(MEMORY_BASE + 0x1384, MEMORY_BASE + 0x1360);
+    r0 = MEMORY_BASE + 0x13A0;
+    r1 = 9;
+    r2 = MEMORY_BASE + 0x1340;
+    r3 = MEMORY_BASE + 0x1380;
+    vita_hle_vsnprintf();
+    assert(r0 == 16);
+    assert(strcmp((const char *)vita_mem_ptr(MEMORY_BASE + 0x13A0, 9),
+                  "value=42") == 0);
+
+    put_string(MEMORY_BASE + 0x13C0, "number=%u");
+    r0 = MEMORY_BASE + 0x13E0;
+    r1 = 32;
+    r2 = MEMORY_BASE + 0x13C0;
+    r3 = 73;
+    vita_hle_snprintf();
+    assert(r0 == 9);
+    assert(strcmp((const char *)vita_mem_ptr(MEMORY_BASE + 0x13E0, 10),
+                  "number=73") == 0);
+
+    r0 = 1;
+    r1 = MEMORY_BASE + 0x1400;
+    vita_hle_sceAppUtilSystemParamGetInt();
+    assert(r0 == 0);
+    assert(vita_read32(MEMORY_BASE + 0x1400) == 1);
+    r0 = 2;
+    r1 = MEMORY_BASE + 0x1404;
+    vita_hle_sceAppUtilSystemParamGetInt();
+    assert(r0 == 0);
+    assert(vita_read32(MEMORY_BASE + 0x1404) == 1);
+    r0 = 3;
+    r1 = MEMORY_BASE + 0x1410;
+    r2 = 5;
+    vita_hle_sceAppUtilSystemParamGetString();
+    assert(r0 == 0);
+    assert(strcmp((const char *)vita_mem_ptr(MEMORY_BASE + 0x1410, 5),
+                  "Play") == 0);
+    r0 = 3;
+    r1 = MEMORY_BASE + 0x1430;
+    r2 = 17;
+    vita_hle_sceAppUtilSystemParamGetString();
+    assert(r0 == 0);
+    assert(strcmp((const char *)vita_mem_ptr(MEMORY_BASE + 0x1430, 7),
+                  "Player") == 0);
+
     vfp_setf(0, 0.5f);
     vita_hle_sinf();
     assert(fabsf(vfp_getf(0) - sinf(0.5f)) < 0.000001f);
@@ -462,6 +568,16 @@ static void test_allocators_and_libc(void) {
     vita_hle_sceClibMspaceDestroy();
     assert(r0 == 0);
 
+    uint32_t free_info = MEMORY_BASE + 0x1440;
+    vita_write32(free_info, 16);
+    r0 = free_info;
+    vita_hle_sceKernelGetFreeMemorySize();
+    assert(r0 == 0);
+    uint32_t free_before = vita_read32(free_info + 4);
+    assert(free_before != 0);
+    assert(vita_read32(free_info + 8) == CDRAM_SIZE);
+    assert(vita_read32(free_info + 12) == PHYCONT_SIZE);
+
     r0 = 0;
     r1 = 0;
     r2 = 0x1000;
@@ -474,9 +590,17 @@ static void test_allocators_and_libc(void) {
     vita_hle_sceKernelGetMemBlockBase();
     assert(r0 == 0);
     uint32_t block_base = vita_read32(base_output);
+    r0 = free_info;
+    vita_hle_sceKernelGetFreeMemorySize();
+    assert(r0 == 0);
+    assert(vita_read32(free_info + 4) == free_before - 0x1000);
     r0 = block_a;
     vita_hle_sceKernelFreeMemBlock();
     assert(r0 == 0);
+    r0 = free_info;
+    vita_hle_sceKernelGetFreeMemorySize();
+    assert(r0 == 0);
+    assert(vita_read32(free_info + 4) == free_before);
     r0 = 0;
     r1 = 0;
     r2 = 0x1000;
@@ -487,6 +611,32 @@ static void test_allocators_and_libc(void) {
     vita_hle_sceKernelGetMemBlockBase();
     assert(vita_read32(base_output) == block_base);
     r0 = block_b;
+    vita_hle_sceKernelFreeMemBlock();
+
+    r0 = 0;
+    r1 = UINT32_C(0x09408060);
+    r2 = UINT32_C(0x40000);
+    vita_hle_sceKernelAllocMemBlock();
+    uint32_t cdram_block = r0;
+    r0 = cdram_block;
+    r1 = base_output;
+    vita_hle_sceKernelGetMemBlockBase();
+    assert(vita_read32(base_output) >= CDRAM_BASE);
+    assert(vita_read32(base_output) < CDRAM_BASE + CDRAM_SIZE);
+    r0 = cdram_block;
+    vita_hle_sceKernelFreeMemBlock();
+
+    r0 = 0;
+    r1 = UINT32_C(0x0D808060);
+    r2 = UINT32_C(0x1000);
+    vita_hle_sceKernelAllocMemBlock();
+    uint32_t phycont_block = r0;
+    r0 = phycont_block;
+    r1 = base_output;
+    vita_hle_sceKernelGetMemBlockBase();
+    assert(vita_read32(base_output) >= PHYCONT_BASE);
+    assert(vita_read32(base_output) < PHYCONT_BASE + PHYCONT_SIZE);
+    r0 = phycont_block;
     vita_hle_sceKernelFreeMemBlock();
 
     uint32_t guard = MEMORY_BASE + 0x1410;
@@ -504,6 +654,274 @@ static void test_allocators_and_libc(void) {
     r0 = guard;
     vita_hle___cxa_guard_acquire();
     assert(r0 == 0);
+}
+
+static void test_gxm(void) {
+    const uint32_t initialize_params = MEMORY_BASE + UINT32_C(0x1480);
+    const uint32_t texture = MEMORY_BASE + UINT32_C(0x1500);
+    const uint32_t data = MEMORY_BASE + UINT32_C(0x2000);
+
+    r0 = 0;
+    vita_hle_sceGxmInitialize();
+    assert(r0 == UINT32_C(0x805B0004));
+
+    vita_write32(initialize_params, 1u);
+    vita_write32(initialize_params + 4u, 2u);
+    vita_write32(initialize_params + 8u, UINT32_C(0x81001235));
+    vita_write32(initialize_params + 12u, UINT32_C(0x100));
+    vita_write32(initialize_params + 16u, UINT32_C(0x40000));
+    r0 = initialize_params;
+    vita_hle_sceGxmInitialize();
+    assert(r0 == UINT32_C(0x805B0003));
+
+    vita_write32(initialize_params, 0u);
+    vita_write32(initialize_params + 12u, UINT32_C(0x101));
+    r0 = initialize_params;
+    vita_hle_sceGxmInitialize();
+    assert(r0 == UINT32_C(0x805B0003));
+
+    vita_write32(initialize_params + 12u, UINT32_C(0x100));
+    r0 = initialize_params;
+    vita_hle_sceGxmInitialize();
+    assert(r0 == 0);
+    vita_hle_sceGxmGetNotificationRegion();
+    assert(r0 != 0);
+    assert(vita_read32(r0) == 0u);
+    r0 = initialize_params;
+    vita_hle_sceGxmInitialize();
+    assert(r0 == UINT32_C(0x805B0001));
+
+    r0 = 0;
+    r1 = UINT32_C(0x1000);
+    r2 = 3u;
+    vita_hle_sceGxmMapMemory();
+    assert(r0 == UINT32_C(0x805B0004));
+    r0 = MEMORY_BASE + UINT32_C(0x3000);
+    r2 = 4u;
+    vita_hle_sceGxmMapMemory();
+    assert(r0 == UINT32_C(0x805B0003));
+    r0 = MEMORY_BASE + UINT32_C(0x3000);
+    r2 = 3u;
+    vita_hle_sceGxmMapMemory();
+    assert(r0 == 0);
+    r0 = MEMORY_BASE + UINT32_C(0x3000);
+    vita_hle_sceGxmMapMemory();
+    assert(r0 == UINT32_C(0x805B0004));
+
+    r0 = MEMORY_BASE + UINT32_C(0x5000);
+    r1 = UINT32_C(0x1000);
+    r2 = 0;
+    vita_hle_sceGxmMapFragmentUsseMemory();
+    assert(r0 == UINT32_C(0x805B0004));
+    r0 = MEMORY_BASE + UINT32_C(0x5000);
+    r1 = UINT32_C(0x1000);
+    r2 = MEMORY_BASE + UINT32_C(0x1498);
+    vita_hle_sceGxmMapFragmentUsseMemory();
+    assert(r0 == 0);
+    assert(vita_read32(MEMORY_BASE + UINT32_C(0x1498)) ==
+           MEMORY_BASE + UINT32_C(0x5000));
+
+    r0 = MEMORY_BASE + UINT32_C(0x7000);
+    r1 = UINT32_C(0x1000);
+    r2 = MEMORY_BASE + UINT32_C(0x149C);
+    vita_hle_sceGxmMapVertexUsseMemory();
+    assert(r0 == 0);
+    assert(vita_read32(MEMORY_BASE + UINT32_C(0x149C)) ==
+           MEMORY_BASE + UINT32_C(0x7000));
+
+    const uint32_t context_params = MEMORY_BASE + UINT32_C(0x1600);
+    const uint32_t context_out = MEMORY_BASE + UINT32_C(0x15F0);
+    const uint32_t host_mem = MEMORY_BASE + UINT32_C(0x10000);
+    const uint32_t vdm_ring = MEMORY_BASE + UINT32_C(0x11000);
+    const uint32_t vertex_ring = MEMORY_BASE + UINT32_C(0x12000);
+    const uint32_t fragment_ring = MEMORY_BASE + UINT32_C(0x13000);
+    vita_write32(context_params, host_mem);
+    vita_write32(context_params + 4u, UINT32_C(0x7FF));
+    vita_write32(context_params + 8u, vdm_ring);
+    vita_write32(context_params + 12u, UINT32_C(0x1000));
+    vita_write32(context_params + 16u, vertex_ring);
+    vita_write32(context_params + 20u, UINT32_C(0x1000));
+    vita_write32(context_params + 24u, fragment_ring);
+    vita_write32(context_params + 28u, UINT32_C(0x1000));
+    vita_write32(context_params + 32u,
+                 MEMORY_BASE + UINT32_C(0x5000));
+    vita_write32(context_params + 36u, UINT32_C(0x1000));
+    vita_write32(context_params + 40u,
+                 MEMORY_BASE + UINT32_C(0x5000));
+    r0 = context_params;
+    r1 = context_out;
+    vita_hle_sceGxmCreateContext();
+    assert(r0 == UINT32_C(0x805B0003));
+    vita_write32(context_params + 4u, UINT32_C(0x800));
+    r0 = context_params;
+    r1 = context_out;
+    vita_hle_sceGxmCreateContext();
+    assert(r0 == 0);
+    assert(vita_read32(context_out) == host_mem);
+    r0 = host_mem;
+    vita_hle_sceGxmFinish();
+    r0 = host_mem;
+    r1 = MEMORY_BASE + UINT32_C(0x19000);
+    vita_hle_sceGxmSetVertexProgram();
+    r0 = host_mem;
+    r1 = MEMORY_BASE + UINT32_C(0x1A000);
+    vita_hle_sceGxmSetFragmentProgram();
+
+    const uint32_t patcher_params = MEMORY_BASE + UINT32_C(0x1700);
+    const uint32_t patcher_out = MEMORY_BASE + UINT32_C(0x1748);
+    for (uint32_t i = 0; i < 17u; i++)
+        vita_write32(patcher_params + i * 4u, 0u);
+    vita_write32(patcher_params, UINT32_C(0xCAFE));
+    vita_write32(patcher_params + 4u, UINT32_C(0xA001));
+    r0 = patcher_params;
+    r1 = patcher_out;
+    vita_hle_sceGxmShaderPatcherCreate();
+    assert(r0 == 0);
+    assert(g_patcher_alloc_user_data == UINT32_C(0xCAFE));
+    assert(g_patcher_alloc_size == UINT32_C(0x100));
+    assert(vita_read32(patcher_out) ==
+           MEMORY_BASE + UINT32_C(0x18000));
+
+    const uint32_t program = MEMORY_BASE + UINT32_C(0x1B000);
+    r0 = 0;
+    vita_hle_sceGxmProgramCheck();
+    assert(r0 == UINT32_C(0x805B0004));
+    vita_write32(program, UINT32_C(0x00505846));
+    r0 = program;
+    vita_hle_sceGxmProgramCheck();
+    assert(r0 == UINT32_C(0x805B0008));
+    vita_write32(program, UINT32_C(0x00505847));
+    vita_write32(program + 8u, UINT32_C(0x100));
+    vita_write32(program + 20u, UINT32_C(0xC1));
+    r0 = program;
+    vita_hle_sceGxmProgramCheck();
+    assert(r0 == 0);
+    vita_write32(program + 36u, 3u);
+    vita_write32(program + 40u, UINT32_C(0x20));
+    vita_write32(program + 100u, 7u);
+    r0 = program;
+    vita_hle_sceGxmProgramGetSize();
+    assert(r0 == UINT32_C(0x100));
+    r0 = program;
+    vita_hle_sceGxmProgramGetType();
+    assert(r0 == 1u);
+    r0 = program;
+    vita_hle_sceGxmProgramIsNativeColorUsed();
+    assert(r0 == 1u);
+    r0 = program;
+    vita_hle_sceGxmProgramGetDefaultUniformBufferSize();
+    assert(r0 == 28u);
+    r0 = program;
+    vita_hle_sceGxmProgramGetParameterCount();
+    assert(r0 == 3u);
+    r0 = program;
+    r1 = 1u;
+    vita_hle_sceGxmProgramGetParameter();
+    assert(r0 == program + UINT32_C(0x58));
+    const uint32_t parameter = r0;
+    vita_write8(parameter + 4u, UINT8_C(0xA4));
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetCategory();
+    assert(r0 == 4u);
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetType();
+    assert(r0 == 10u);
+    vita_write8(parameter + 5u, UINT8_C(0xB3));
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetContainerIndex();
+    assert(r0 == 11u);
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetComponentCount();
+    assert(r0 == 3u);
+    vita_write32(parameter + 8u, 5u);
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetArraySize();
+    assert(r0 == 5u);
+    vita_write32(parameter + 12u, 37u);
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetResourceIndex();
+    assert(r0 == 37u);
+    const uint32_t parameter_name = program + UINT32_C(0xC0);
+    vita_write32(parameter, parameter_name - parameter);
+    put_string(parameter_name, "uModelViewProjection");
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetName();
+    assert(r0 == parameter_name);
+    const uint32_t parameter_query = program + UINT32_C(0xE0);
+    put_string(parameter_query, "uModelViewProjection");
+    r0 = program;
+    r1 = parameter_query;
+    vita_hle_sceGxmProgramFindParameterByName();
+    assert(r0 == parameter);
+    put_string(parameter_query, "missing");
+    r0 = program;
+    r1 = parameter_query;
+    vita_hle_sceGxmProgramFindParameterByName();
+    assert(r0 == 0u);
+    const uint32_t unterminated_name =
+        MEMORY_BASE + MEMORY_SIZE - 1u;
+    vita_write8(unterminated_name, UINT8_C(0x41));
+    vita_write32(parameter, unterminated_name - parameter);
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetName();
+    assert(r0 == 0u);
+    vita_write32(parameter, UINT32_C(0x80000000));
+    r0 = parameter;
+    vita_hle_sceGxmProgramParameterGetName();
+    assert(r0 == 0u);
+    vita_write32(program + 20u, 0u);
+    vita_write32(program + 44u, UINT32_C(0x74));
+    vita_write8(parameter + 4u, UINT8_C(0xA0));
+    vita_write32(parameter + 12u, 37u);
+    vita_write32(program + UINT32_C(0xAC), 1u << 5u);
+    r0 = program;
+    r1 = parameter;
+    vita_hle_sceGxmProgramParameterIsRegFormat();
+    assert(r0 == 1u);
+    vita_write32(program + 20u, 1u);
+    r0 = program;
+    r1 = parameter;
+    vita_hle_sceGxmProgramParameterIsRegFormat();
+    assert(r0 == 0u);
+    r0 = program;
+    r1 = 3u;
+    vita_hle_sceGxmProgramGetParameter();
+    assert(r0 == 0u);
+    const uint32_t registration_out =
+        MEMORY_BASE + UINT32_C(0x1750);
+    r0 = vita_read32(patcher_out);
+    r1 = program;
+    r2 = registration_out;
+    vita_hle_sceGxmShaderPatcherRegisterProgram();
+    assert(r0 == 0u);
+    assert(g_patcher_alloc_user_data == UINT32_C(0xCAFE));
+    assert(g_patcher_alloc_size == 4u);
+    assert(vita_read32(registration_out) ==
+           MEMORY_BASE + UINT32_C(0x18100));
+    assert(vita_read32(MEMORY_BASE + UINT32_C(0x18100)) == program);
+
+    sp = MAIN_STACK;
+    vita_write32(sp, 544u);
+    vita_write32(sp + 4u, 4u);
+    r0 = texture;
+    r1 = data;
+    r2 = UINT32_C(0x0C001000);
+    r3 = 960u;
+    vita_hle_sceGxmTextureInitLinear();
+    assert(r0 == 0);
+    assert(vita_read32(texture) == UINT32_C(0x03E60090));
+    assert(vita_read32(texture + 4u) == UINT32_C(0x6C3BF21F));
+    assert(vita_read32(texture + 8u) == data);
+    assert(vita_read32(texture + 12u) == UINT32_C(0x90000000));
+
+    r0 = 0;
+    vita_hle_sceGxmTextureInitLinear();
+    assert(r0 == UINT32_C(0x805B0004));
+
+    r0 = texture;
+    r3 = 4097u;
+    vita_hle_sceGxmTextureInitLinear();
+    assert(r0 == UINT32_C(0x805B0003));
 }
 
 static void test_imports(void) {
@@ -943,6 +1361,59 @@ static void test_fios(void) {
     r0 = mount_handle;
     vita_hle_sceFiosIsValidHandle();
     assert(r0 == 0);
+
+    const uint32_t overlay = MEMORY_BASE + 0x1A00;
+    const uint32_t overlay_id = MEMORY_BASE + 0x1C60;
+    const uint32_t overlay_ids = MEMORY_BASE + 0x1C70;
+    const uint32_t actual_ids = MEMORY_BASE + 0x1C90;
+    uint8_t empty_overlay[0x258] = {0};
+    put_guest(overlay, empty_overlay, sizeof(empty_overlay));
+    put_string(overlay + 16, "data:base");
+    put_string(overlay + 308, "data:patch");
+    vita_write8(overlay, 1);
+    vita_write8(overlay + 1, 3);
+    r0 = overlay;
+    r1 = overlay_id;
+    vita_hle_sceFiosOverlayAdd();
+    assert(r0 == 0);
+    uint32_t first_overlay = vita_read32(overlay_id);
+
+    vita_write8(overlay + 1, 9);
+    r0 = overlay;
+    r1 = overlay_id;
+    vita_hle_sceFiosOverlayAdd();
+    assert(r0 == 0);
+    uint32_t second_overlay = vita_read32(overlay_id);
+    assert(first_overlay != second_overlay);
+
+    vita_write32(sp, 4);
+    vita_write32(sp + 4, actual_ids);
+    r0 = UINT32_C(0x40010000);
+    r1 = 4;
+    r2 = 10;
+    r3 = overlay_ids;
+    vita_hle_sceFiosOverlayGetList02();
+    assert(r0 == 0);
+    assert(vita_read32(actual_ids) == 1);
+    assert(vita_read32(overlay_ids) == second_overlay);
+
+    vita_write32(sp, 1);
+    vita_write32(sp + 4, actual_ids);
+    r0 = UINT32_C(0x40010000);
+    r1 = 0;
+    r2 = 255;
+    r3 = overlay_ids;
+    vita_hle_sceFiosOverlayGetList02();
+    assert(r0 == 0);
+    assert(vita_read32(actual_ids) == 2);
+    assert(vita_read32(overlay_ids) == first_overlay);
+
+    r0 = first_overlay;
+    vita_hle_sceFiosOverlayRemove();
+    assert(r0 == 0);
+    r0 = second_overlay;
+    vita_hle_sceFiosOverlayRemove();
+    assert(r0 == 0);
     vita_hle_sceFiosTerminate();
 }
 
@@ -1208,6 +1679,10 @@ int main(void) {
     config.kernel_size = KERNEL_SIZE;
     config.tls_base = TLS_BASE;
     config.tls_size = TLS_SIZE;
+    config.cdram_base = CDRAM_BASE;
+    config.cdram_size = CDRAM_SIZE;
+    config.phycont_base = PHYCONT_BASE;
+    config.phycont_size = PHYCONT_SIZE;
     config.virtual_clock = 1;
     config.virtual_epoch_us = 1000;
     config.virtual_read_step_us = 5;
@@ -1216,8 +1691,11 @@ int main(void) {
 
     assert(vita_runtime_init(&config) == VITA_OK);
     assert(vita_runtime_init(&config) == VITA_ERROR_ALREADY_INITIALIZED);
+    vita_dispatch_init(DISPATCH,
+                       (uint32_t)(sizeof(DISPATCH) / sizeof(DISPATCH[0])));
     test_memory();
     test_allocators_and_libc();
+    test_gxm();
     test_imports();
     test_threads_sync_and_callbacks();
     test_ult();

@@ -117,6 +117,13 @@ typedef struct vita_runtime_config {
      * all guest-thread TLS blocks come exclusively from this arena. */
     uint32_t tls_base;
     uint32_t tls_size;
+
+    /* Optional dedicated SceSysmem partitions. `sysmem_*` remains the user
+     * main-memory partition when either dedicated partition is configured. */
+    uint32_t cdram_base;
+    uint32_t cdram_size;
+    uint32_t phycont_base;
+    uint32_t phycont_size;
 } vita_runtime_config;
 
 typedef struct vita_runtime_counters {
@@ -159,6 +166,16 @@ int vita_runtime_exit_requested(int *status);
  * reentrant calls return VITA_ERROR_BUSY without disturbing the active call.
  * Calls on separate threads use separate boundary state. */
 int vita_guest_call(vita_guest_entry_fn entry, vita_guest_call_result *result);
+
+/* Invoke one entry on the root guest thread while an outer vita_guest_call
+ * owns strict-failure handling. A guest sceKernelExitThread ends only this
+ * invocation and reports its status; a normal return reports the value in r0.
+ * Process-exit requests and strict failures still unwind the outer call.
+ *
+ * This is intended for sequential firmware/title module starts that share one
+ * scheduler lifetime. Calls from guest worker threads and nested invocations
+ * return VITA_ERROR_BUSY. */
+int vita_guest_thread_call(vita_guest_entry_fn entry, int *status);
 
 void vita_clock_configure(int virtual_clock, uint64_t epoch_us,
                           uint64_t read_step_us);

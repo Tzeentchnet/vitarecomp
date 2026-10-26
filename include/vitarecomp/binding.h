@@ -92,6 +92,10 @@ typedef struct vita_binding_variable_provider {
     const char *name;
 } vita_binding_variable_provider;
 
+/* Providers may repeat a library/variable key when each address is distinct.
+ * A nonzero post-link target selects the matching provider. A zero-target
+ * import remains ambiguous unless exactly one provider has that key. */
+
 typedef enum vita_binding_function_resolution {
     VITA_BINDING_FUNCTION_GENERATED = 0,
     VITA_BINDING_FUNCTION_HLE = 1,

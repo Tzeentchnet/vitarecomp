@@ -34,6 +34,7 @@
 #define B_PATCH_0   (MODULE_B + UINT32_C(0x300))
 #define B_PATCH_1   (MODULE_B + UINT32_C(0x304))
 #define PROVIDER_ADDRESS (MEMORY_BASE + UINT32_C(0x8000))
+#define PROVIDER_ADDRESS_2 (MEMORY_BASE + UINT32_C(0x9000))
 
 #define FUNCTION_LIBRARY UINT32_C(0x11110000)
 #define FUNCTION_NID     UINT32_C(0x11110001)
@@ -63,7 +64,7 @@ typedef struct binding_fixture {
     vita_binding_variable_import_metadata metadata_variables[2];
     vita_binding_module_metadata post_link[2];
     vita_binding_module modules[2];
-    vita_binding_variable_provider providers[1];
+    vita_binding_variable_provider providers[2];
     uint32_t exported_value;
     uint32_t provided_value;
 } binding_fixture;
@@ -438,6 +439,46 @@ static void test_post_link_selected_variable_provider(void) {
         &error, VITA_BINDING_ERROR_AMBIGUOUS_VARIABLE, 1, 0);
 }
 
+static void test_post_link_selected_repeated_provider(void) {
+    binding_fixture fixture;
+    vita_binding_view view = {0};
+    vita_binding_error error;
+
+    make_fixture(&fixture);
+    fixture.providers[1] = (vita_binding_variable_provider){
+        PROVIDER_LIBRARY, PROVIDER_NID, PROVIDER_ADDRESS_2,
+        "Fixture::providedAlternate"
+    };
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 2,
+               &view, &error) == VITA_BINDING_OK);
+    assert(fixture.provided_value == PROVIDER_ADDRESS);
+    assert(view.variable_imports[1].resolution ==
+           VITA_BINDING_VARIABLE_PROVIDER);
+    vita_binding_view_destroy(&view);
+
+    make_fixture(&fixture);
+    fixture.providers[1] = fixture.providers[0];
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 2,
+               &view, &error) ==
+           VITA_BINDING_ERROR_DUPLICATE_VARIABLE_PROVIDER);
+
+    make_fixture(&fixture);
+    fixture.providers[0].address = PROVIDER_ADDRESS_2;
+    fixture.providers[1] = (vita_binding_variable_provider){
+        PROVIDER_LIBRARY, PROVIDER_NID,
+        PROVIDER_ADDRESS_2 + UINT32_C(0x100),
+        "Fixture::providedAlternate"
+    };
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 2,
+               &view, &error) ==
+           VITA_BINDING_ERROR_VARIABLE_TARGET_MISMATCH);
+    assert_error(
+        &error, VITA_BINDING_ERROR_VARIABLE_TARGET_MISMATCH, 1, 1);
+}
+
 static void test_duplicates_and_mode_mismatch(void) {
     binding_fixture fixture;
     vita_binding_view view = {0};
@@ -657,6 +698,7 @@ int main(void) {
     test_success_and_cross_module_resolution();
     test_zero_site_variable_resolution();
     test_post_link_selected_variable_provider();
+    test_post_link_selected_repeated_provider();
     test_duplicates_and_mode_mismatch();
     test_unresolved_imports();
     test_bad_patch_sites_and_addends();

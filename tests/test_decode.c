@@ -39,21 +39,34 @@ static arm_insn dec(arm_mode mode, uint32_t addr) {
     return in;
 }
 
-static void test_tbb_aligned_pc(void) {
-    uint32_t target = 0;
+static void test_table_branch_pc(void) {
+    uint32_t target[2] = {0};
     memset(code, 0, sizeof(code));
 
-    /* TBB [pc, r1] at a halfword-aligned address whose architectural PC must
-     * be aligned down from 0x1012 to 0x1010. */
+    /* A table after a halfword-aligned TBB starts after the complete
+     * instruction, not in its second halfword. */
     put16(14, 0xE8DF);
     put16(16, 0xF001);
-    code[16] = 1;
+    code[18] = 1;
     arm_insn in = dec(ARM_T32, BASE + 14);
     assert(in.op == OP_TBB && in.rn == 15 && in.rm == 1);
-    assert(arm_table_targets(code, BASE, sizeof(code), &in, 1, &target, 1) == 1);
-    assert(target == BASE + 18);
+    assert(arm_table_targets(code, BASE, sizeof(code), &in, 1, target, 2) == 1);
+    assert(target[0] == BASE + 20);
 
-    printf("  TBB architectural PC alignment ok\n");
+    /* The same rule applies to TBH. This shape mirrors a production switch
+     * whose old aligned-down base decoded the instruction as entry zero. */
+    memset(code, 0, sizeof(code));
+    put16(14, 0xE8DF);
+    put16(16, 0xF012);
+    put16(18, 0x000F);
+    put16(20, 0x0044);
+    in = dec(ARM_T32, BASE + 14);
+    assert(in.op == OP_TBH && in.rn == 15 && in.rm == 2);
+    assert(arm_table_targets(code, BASE, sizeof(code), &in, 2, target, 2) == 2);
+    assert(target[0] == BASE + 48);
+    assert(target[1] == BASE + 154);
+
+    printf("  TBB/TBH architectural PC       ok\n");
 }
 
 /* --- Thumb width: the thing that must never be wrong ------------------------ */
@@ -1492,7 +1505,7 @@ static void test_bounds(void) {
 int main(void) {
     printf("decode:\n");
     test_thumb_width();
-    test_tbb_aligned_pc();
+    test_table_branch_pc();
     test_returns();
     test_pc_destination();
     test_operands();

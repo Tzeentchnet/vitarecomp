@@ -67,6 +67,10 @@ The implemented, synthetic-test-covered categories are:
 - SceLibc/SceLibm forwarding with checked guest boundaries, C++ guards and
   exit destructors, SceIofilemgr, synchronous FIOS2 operations/overlays/archive
   mounts, and the ULT synchronization subset;
+- measured SceGxm initialization, partitioned memory and USSE mappings,
+  contexts, notification memory, finish/program state, linear textures,
+  shader-patcher allocation/registration, and bounds-checked GXP header and
+  parameter reflection;
 - directory and read-only PSARC mounts, file/directory/stat/seek operations,
   virtual or host clocks, lifecycle counters, restart, and clean shutdown.
 
@@ -76,11 +80,15 @@ implements the synchronization/storage subset, not its fiber scheduler.
 
 ## Explicitly deferred
 
-The production DX12/Vulkan renderer contract is available to a native host,
-but the guest firmware bridge to it is not. Deferred HLE categories are:
+The production DX12/Vulkan renderer contract is available to a native host.
+Shader-patcher registration retains validated GXP metadata, but shader object
+creation still fails explicitly because no GXP/USSE translator exists; it does
+not return a success-shaped placeholder. The remaining deferred HLE categories
+are:
 
-- SceGxm guest ABI, GXP parsing/reflection and shader translation, scene/draw
-  semantics, display queues, and guest-to-host resource mapping;
+- the remaining SceGxm guest ABI and GXP reflection, GXP/USSE shader
+  translation, scene/draw semantics, display queues, and guest-to-host
+  resource mapping;
 - audio, codecs, video playback, camera, microphone, and other media devices;
 - controller, touch, motion/sensor, keyboard, and IME input;
 - common dialogs, savedata UI/policy, trophies, app utilities, and commerce;

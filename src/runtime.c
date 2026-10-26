@@ -23,6 +23,8 @@ void vita_sysmem_shutdown(void);
 void vita_hle_registry_reset(void);
 void vita_libc_finalize(uint32_t dso);
 void vita_libc_reset(void);
+void vita_gxm_reset(void);
+void vita_process_param_reset(void);
 vita_result vita_tls_arena_init(uint32_t base, uint32_t size);
 
 typedef struct runtime_state {
@@ -60,31 +62,31 @@ int vita_runtime_init(const vita_runtime_config *config) {
         config->memory_size >
             UINT64_C(0x100000000) - config->memory_base)
         return VITA_ERROR_INVALID_ARGUMENT;
-    if (!range_inside(config->memory_base, config->memory_size,
-                      config->heap_base, config->heap_size) ||
-        !range_inside(config->memory_base, config->memory_size,
-                      config->sysmem_base, config->sysmem_size) ||
-        !range_inside(config->memory_base, config->memory_size,
-                      config->kernel_base, config->kernel_size) ||
-        !range_inside(config->memory_base, config->memory_size,
-                      config->tls_base, config->tls_size))
-        return VITA_ERROR_OUT_OF_BOUNDS;
+    const struct {
+        uint32_t base;
+        uint32_t size;
+    } arenas[] = {
+        {config->heap_base, config->heap_size},
+        {config->sysmem_base, config->sysmem_size},
+        {config->cdram_base, config->cdram_size},
+        {config->phycont_base, config->phycont_size},
+        {config->kernel_base, config->kernel_size},
+        {config->tls_base, config->tls_size},
+    };
+    for (size_t i = 0; i < sizeof(arenas) / sizeof(arenas[0]); i++) {
+        if (!range_inside(config->memory_base, config->memory_size,
+                          arenas[i].base, arenas[i].size))
+            return VITA_ERROR_OUT_OF_BOUNDS;
+        for (size_t j = i + 1;
+             j < sizeof(arenas) / sizeof(arenas[0]); j++) {
+            if (ranges_overlap(arenas[i].base, arenas[i].size,
+                               arenas[j].base, arenas[j].size))
+                return VITA_ERROR_INVALID_ARGUMENT;
+        }
+    }
     if (((config->tls_size == 0u) != (config->tls_base == 0u)) ||
         (config->tls_size &&
          (((config->tls_base | config->tls_size) & 15u) != 0)))
-        return VITA_ERROR_INVALID_ARGUMENT;
-    if (ranges_overlap(config->heap_base, config->heap_size,
-                       config->sysmem_base, config->sysmem_size) ||
-        ranges_overlap(config->heap_base, config->heap_size,
-                       config->kernel_base, config->kernel_size) ||
-        ranges_overlap(config->heap_base, config->heap_size,
-                       config->tls_base, config->tls_size) ||
-        ranges_overlap(config->sysmem_base, config->sysmem_size,
-                       config->kernel_base, config->kernel_size) ||
-        ranges_overlap(config->sysmem_base, config->sysmem_size,
-                       config->tls_base, config->tls_size) ||
-        ranges_overlap(config->kernel_base, config->kernel_size,
-                       config->tls_base, config->tls_size))
         return VITA_ERROR_INVALID_ARGUMENT;
 
     call_once(&g_once, runtime_once);
@@ -104,6 +106,8 @@ int vita_runtime_init(const vita_runtime_config *config) {
     mtx_unlock(&g_runtime.lock);
 
     vita_libc_reset();
+    vita_gxm_reset();
+    vita_process_param_reset();
     vita_cpu_reset();
     if (vita_mem_init(config->memory_base, config->memory_size) != 0) {
         mtx_lock(&g_runtime.lock);
@@ -121,8 +125,12 @@ int vita_runtime_init(const vita_runtime_config *config) {
         return tls_result;
     }
     if (config->heap_size) vita_heap_init(config->heap_base, config->heap_size);
-    if (config->sysmem_size)
-        vita_memblock_init(config->sysmem_base, config->sysmem_size);
+    if (config->sysmem_size || config->cdram_size ||
+        config->phycont_size)
+        vita_memblock_init(
+            config->sysmem_base, config->sysmem_size,
+            config->cdram_base, config->cdram_size,
+            config->phycont_base, config->phycont_size);
     if (config->kernel_size)
         vita_kernel_init(config->kernel_base, config->kernel_size);
     vita_clock_configure(config->virtual_clock, config->virtual_epoch_us,
@@ -162,6 +170,8 @@ void vita_runtime_shutdown(void) {
     vita_sysmem_shutdown();
     vita_heap_shutdown();
     vita_libc_reset();
+    vita_gxm_reset();
+    vita_process_param_reset();
     vita_binding_runtime_reset();
     vita_hle_registry_reset();
     vita_mem_free();

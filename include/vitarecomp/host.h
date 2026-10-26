@@ -30,8 +30,15 @@ vita_result vita_main_stack_prepare(
  * above so a rejected stack cannot be mistaken for successful preparation. */
 void vita_main_stack_init(uint32_t base, uint32_t size);
 
-void vita_memblock_init(uint32_t base, uint32_t size);
+void vita_memblock_init(uint32_t main_base, uint32_t main_size,
+                        uint32_t cdram_base, uint32_t cdram_size,
+                        uint32_t phycont_base, uint32_t phycont_size);
 void vita_kernel_init(uint32_t base, uint32_t size);
+
+/* Publish the selected title module's validated module_proc_param export.
+ * The address must name at least one readable guest word and remains active
+ * until runtime shutdown. */
+vita_result vita_process_param_set(uint32_t address);
 
 /* TLS templates are laid out in array order. Each module begins at the first
  * offset satisfying its power-of-two alignment. Initialized bytes are copied

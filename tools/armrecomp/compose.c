@@ -1806,7 +1806,8 @@ static int ac_validate_module(ac_module *module,
             dispatch->library_nid != import->library_nid ||
             dispatch->function_nid != import->function_nid ||
             strcmp(dispatch->symbol, import->symbol) != 0 ||
-            import->key != (import->stub_address | 1u) ||
+            (import->stub_address & 1u) != 0u ||
+            (import->key & ~1u) != import->stub_address ||
             strcmp(import->target_slot, expected_target) != 0 ||
             (import->target_site & 3u) != 0u ||
             !ac_in_ranges(import->target_site, module->load_ranges,

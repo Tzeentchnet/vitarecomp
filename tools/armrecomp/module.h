@@ -95,7 +95,8 @@ typedef struct {
  * this table. Without it every firmware call looks like an internal call to a
  * function whose body is a placeholder the loader was supposed to overwrite. */
 typedef struct {
-    uint32_t addr;        /* stub address in .text, Thumb bit cleared */
+    uint32_t addr;        /* stub address in .text, mode bit cleared */
+    uint32_t dispatch_key;/* stub address with the imported entry's mode bit */
     uint32_t target_site; /* import-table entry word, before stub sorting */
     uint32_t lib_nid;
     uint32_t func_nid;

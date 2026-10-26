@@ -173,16 +173,20 @@ int main(int argc, char **argv) {
     b_module.stub_count = 4u;
     b_module.total_func_imports = 4u;
     b_stubs[0] = (vm_stub){
-        B_BASE + 0x80u, B_BASE + 0x200u, CROSS_LIBRARY, CROSS_NID
+        B_BASE + 0x80u, B_BASE + 0x80u, B_BASE + 0x200u,
+        CROSS_LIBRARY, CROSS_NID
     };
     b_stubs[1] = (vm_stub){
-        B_BASE + 0x90u, B_BASE + 0x204u, CROSS_LIBRARY, CROSS_NID
+        B_BASE + 0x90u, B_BASE + 0x90u, B_BASE + 0x204u,
+        CROSS_LIBRARY, CROSS_NID
     };
     b_stubs[2] = (vm_stub){
-        B_BASE + 0xA0u, B_BASE + 0x208u, HLE_LIBRARY, HLE_NID
+        B_BASE + 0xA0u, B_BASE + 0xA0u, B_BASE + 0x208u,
+        HLE_LIBRARY, HLE_NID
     };
     b_stubs[3] = (vm_stub){
-        B_BASE + 0xB0u, B_BASE + 0x20Cu, UNSUP_LIBRARY, UNSUP_NID
+        B_BASE + 0xB0u, B_BASE + 0xB0u, B_BASE + 0x20Cu,
+        UNSUP_LIBRARY, UNSUP_NID
     };
 
     result = emit_one(argv[1], "binding_a", "binding_a", &a_image,

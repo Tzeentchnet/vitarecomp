@@ -1,6 +1,7 @@
 /* dispatch.c — guest address to recompiled function. */
 
 #include "vitarecomp/dispatch.h"
+#include "vitarecomp/host.h"
 #include "vitarecomp/recomp_rt.h"
 
 #include <stdio.h>
@@ -129,6 +130,26 @@ void vita_dispatch(uint32_t from, uint32_t addr) {
      * do something — set a return value, mutate memory, never come back — and
      * pretending it ran is how a recompiled program produces confident garbage.
      * vita_trap_indirect stops unless tracing is on. */
+    vita_hle_trace(
+        "unresolved transfer 0x%08X -> 0x%08X "
+        "(r0=0x%08X r1=0x%08X r2=0x%08X r3=0x%08X "
+        "r4=0x%08X r5=0x%08X r6=0x%08X r7=0x%08X "
+        "r8=0x%08X r9=0x%08X r10=0x%08X r11=0x%08X "
+        "r12=0x%08X sp=0x%08X lr=0x%08X)",
+        from, addr, r0, r1, r2, r3, r4, r5, r6, r7,
+        r8, r9, r10, r11, r12, sp, lr);
+    if (vita_mem_ptr(sp, 40u)) {
+        vita_hle_trace(
+            "unresolved transfer stack "
+            "[0]=0x%08X [4]=0x%08X [8]=0x%08X [12]=0x%08X "
+            "[16]=0x%08X [20]=0x%08X [24]=0x%08X [28]=0x%08X "
+            "[32]=0x%08X [36]=0x%08X",
+            vita_read32(sp), vita_read32(sp + 4u), vita_read32(sp + 8u),
+            vita_read32(sp + 12u), vita_read32(sp + 16u),
+            vita_read32(sp + 20u), vita_read32(sp + 24u),
+            vita_read32(sp + 28u), vita_read32(sp + 32u),
+            vita_read32(sp + 36u));
+    }
     vita_trap_indirect(from, addr);
 }
 

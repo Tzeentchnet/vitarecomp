@@ -25,10 +25,17 @@ typedef struct block {
     int used;
 } block;
 
+typedef enum memory_partition {
+    MEMORY_PARTITION_MAIN,
+    MEMORY_PARTITION_CDRAM,
+    MEMORY_PARTITION_PHYCONT,
+} memory_partition;
+
 typedef struct arena_chunk {
     uint32_t base;
     uint32_t size;
     int owner; /* -1 free, -2 runtime reservation, otherwise block index */
+    memory_partition partition;
 } arena_chunk;
 
 static once_flag g_once = ONCE_FLAG_INIT;
@@ -36,7 +43,6 @@ static mtx_t g_lock;
 static block g_blocks[MAX_BLOCKS];
 static arena_chunk *g_chunks;
 static uint32_t g_chunk_count, g_chunk_capacity;
-static uint32_t g_base, g_size;
 
 static void sysmem_once(void) {
     (void)mtx_init(&g_lock, mtx_plain);
@@ -67,22 +73,32 @@ static void chunk_erase(uint32_t at) {
     g_chunk_count--;
 }
 
-void vita_memblock_init(uint32_t base, uint32_t size) {
+static int add_partition(uint32_t base, uint32_t size,
+                         memory_partition partition) {
+    if (!size) return 1;
+    void *memory = NULL;
+    if (vita_mem_range(base, size, &memory) != VITA_OK) return 0;
+    (void)memory;
+    const arena_chunk all = {base, size, -1, partition};
+    return chunk_insert(g_chunk_count, all);
+}
+
+void vita_memblock_init(uint32_t main_base, uint32_t main_size,
+                        uint32_t cdram_base, uint32_t cdram_size,
+                        uint32_t phycont_base, uint32_t phycont_size) {
     call_once(&g_once, sysmem_once);
     mtx_lock(&g_lock);
     memset(g_blocks, 0, sizeof(g_blocks));
     free(g_chunks);
     g_chunks = NULL;
     g_chunk_count = g_chunk_capacity = 0;
-    g_base = g_size = 0;
-    void *memory = NULL;
-    if (size && vita_mem_range(base, size, &memory) == VITA_OK) {
-        (void)memory;
-        arena_chunk all = {base, size, -1};
-        if (chunk_insert(0, all)) {
-            g_base = base;
-            g_size = size;
-        }
+    if (!add_partition(main_base, main_size, MEMORY_PARTITION_MAIN) ||
+        !add_partition(cdram_base, cdram_size, MEMORY_PARTITION_CDRAM) ||
+        !add_partition(phycont_base, phycont_size,
+                       MEMORY_PARTITION_PHYCONT)) {
+        free(g_chunks);
+        g_chunks = NULL;
+        g_chunk_count = g_chunk_capacity = 0;
     }
     mtx_unlock(&g_lock);
 }
@@ -94,7 +110,6 @@ void vita_sysmem_shutdown(void) {
     free(g_chunks);
     g_chunks = NULL;
     g_chunk_count = g_chunk_capacity = 0;
-    g_base = g_size = 0;
     mtx_unlock(&g_lock);
 }
 
@@ -104,11 +119,12 @@ static int uid_index(uint32_t uid) {
     return g_blocks[index].used ? index : -1;
 }
 
-static uint32_t arena_alloc(uint32_t size, uint32_t alignment, int owner) {
+static uint32_t arena_alloc(uint32_t size, uint32_t alignment, int owner,
+                            memory_partition partition) {
     if (!size || !alignment || (alignment & (alignment - 1u))) return 0;
     for (uint32_t i = 0; i < g_chunk_count; i++) {
         arena_chunk *chunk = &g_chunks[i];
-        if (chunk->owner != -1) continue;
+        if (chunk->owner != -1 || chunk->partition != partition) continue;
         uint64_t start64 = ((uint64_t)chunk->base + alignment - 1u) &
                            ~(uint64_t)(alignment - 1u);
         if (start64 > UINT32_MAX) continue;
@@ -119,13 +135,17 @@ static uint32_t arena_alloc(uint32_t size, uint32_t alignment, int owner) {
         if (size > chunk->size - before) continue;
         uint32_t after = chunk->size - before - size;
         if (before) {
-            arena_chunk head = {chunk->base, before, -1};
+            arena_chunk head = {
+                chunk->base, before, -1, chunk->partition
+            };
             if (!chunk_insert(i, head)) return 0;
             i++;
             chunk = &g_chunks[i];
         }
         if (after) {
-            arena_chunk tail = {start + size, after, -1};
+            arena_chunk tail = {
+                start + size, after, -1, chunk->partition
+            };
             if (!chunk_insert(i + 1, tail)) return 0;
             chunk = &g_chunks[i];
         }
@@ -149,11 +169,13 @@ static int arena_free(uint32_t address, int owner) {
         arena_chunk *chunk = &g_chunks[i];
         if (chunk->base != address || chunk->owner != owner) continue;
         chunk->owner = -1;
-        if (i + 1 < g_chunk_count && g_chunks[i + 1].owner == -1) {
+        if (i + 1 < g_chunk_count && g_chunks[i + 1].owner == -1 &&
+            g_chunks[i + 1].partition == chunk->partition) {
             chunk->size += g_chunks[i + 1].size;
             chunk_erase(i + 1);
         }
-        if (i && g_chunks[i - 1].owner == -1) {
+        if (i && g_chunks[i - 1].owner == -1 &&
+            g_chunks[i - 1].partition == chunk->partition) {
             g_chunks[i - 1].size += chunk->size;
             chunk_erase(i);
         }
@@ -162,10 +184,33 @@ static int arena_free(uint32_t address, int owner) {
     return 0;
 }
 
+static uint32_t arena_available(memory_partition partition) {
+    uint32_t available = 0u;
+    for (uint32_t index = 0u; index < g_chunk_count; index++) {
+        if (g_chunks[index].owner == -1 &&
+            g_chunks[index].partition == partition) {
+            available += g_chunks[index].size;
+        }
+    }
+    return available;
+}
+
+static memory_partition partition_for_type(uint32_t type) {
+    if ((type & UINT32_C(0xFFF00000)) == UINT32_C(0x09400000))
+        return MEMORY_PARTITION_CDRAM;
+    if ((type & UINT32_C(0xFF800000)) == UINT32_C(0x0C800000) ||
+        (type & UINT32_C(0xFF800000)) == UINT32_C(0x0D800000))
+        return MEMORY_PARTITION_PHYCONT;
+    return MEMORY_PARTITION_MAIN;
+}
+
 void vita_hle_sceKernelAllocMemBlock(void) {
     uint32_t type = r1, size = r2;
     uint32_t granularity = (type >> 24) == 0x09 ? 0x40000u : 0x1000u;
     if (!size || (size & (granularity - 1u))) {
+        vita_hle_trace(
+            "sceKernelAllocMemBlock(type 0x%08X, size 0x%X) -> 0x%08X",
+            type, size, SCE_KERNEL_ERROR_INVALID_ARGUMENT);
         r0 = SCE_KERNEL_ERROR_INVALID_ARGUMENT;
         return;
     }
@@ -175,12 +220,19 @@ void vita_hle_sceKernelAllocMemBlock(void) {
     for (index = 0; index < MAX_BLOCKS && g_blocks[index].used; index++) {}
     if (index == MAX_BLOCKS) {
         mtx_unlock(&g_lock);
+        vita_hle_trace(
+            "sceKernelAllocMemBlock(type 0x%08X, size 0x%X) -> 0x%08X",
+            type, size, SCE_KERNEL_ERROR_NO_MEMORY);
         r0 = SCE_KERNEL_ERROR_NO_MEMORY;
         return;
     }
-    uint32_t base = arena_alloc(size, granularity, index);
+    uint32_t base = arena_alloc(
+        size, granularity, index, partition_for_type(type));
     if (!base) {
         mtx_unlock(&g_lock);
+        vita_hle_trace(
+            "sceKernelAllocMemBlock(type 0x%08X, size 0x%X) -> 0x%08X",
+            type, size, SCE_KERNEL_ERROR_NO_MEMORY);
         r0 = SCE_KERNEL_ERROR_NO_MEMORY;
         return;
     }
@@ -190,6 +242,31 @@ void vita_hle_sceKernelAllocMemBlock(void) {
     g_blocks[index].used = 1;
     mtx_unlock(&g_lock);
     r0 = UID_FIRST + (uint32_t)index;
+    vita_hle_trace(
+        "sceKernelAllocMemBlock(type 0x%08X, size 0x%X) -> 0x%08X at 0x%08X",
+        type, size, r0, base);
+}
+
+void vita_hle_sceKernelGetFreeMemorySize(void) {
+    uint32_t output = r0;
+    if (!vita_mem_ptr(output, 16u)) {
+        r0 = SCE_KERNEL_ERROR_INVALID_ARGUMENT;
+        return;
+    }
+    call_once(&g_once, sysmem_once);
+    mtx_lock(&g_lock);
+    const uint32_t main_available =
+        arena_available(MEMORY_PARTITION_MAIN);
+    const uint32_t cdram_available =
+        arena_available(MEMORY_PARTITION_CDRAM);
+    const uint32_t phycont_available =
+        arena_available(MEMORY_PARTITION_PHYCONT);
+    mtx_unlock(&g_lock);
+
+    vita_write32(output + 4u, main_available);
+    vita_write32(output + 8u, cdram_available);
+    vita_write32(output + 12u, phycont_available);
+    r0 = 0u;
 }
 
 void vita_hle_sceKernelGetMemBlockBase(void) {
@@ -233,7 +310,8 @@ uint32_t vita_sysmem_reserve(uint32_t size) {
     size = (size + 0xFFFu) & ~0xFFFu;
     call_once(&g_once, sysmem_once);
     mtx_lock(&g_lock);
-    uint32_t base = arena_alloc(size, 0x1000u, -2);
+    uint32_t base = arena_alloc(
+        size, 0x1000u, -2, MEMORY_PARTITION_MAIN);
     mtx_unlock(&g_lock);
     return base;
 }

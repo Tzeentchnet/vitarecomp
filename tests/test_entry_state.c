@@ -36,15 +36,27 @@
 #define IMAGE_C     UINT32_C(0x20003800)
 #define THREAD_NAME UINT32_C(0x20004000)
 #define THREAD_STATUS UINT32_C(0x20005000)
+#define PROCESS_PARAM UINT32_C(0x20006000)
+#define TLS_INDEX UINT32_C(0x20007000)
 
 void vita_hle_sceKernelCreateThread(void);
 void vita_hle_sceKernelStartThread(void);
 void vita_hle_sceKernelWaitThreadEnd(void);
 void vita_hle_sceKernelDeleteThread(void);
+void vita_hle_sceKernelExitThread(void);
+void vita_hle_sceKernelGetProcessParam(void);
+void vita_hle_sceKernelGetStdin(void);
+void vita_hle_sceKernelGetStdout(void);
+void vita_hle_sceKernelGetStderr(void);
+void vita_hle_sceIoRead(void);
+void vita_hle_sceIoWrite(void);
+void vita_hle_sceIoClose(void);
+void vita_hle___tls_get_addr(void);
 
 static vita_tls_module_layout g_tls_modules[3];
 static uint32_t g_main_tls;
 static uint32_t g_worker_tls;
+static uint32_t g_after_root_exit;
 
 static const uint8_t IMAGE_A_BYTES[] = {0x11, 0x22, 0x33};
 static const uint8_t IMAGE_B_BYTES[] = {0xA1, 0xB2, 0xC3, 0xD4, 0xE5};
@@ -247,6 +259,12 @@ static void test_tls_configuration(void) {
     assert(g_main_tls >= TLS_BASE && g_main_tls < TLS_BASE + TLS_SIZE);
     assert_tls_image(g_main_tls);
 
+    vita_write32(TLS_INDEX, 2u);
+    vita_write32(TLS_INDEX + 4u, 5u);
+    r0 = TLS_INDEX;
+    vita_hle___tls_get_addr();
+    assert(r0 == g_main_tls + g_tls_modules[1].offset + 5u);
+
     vita_write8(g_main_tls + g_tls_modules[0].offset, 0xFF);
     vita_write8(
         g_main_tls + g_tls_modules[1].offset +
@@ -384,6 +402,15 @@ static void test_tls_configuration(void) {
     assert(g_tls_modules[0].offset == 0 &&
            g_tls_modules[1].offset == 64 &&
            g_tls_modules[2].offset == 96);
+
+    assert(vita_tls_prepare(
+               templates, 1, g_tls_modules, 3, &layout) == VITA_OK);
+    assert(vita_tls_materialize_current(&g_main_tls) == VITA_OK);
+    vita_write32(TLS_INDEX, UINT32_MAX);
+    vita_write32(TLS_INDEX + 4u, 2u);
+    r0 = TLS_INDEX;
+    vita_hle___tls_get_addr();
+    assert(r0 == g_main_tls + 2u);
 }
 
 static void test_runtime_restart(void) {
@@ -480,11 +507,149 @@ static void test_tls_arena_capacity_and_reinitialization(void) {
     }
 }
 
+static void test_process_param(void) {
+    vita_runtime_config config = runtime_config();
+    assert(vita_process_param_set(PROCESS_PARAM) ==
+           VITA_ERROR_NOT_INITIALIZED);
+    r0 = UINT32_C(0xFFFFFFFF);
+    vita_hle_sceKernelGetProcessParam();
+    assert(r0 == 0u);
+
+    assert(vita_runtime_init(&config) == VITA_OK);
+    assert(vita_process_param_set(0u) == VITA_ERROR_INVALID_ARGUMENT);
+    assert(vita_process_param_set(MEMORY_BASE + MEMORY_SIZE) ==
+           VITA_ERROR_OUT_OF_BOUNDS);
+    assert(vita_process_param_set(PROCESS_PARAM) == VITA_OK);
+    r0 = 0u;
+    vita_hle_sceKernelGetProcessParam();
+    assert(r0 == PROCESS_PARAM);
+    vita_runtime_shutdown();
+
+    r0 = UINT32_C(0xFFFFFFFF);
+    vita_hle_sceKernelGetProcessParam();
+    assert(r0 == 0u);
+}
+
+static uint32_t standard_descriptor(void (*getter)(void)) {
+    r0 = 0u;
+    getter();
+    assert((int32_t)r0 > 0);
+    return r0;
+}
+
+static void test_standard_streams(void) {
+    vita_runtime_config config = runtime_config();
+    assert(vita_runtime_init(&config) == VITA_OK);
+
+    uint32_t input = standard_descriptor(vita_hle_sceKernelGetStdin);
+    uint32_t output = standard_descriptor(vita_hle_sceKernelGetStdout);
+    uint32_t error = standard_descriptor(vita_hle_sceKernelGetStderr);
+    assert(input != output && input != error && output != error);
+    assert(standard_descriptor(vita_hle_sceKernelGetStdin) == input);
+    assert(standard_descriptor(vita_hle_sceKernelGetStdout) == output);
+    assert(standard_descriptor(vita_hle_sceKernelGetStderr) == error);
+
+    r0 = input;
+    r1 = MEMORY_BASE;
+    r2 = 0u;
+    vita_hle_sceIoRead();
+    assert(r0 == 0u);
+
+    r0 = output;
+    r1 = MEMORY_BASE;
+    r2 = 0u;
+    vita_hle_sceIoWrite();
+    assert(r0 == 0u);
+
+    r0 = error;
+    r1 = MEMORY_BASE;
+    r2 = 0u;
+    vita_hle_sceIoWrite();
+    assert(r0 == 0u);
+
+    r0 = output;
+    vita_hle_sceIoClose();
+    assert(r0 == 0u);
+    output = standard_descriptor(vita_hle_sceKernelGetStdout);
+    r0 = output;
+    r1 = MEMORY_BASE;
+    r2 = 0u;
+    vita_hle_sceIoWrite();
+    assert(r0 == 0u);
+
+    vita_runtime_shutdown();
+    assert(vita_runtime_init(&config) == VITA_OK);
+    input = standard_descriptor(vita_hle_sceKernelGetStdin);
+    output = standard_descriptor(vita_hle_sceKernelGetStdout);
+    error = standard_descriptor(vita_hle_sceKernelGetStderr);
+    assert(input != output && input != error && output != error);
+    vita_runtime_shutdown();
+}
+
+static void root_thread_exit_entry(void) {
+    r0 = 37u;
+    vita_hle_sceKernelExitThread();
+    g_after_root_exit++;
+}
+
+static void root_thread_return_entry(void) {
+    r0 = 41u;
+}
+
+static void root_thread_strict_entry(void) {
+    vita_trap_unimpl(UINT32_C(0x81234560), UINT32_C(0xE7F000F0),
+                     "root invocation strict failure");
+}
+
+static void root_thread_sequence(void) {
+    int status = 0;
+    assert(vita_guest_thread_call(root_thread_exit_entry, &status) == VITA_OK);
+    assert(status == 37);
+    assert(g_after_root_exit == 0u);
+    assert(vita_guest_thread_call(root_thread_return_entry, &status) ==
+           VITA_OK);
+    assert(status == 41);
+}
+
+static void root_thread_strict_sequence(void) {
+    int status = 0;
+    (void)vita_guest_thread_call(root_thread_strict_entry, &status);
+    g_after_root_exit++;
+}
+
+static void test_root_guest_thread_calls(void) {
+    vita_runtime_config config = runtime_config();
+    vita_guest_call_result result;
+    assert(vita_runtime_init(&config) == VITA_OK);
+    assert(vita_guest_thread_call(NULL, NULL) ==
+           VITA_ERROR_INVALID_ARGUMENT);
+
+    g_after_root_exit = 0u;
+    assert(vita_guest_call(root_thread_sequence, &result) == VITA_OK);
+    assert(result.outcome == VITA_GUEST_CALL_COMPLETED);
+    assert(g_after_root_exit == 0u);
+
+    assert(vita_guest_call(root_thread_strict_sequence, &result) == VITA_OK);
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.kind ==
+           VITA_STRICT_FAILURE_UNTRANSLATED_INSTRUCTION);
+    assert(result.failure.source_address == UINT32_C(0x81234560));
+    assert(g_after_root_exit == 0u);
+
+    assert(vita_guest_call(root_thread_sequence, &result) == VITA_OK);
+    assert(result.outcome == VITA_GUEST_CALL_COMPLETED);
+    assert(g_after_root_exit == 0u);
+    vita_runtime_shutdown();
+}
+
 int main(void) {
     test_checked_stack_and_cpu_reset();
     test_tls_configuration();
     test_runtime_restart();
     test_tls_arena_capacity_and_reinitialization();
+    test_process_param();
+    test_standard_streams();
+    test_root_guest_thread_calls();
     puts("entry-state/TLS tests passed");
     return 0;
 }
