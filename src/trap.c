@@ -238,6 +238,27 @@ void vita_guest_boundary_exit_requested(int status) {
         longjmp(*g_boundary.jump, 1);
 }
 
+void vita_guest_boundary_unresolved_variable(uint32_t address, uint32_t nid,
+                                             const char *name) {
+    g_hits++;
+    boundary_fail(VITA_STRICT_FAILURE_UNRESOLVED_VARIABLE, 0, 0, address, nid,
+                  name);
+    if (!name)
+        name = "(unresolved NID)";
+    if (trace_on()) {
+        if (first_time(nid ? nid : address))
+            fprintf(g_out,
+                    "TRACE variable %s NID 0x%08X access 0x%08X\n",
+                    name, nid, address);
+        return;
+    }
+    fprintf(stderr,
+            "vitarecomp: unresolved variable %s"
+            " accessed at 0x%08X (NID 0x%08X)\n",
+            name, address, nid);
+    abort();
+}
+
 int vita_guest_call(vita_guest_entry_fn entry, vita_guest_call_result *result) {
     jmp_buf jump;
     int exit_status = 0;

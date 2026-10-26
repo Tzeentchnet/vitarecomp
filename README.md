@@ -234,11 +234,15 @@ combines strict-loader post-link metadata with the generated descriptors,
 rejects duplicate NID exports and exact ARM/Thumb-key disagreements, resolves
 function imports only to generated exports, exactly registered HLE functions,
 or named strict traps, and resolves variables only to module exports or
-explicit runtime providers. It verifies loaded target/ABS32 words before one
-transactional commit, updates every generated direct-call slot, and installs
-the same resolved functions in one private merged dispatch table through the
-checked dispatch API. A failed commit restores guest patches and target slots.
-Errors contain module/record indices, not input paths or hashes. The old
+explicit runtime providers. When both exist, the post-link target must select
+exactly one; a target matching both or neither is rejected. A variable with no
+relocation records is retained as explicitly unreferenced at address zero
+rather than receiving an invented allocation. It verifies loaded target/ABS32
+words before one transactional commit, updates every generated direct-call
+slot, and installs the same resolved functions in one private merged dispatch
+table through the checked dispatch API. A failed commit restores guest patches
+and target slots. Errors contain module/record indices, not input paths or
+hashes. The old
 `vita_dispatch_init` and generated
 `vita_generated_image_init` void functions remain compatibility wrappers.
 

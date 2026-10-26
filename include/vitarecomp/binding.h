@@ -117,12 +117,19 @@ typedef struct vita_binding_function_import_view {
     vita_binding_function_resolution resolution;
 } vita_binding_function_import_view;
 
+typedef enum vita_binding_variable_resolution {
+    VITA_BINDING_VARIABLE_EXPORT = 0,
+    VITA_BINDING_VARIABLE_PROVIDER = 1,
+    VITA_BINDING_VARIABLE_UNREFERENCED = 2
+} vita_binding_variable_resolution;
+
 typedef struct vita_binding_variable_import_view {
     uint32_t library_nid;
     uint32_t variable_nid;
     uint32_t address;
     uint32_t module_index;
     uint32_t record_index;
+    vita_binding_variable_resolution resolution;
 } vita_binding_variable_import_view;
 
 typedef struct vita_binding_view {

@@ -221,6 +221,12 @@ static void boundary_import_entry(void) {
     g_entry_progress = 2;
 }
 
+static void boundary_variable_entry(void) {
+    g_entry_progress = 1;
+    (void)vita_read32(UINT32_C(0x81002010));
+    g_entry_progress = 2;
+}
+
 static void boundary_reentrant_entry(void) {
     g_nested_status =
         vita_guest_call(boundary_completed_entry, &g_nested_result);
@@ -459,6 +465,11 @@ static void test_hle_libc(void) {
 /* --- memory ----------------------------------------------------------------- */
 
 static void test_memory(void) {
+    const vita_mem_strict_range strict_range = {
+        UINT32_C(0x81002000), UINT32_C(0x1000),
+        UINT32_C(0xAABBCCDD), "SceSynthetic::unresolvedVariable"
+    };
+    vita_guest_call_result result;
     assert(vita_mem_init(0x81000000u, 64 * 1024) == 0);
     vita_mem_bad_access = 0;
 
@@ -482,6 +493,23 @@ static void test_memory(void) {
      * reading past the allocation. */
     vita_read32(0x81000000u + 64 * 1024 - 2);
     assert(vita_mem_bad_access == 3);
+
+    assert(vita_mem_set_strict_ranges(&strict_range, 1) == VITA_OK);
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_variable_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 1);
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_UNRESOLVED_VARIABLE);
+    assert(result.failure.source_address == 0);
+    assert(result.failure.target_address == UINT32_C(0x81002010));
+    assert(result.failure.nid == UINT32_C(0xAABBCCDD));
+    assert(strcmp(result.failure.name,
+                  "SceSynthetic::unresolvedVariable") == 0);
+    vita_mem_clear_strict_ranges();
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_variable_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 2);
+    assert(result.outcome == VITA_GUEST_CALL_COMPLETED);
 
     vita_mem_free();
     printf("  memory, unaligned and bounds   ok\n");

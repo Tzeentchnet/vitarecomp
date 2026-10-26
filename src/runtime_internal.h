@@ -26,6 +26,8 @@ typedef enum vita_counter_id {
 void vita_runtime_count(vita_counter_id counter, int64_t amount);
 void vita_guest_boundary_note_exit_requested(int status);
 void vita_guest_boundary_exit_requested(int status);
+void vita_guest_boundary_unresolved_variable(uint32_t address, uint32_t nid,
+                                             const char *name);
 vita_guest_boundary_coordinator *
 vita_guest_boundary_retain_current(void);
 void vita_guest_boundary_release(

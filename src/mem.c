@@ -9,6 +9,8 @@
 #include "vitarecomp/mem.h"
 #include "vitarecomp/runtime.h"
 #include "excl_internal.h"
+#include "mem_internal.h"
+#include "runtime_internal.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -23,6 +25,10 @@ uint32_t vita_mem_bad_access;
 static uint8_t *g_mem;
 static uint32_t g_base;
 static size_t   g_size;
+
+#define STRICT_RANGE_LIMIT 64u
+static vita_mem_strict_range g_strict_ranges[STRICT_RANGE_LIMIT];
+static size_t g_strict_range_count;
 
 static void note_bad_access(void) {
 #if defined(_MSC_VER)
@@ -47,6 +53,76 @@ static int range_ptr(uint32_t addr, size_t len, void **out, int count_bad) {
     return VITA_OK;
 }
 
+static int ranges_overlap(uint32_t left_address, uint32_t left_size,
+                          uint32_t right_address, uint32_t right_size) {
+    return (uint64_t)left_address < (uint64_t)right_address + right_size &&
+           (uint64_t)right_address < (uint64_t)left_address + left_size;
+}
+
+void vita_mem_strict_check(uint32_t address, size_t size) {
+    if (!size)
+        return;
+    const uint64_t end = (uint64_t)address + size;
+    for (size_t i = 0; i < g_strict_range_count; i++) {
+        const vita_mem_strict_range *range = &g_strict_ranges[i];
+        if ((uint64_t)address < (uint64_t)range->address + range->size &&
+            (uint64_t)range->address < end) {
+            vita_guest_boundary_unresolved_variable(
+                address, range->nid, range->name);
+            return;
+        }
+    }
+}
+
+void *vita_mem_ptr_unchecked(uint32_t address, uint32_t size) {
+    void *pointer = NULL;
+    (void)range_ptr(address, size, &pointer, 1);
+    return pointer;
+}
+
+int vita_mem_set_strict_ranges(const vita_mem_strict_range *ranges,
+                               size_t count) {
+    if ((count && !ranges) || count > STRICT_RANGE_LIMIT)
+        return count > STRICT_RANGE_LIMIT ? VITA_ERROR_LIMIT
+                                          : VITA_ERROR_INVALID_ARGUMENT;
+
+    vita_memory_lock();
+    if (!g_mem) {
+        vita_memory_unlock();
+        return VITA_ERROR_NOT_INITIALIZED;
+    }
+    for (size_t i = 0; i < count; i++) {
+        void *pointer = NULL;
+        const vita_mem_strict_range *range = &ranges[i];
+        if (!range->size || !range->name || !*range->name ||
+            (uint64_t)range->address + range->size >
+                UINT64_C(0x100000000) ||
+            range_ptr(range->address, range->size, &pointer, 0) != VITA_OK) {
+            vita_memory_unlock();
+            return VITA_ERROR_INVALID_ARGUMENT;
+        }
+        for (size_t prior = 0; prior < i; prior++) {
+            if (ranges_overlap(
+                    range->address, range->size,
+                    ranges[prior].address, ranges[prior].size)) {
+                vita_memory_unlock();
+                return VITA_ERROR_INVALID_ARGUMENT;
+            }
+        }
+    }
+    if (count)
+        memcpy(g_strict_ranges, ranges, count * sizeof(*ranges));
+    g_strict_range_count = count;
+    vita_memory_unlock();
+    return VITA_OK;
+}
+
+void vita_mem_clear_strict_ranges(void) {
+    vita_memory_lock();
+    g_strict_range_count = 0;
+    vita_memory_unlock();
+}
+
 int vita_mem_init(uint32_t base, size_t size) {
     if (!size || (uint64_t)base + size > UINT64_C(0x100000000))
         return 1;
@@ -61,6 +137,7 @@ int vita_mem_init(uint32_t base, size_t size) {
     }
     g_base = base;
     g_size = size;
+    g_strict_range_count = 0;
     vita_mem_bad_access = 0;
     vita_memory_unlock();
     return 0;
@@ -72,22 +149,24 @@ void vita_mem_free(void) {
     g_mem = NULL;
     g_base = 0;
     g_size = 0;
+    g_strict_range_count = 0;
     vita_memory_unlock();
 }
 
 void *vita_mem_ptr(uint32_t addr, uint32_t len) {
-    void *p = NULL;
-    (void)range_ptr(addr, len, &p, 1);
-    return p;
+    vita_mem_strict_check(addr, len);
+    return vita_mem_ptr_unchecked(addr, len);
 }
 
 int vita_mem_range(uint32_t addr, size_t len, void **out) {
     if (!out) return VITA_ERROR_INVALID_ARGUMENT;
+    vita_mem_strict_check(addr, len);
     return range_ptr(addr, len, out, 1);
 }
 
 int vita_mem_copy_from_guest(void *dst, uint32_t src, size_t len) {
     if (!dst && len) return VITA_ERROR_INVALID_ARGUMENT;
+    vita_mem_strict_check(src, len);
     vita_memory_lock();
     void *p = NULL;
     int result = range_ptr(src, len, &p, 1);
@@ -98,6 +177,7 @@ int vita_mem_copy_from_guest(void *dst, uint32_t src, size_t len) {
 
 int vita_mem_copy_to_guest(uint32_t dst, const void *src, size_t len) {
     if (!src && len) return VITA_ERROR_INVALID_ARGUMENT;
+    vita_mem_strict_check(dst, len);
     vita_memory_lock();
     void *p = NULL;
     int result = range_ptr(dst, len, &p, 1);
@@ -110,6 +190,8 @@ int vita_mem_copy_to_guest(uint32_t dst, const void *src, size_t len) {
 }
 
 int vita_mem_move_guest(uint32_t dst, uint32_t src, size_t len) {
+    vita_mem_strict_check(src, len);
+    vita_mem_strict_check(dst, len);
     vita_memory_lock();
     void *destination = NULL;
     void *source = NULL;
@@ -125,6 +207,7 @@ int vita_mem_move_guest(uint32_t dst, uint32_t src, size_t len) {
 }
 
 int vita_mem_set_guest(uint32_t dst, uint8_t value, size_t len) {
+    vita_mem_strict_check(dst, len);
     vita_memory_lock();
     void *destination = NULL;
     int result = range_ptr(dst, len, &destination, 1);
@@ -139,6 +222,7 @@ int vita_mem_set_guest(uint32_t dst, uint8_t value, size_t len) {
 int vita_mem_read_cstr(uint32_t addr, char *dst, size_t capacity,
                        size_t *length) {
     if (!dst || !capacity) return VITA_ERROR_INVALID_ARGUMENT;
+    vita_mem_strict_check(addr, 1u);
     dst[0] = '\0';
     if (length) *length = 0;
 
@@ -199,6 +283,7 @@ uint64_t vita_mem_bad_access_count(void) {
  * an unaligned address and would fault outright on some hosts. */
 
 uint32_t vita_read32(uint32_t a) {
+    vita_mem_strict_check(a, 4u);
     vita_memory_lock();
     void *p = NULL;
     uint32_t v = 0;
@@ -208,6 +293,7 @@ uint32_t vita_read32(uint32_t a) {
 }
 
 uint16_t vita_read16(uint32_t a) {
+    vita_mem_strict_check(a, 2u);
     vita_memory_lock();
     void *p = NULL;
     uint16_t v = 0;
@@ -217,6 +303,7 @@ uint16_t vita_read16(uint32_t a) {
 }
 
 uint8_t vita_read8(uint32_t a) {
+    vita_mem_strict_check(a, 1u);
     vita_memory_lock();
     void *p = NULL;
     uint8_t v = 0;
@@ -226,6 +313,7 @@ uint8_t vita_read8(uint32_t a) {
 }
 
 void vita_write32(uint32_t a, uint32_t v) {
+    vita_mem_strict_check(a, 4u);
     vita_memory_lock();
     void *p = NULL;
     if (range_ptr(a, 4, &p, 1) == VITA_OK) {
@@ -236,6 +324,7 @@ void vita_write32(uint32_t a, uint32_t v) {
 }
 
 void vita_write16(uint32_t a, uint16_t v) {
+    vita_mem_strict_check(a, 2u);
     vita_memory_lock();
     void *p = NULL;
     if (range_ptr(a, 2, &p, 1) == VITA_OK) {
@@ -246,6 +335,7 @@ void vita_write16(uint32_t a, uint16_t v) {
 }
 
 void vita_write8(uint32_t a, uint8_t v) {
+    vita_mem_strict_check(a, 1u);
     vita_memory_lock();
     void *p = NULL;
     if (range_ptr(a, 1, &p, 1) == VITA_OK) {
@@ -261,6 +351,7 @@ int vita_mem_compare_exchange32(uint32_t addr, uint32_t expected,
         note_bad_access();
         return VITA_ERROR_INVALID_ARGUMENT;
     }
+    vita_mem_strict_check(addr, 4u);
     vita_memory_lock();
     void *p = NULL;
     int result = range_ptr(addr, 4, &p, 1);
@@ -280,6 +371,7 @@ int vita_mem_compare_exchange32(uint32_t addr, uint32_t expected,
 }
 
 int vita_mem_mark_written(uint32_t addr, size_t len) {
+    vita_mem_strict_check(addr, len);
     vita_memory_lock();
     void *p = NULL;
     int result = range_ptr(addr, len, &p, 1);

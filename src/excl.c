@@ -3,6 +3,7 @@
 #include "vitarecomp/cpu.h"
 #include "vitarecomp/mem.h"
 #include "excl_internal.h"
+#include "mem_internal.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -64,8 +65,9 @@ uint64_t vita_ldrex(uint32_t addr, uint32_t size) {
         return 0;
     }
 
+    vita_mem_strict_check(addr, size);
     vita_memory_lock();
-    const void *p = vita_mem_ptr(addr, size);
+    const void *p = vita_mem_ptr_unchecked(addr, size);
     if (p) {
         memcpy(&value, p, size);
         g_monitor_addr = addr;
@@ -87,9 +89,10 @@ uint32_t vita_strex(uint32_t addr, uint64_t value, uint32_t size) {
     g_monitor_size = 0;
     if (!monitor_matches || (addr & (size - 1u)) != 0) return 1;
 
+    vita_mem_strict_check(addr, size);
     uint32_t failed = 1;
     vita_memory_lock();
-    void *p = vita_mem_ptr(addr, size);
+    void *p = vita_mem_ptr_unchecked(addr, size);
     if (p && g_monitor_epoch == g_write_epoch) {
         uint64_t current = 0;
         memcpy(&current, p, size);

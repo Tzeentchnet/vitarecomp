@@ -368,6 +368,74 @@ static void test_zero_site_variable_resolution(void) {
     assert(fixture.provided_value == PROVIDER_ADDRESS);
     assert(vita_read32(B_PATCH_1) == UINT32_C(0xCAFEBABE));
     vita_binding_view_destroy(&view);
+
+    make_fixture(&fixture);
+    fixture.generated_variables[1].abs_sites = NULL;
+    fixture.generated_variables[1].abs_count = 0;
+    fixture.metadata_variables[1].target_address = 0;
+    fixture.metadata_variables[1].abs_sites = NULL;
+    fixture.metadata_variables[1].abs_count = 0;
+    fixture.provided_value = UINT32_C(0xDEADBEEF);
+
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, NULL, 0,
+               &view, &error) == VITA_BINDING_OK);
+    assert(fixture.provided_value == 0);
+    assert(view.variable_imports[1].resolution ==
+           VITA_BINDING_VARIABLE_UNREFERENCED);
+    vita_binding_view_destroy(&view);
+}
+
+static void test_post_link_selected_variable_provider(void) {
+    binding_fixture fixture;
+    vita_binding_view view = {0};
+    vita_binding_error error;
+
+    make_fixture(&fixture);
+    fixture.generated[1].variable_import_count = 1;
+    fixture.post_link[1].variable_import_count = 1;
+    fixture.providers[0] = (vita_binding_variable_provider){
+        VARIABLE_LIBRARY, VARIABLE_NID, PROVIDER_ADDRESS,
+        "Fixture::alternate"
+    };
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 1,
+               &view, &error) == VITA_BINDING_OK);
+    assert(fixture.exported_value == A_VARIABLE);
+    assert(view.variable_imports[0].resolution ==
+           VITA_BINDING_VARIABLE_EXPORT);
+    vita_binding_view_destroy(&view);
+
+    make_fixture(&fixture);
+    fixture.generated[1].variable_import_count = 1;
+    fixture.post_link[1].variable_import_count = 1;
+    fixture.providers[0] = (vita_binding_variable_provider){
+        VARIABLE_LIBRARY, VARIABLE_NID, PROVIDER_ADDRESS,
+        "Fixture::alternate"
+    };
+    fixture.metadata_variables[0].target_address = PROVIDER_ADDRESS;
+    vita_write32(B_PATCH_0, PROVIDER_ADDRESS + 4u);
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 1,
+               &view, &error) == VITA_BINDING_OK);
+    assert(fixture.exported_value == PROVIDER_ADDRESS);
+    assert(view.variable_imports[0].resolution ==
+           VITA_BINDING_VARIABLE_PROVIDER);
+    vita_binding_view_destroy(&view);
+
+    make_fixture(&fixture);
+    fixture.generated[1].variable_import_count = 1;
+    fixture.post_link[1].variable_import_count = 1;
+    fixture.providers[0] = (vita_binding_variable_provider){
+        VARIABLE_LIBRARY, VARIABLE_NID, A_VARIABLE,
+        "Fixture::duplicate"
+    };
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 1,
+               &view, &error) ==
+           VITA_BINDING_ERROR_AMBIGUOUS_VARIABLE);
+    assert_error(
+        &error, VITA_BINDING_ERROR_AMBIGUOUS_VARIABLE, 1, 0);
 }
 
 static void test_duplicates_and_mode_mismatch(void) {
@@ -588,6 +656,7 @@ int main(void) {
     test_checked_dispatch_api();
     test_success_and_cross_module_resolution();
     test_zero_site_variable_resolution();
+    test_post_link_selected_variable_provider();
     test_duplicates_and_mode_mismatch();
     test_unresolved_imports();
     test_bad_patch_sites_and_addends();

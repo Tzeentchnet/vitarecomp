@@ -19,9 +19,23 @@
 
 extern uint32_t vita_mem_bad_access;
 
+typedef struct vita_mem_strict_range {
+    uint32_t address;
+    uint32_t size;
+    uint32_t nid;
+    const char *name;
+} vita_mem_strict_range;
+
 /* Reserve `size` bytes of guest address space starting at `base`. */
 int  vita_mem_init(uint32_t base, size_t size);
 void vita_mem_free(void);
+
+/* Mark unresolved guest objects that may be bound for bring-up but must fail
+ * by name on their first access. Configuration is initialization-only and is
+ * cleared with the guest address space. */
+int vita_mem_set_strict_ranges(const vita_mem_strict_range *ranges,
+                               size_t count);
+void vita_mem_clear_strict_ranges(void);
 
 /* Returns NULL rather than a wild pointer when an access would straddle the
  * end of the region, so a bad address is a diagnosable NULL dereference at the

@@ -36,6 +36,13 @@ strict failure. The failure stops immediately; diagnostic trace continuation
 is not a production entry policy. Invalid, nested, or same-thread reentrant
 calls fail without starting another guest call.
 
+An explicit runtime variable provider can be paired with a checked strict
+memory range. Any read, write, copy, atomic, or exclusive access overlapping
+that range returns `VITA_STRICT_FAILURE_UNRESOLVED_VARIABLE` through the same
+guest-call boundary, including the accessed address, variable NID, and retained
+name. This permits run-driven bring-up without treating unresolved storage or a
+sentinel value as successful behavior.
+
 `app0:` is always read-only, even when a host accidentally requests a writable
 mount. Other mounts opt into write access. Guest paths are normalized beneath
 their mount and reject parent traversal, extra drive separators, control

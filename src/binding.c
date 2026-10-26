@@ -891,6 +891,8 @@ vita_binding_status vita_binding_install_module_set(
             uint32_t metadata_index = VITA_BINDING_INDEX_NONE;
             uint32_t matches = 0;
             uint32_t address = 0;
+            vita_binding_variable_resolution resolution =
+                VITA_BINDING_VARIABLE_UNREFERENCED;
             vita_binding_export_view *export_item;
             binding_provider *provider;
 
@@ -934,13 +936,25 @@ vita_binding_status vita_binding_install_module_set(
                 providers, variable_provider_count,
                 variable->lib_nid, variable->var_nid);
             if (export_item && provider) {
-                status = binding_fail(
-                    error, VITA_BINDING_ERROR_AMBIGUOUS_VARIABLE,
-                    VITA_BINDING_RECORD_VARIABLE_IMPORT, (uint32_t)i,
-                    metadata_index, VITA_BINDING_INDEX_NONE);
-                set_related(error, export_item->module_index,
-                            export_item->record_index);
-                goto fail;
+                const int export_matches =
+                    metadata->target_address &&
+                    export_item->address == metadata->target_address;
+                const int provider_matches =
+                    metadata->target_address &&
+                    provider->provider.address == metadata->target_address;
+                if (export_matches == provider_matches) {
+                    status = binding_fail(
+                        error, VITA_BINDING_ERROR_AMBIGUOUS_VARIABLE,
+                        VITA_BINDING_RECORD_VARIABLE_IMPORT, (uint32_t)i,
+                        metadata_index, VITA_BINDING_INDEX_NONE);
+                    set_related(error, export_item->module_index,
+                                export_item->record_index);
+                    goto fail;
+                }
+                if (export_matches)
+                    provider = NULL;
+                else
+                    export_item = NULL;
             }
             if (export_item) {
                 if (export_item->kind == VITA_BINDING_EXPORT_FUNCTION) {
@@ -953,8 +967,13 @@ vita_binding_status vita_binding_install_module_set(
                     goto fail;
                 }
                 address = export_item->address;
+                resolution = VITA_BINDING_VARIABLE_EXPORT;
             } else if (provider) {
                 address = provider->provider.address;
+                resolution = VITA_BINDING_VARIABLE_PROVIDER;
+            } else if (!metadata->target_address &&
+                       !metadata->abs_count) {
+                address = 0;
             } else {
                 status = binding_fail(
                     error, VITA_BINDING_ERROR_UNRESOLVED_VARIABLE,
@@ -1028,7 +1047,7 @@ vita_binding_status vita_binding_install_module_set(
             result.variable_imports[variable_cursor] =
                 (vita_binding_variable_import_view){
                     variable->lib_nid, variable->var_nid, address,
-                    (uint32_t)i, metadata_index
+                    (uint32_t)i, metadata_index, resolution
                 };
             variable_cursor++;
         }
