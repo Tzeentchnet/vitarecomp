@@ -490,7 +490,6 @@ vita_binding_status vita_binding_install_module_set(
             }
         }
         if (!add_count(&dispatch_count, generated->dispatch_count) ||
-            !add_count(&export_count, post_link->export_count) ||
             !add_count(&function_count,
                        post_link->function_import_count) ||
             !add_count(&variable_count,
@@ -510,6 +509,17 @@ vita_binding_status vita_binding_install_module_set(
                 status = binding_fail(
                     error, VITA_BINDING_ERROR_VARIABLE_METADATA,
                     VITA_BINDING_RECORD_VARIABLE_IMPORT, (uint32_t)i, v,
+                    VITA_BINDING_INDEX_NONE);
+                goto fail;
+            }
+        }
+        for (uint32_t e = 0; e < post_link->export_count; e++) {
+            if (vita_binding_export_is_global(
+                    post_link->exports[e].library_nid) &&
+                !add_count(&export_count, 1u)) {
+                status = binding_fail(
+                    error, VITA_BINDING_ERROR_NO_MEMORY,
+                    VITA_BINDING_RECORD_EXPORT, (uint32_t)i, e,
                     VITA_BINDING_INDEX_NONE);
                 goto fail;
             }
@@ -646,6 +656,8 @@ vita_binding_status vita_binding_install_module_set(
                     VITA_BINDING_INDEX_NONE);
                 goto fail;
             }
+            if (!vita_binding_export_is_global(source->library_nid))
+                continue;
             result.exports[export_cursor] =
                 (vita_binding_export_view){
                     source->kind, source->library_nid, source->symbol_nid,

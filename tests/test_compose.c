@@ -101,6 +101,7 @@ static void write_sidecar(const fixture *item) {
     char path[128], report_path[128];
     char descriptor[128], thumb_symbol[128], arm_symbol[128];
     char import_symbol[128], variable_symbol[128];
+    char ordered_variable_symbol[128];
     FILE *file;
     unsigned dispatch_count = 2u + (item->metadata ? 1u : 0u) +
                               (item->duplicate_key ? 1u : 0u);
@@ -121,6 +122,8 @@ static void write_sidecar(const fixture *item) {
                     "vita_hle_%s_import", item->id) > 0);
     assert(snprintf(variable_symbol, sizeof(variable_symbol),
                     "vita_var_%s_44556677_8899AABB", item->id) > 0);
+    assert(snprintf(ordered_variable_symbol, sizeof(ordered_variable_symbol),
+                    "vita_var_%s_FFFFFFFF_00000001", item->id) > 0);
 
     file = fopen(path, "wb");
     assert(file);
@@ -217,23 +220,31 @@ static void write_sidecar(const fixture *item) {
     if (item->metadata) {
         fprintf(file,
             ",\n"
-            "    {\"kind\": \"variable\", \"libraryNid\": \"0x%08X\", "
-            "\"nid\": \"0x01020304\", \"address\": \"0x%08X\", "
-            "\"dispatchKey\": null},\n"
             "    {\"kind\": \"tlsVariable\", "
             "\"libraryNid\": \"0x%08X\", \"nid\": \"0x05060708\", "
-            "\"address\": \"0x%08X\", \"dispatchKey\": null}",
-            item->base + 0x50000000u, item->base + 0x320u,
-            item->base + 0x50000000u, item->base + 0x330u);
+            "\"address\": \"0x%08X\", \"dispatchKey\": null},\n"
+            "    {\"kind\": \"variable\", \"libraryNid\": \"0x%08X\", "
+            "\"nid\": \"0x01020304\", \"address\": \"0x%08X\", "
+            "\"dispatchKey\": null}",
+            item->base + 0x50000000u, item->base + 0x330u,
+            item->base + 0x50000000u, item->base + 0x320u);
     }
     fprintf(file,
         "\n"
         "  ]},\n"
         "  \"variableImports\": {\"count\": %u, \"items\": [",
-        item->metadata ? 1u : 0u);
+        item->metadata ? 2u : 0u);
     if (item->metadata) {
         fprintf(file,
             "\n"
+            "    {\"libraryNid\": \"0xFFFFFFFF\", "
+            "\"variableNid\": \"0x00000001\", "
+            "\"stubAddress\": \"0x%08X\", \"name\": null, "
+            "\"symbol\": \"%s\", \"sites\": ["
+            "{\"address\": \"0x%08X\", \"addend\": 4, "
+            "\"relocationCode\": 2}, "
+            "{\"address\": \"0x%08X\", \"addend\": 0, "
+            "\"relocationCode\": 2}]},\n"
             "    {\"libraryNid\": \"0x44556677\", "
             "\"variableNid\": \"0x8899AABB\", "
             "\"stubAddress\": \"0x%08X\", \"name\": null, "
@@ -241,6 +252,8 @@ static void write_sidecar(const fixture *item) {
             "{\"address\": \"0x%08X\", \"addend\": 8, "
             "\"relocationCode\": 2}]}\n"
             "  ",
+            item->base + 0x284u, ordered_variable_symbol,
+            item->base + 0x188u, item->base + 0x184u,
             item->base + 0x280u, variable_symbol, item->base + 0x180u);
     }
     fprintf(file,
@@ -393,6 +406,10 @@ static void test_deterministic_composition(void) {
     char *first_c, *first_h, *first_json, *first_text;
     char *second_c, *second_h, *second_json, *second_text;
     const char *alpha_pos, *middle_pos, *zeta_pos;
+    const char *zeta_module, *zeta_exports, *zeta_tls_export;
+    const char *zeta_variable_export, *zeta_variable_imports;
+    const char *zeta_high_import, *zeta_low_import;
+    const char *zeta_high_site, *zeta_low_site;
 
     for (size_t i = 0; i < 3; i++) write_fixture(&items[i]);
     assert(compose(output, "alpha", items, first_order, 3,
@@ -452,8 +469,33 @@ static void test_deterministic_composition(void) {
     assert(strstr(first_json, "\"functionExports\": 3"));
     assert(strstr(first_json, "\"variableExports\": 1"));
     assert(strstr(first_json, "\"tlsVariableExports\": 1"));
-    assert(strstr(first_json, "\"variableImports\": 1"));
-    assert(strstr(first_json, "\"variableSites\": 1"));
+    assert(strstr(first_json, "\"variableImports\": 2"));
+    assert(strstr(first_json, "\"variableSites\": 3"));
+    zeta_module = strstr(first_json, "\"id\": \"zeta\"");
+    zeta_exports = zeta_module ? strstr(zeta_module, "\"exports\"") : NULL;
+    zeta_tls_export =
+        zeta_exports ? strstr(zeta_exports, "\"nid\": \"0x05060708\"") : NULL;
+    zeta_variable_export =
+        zeta_exports ? strstr(zeta_exports, "\"nid\": \"0x01020304\"") : NULL;
+    zeta_variable_imports =
+        zeta_exports ? strstr(zeta_exports, "\"variableImports\"") : NULL;
+    zeta_high_import = zeta_variable_imports
+        ? strstr(zeta_variable_imports, "\"libraryNid\": \"0xFFFFFFFF\"")
+        : NULL;
+    zeta_low_import = zeta_variable_imports
+        ? strstr(zeta_variable_imports, "\"libraryNid\": \"0x44556677\"")
+        : NULL;
+    zeta_high_site = zeta_high_import
+        ? strstr(zeta_high_import, "\"address\": \"0x00003188\"")
+        : NULL;
+    zeta_low_site = zeta_high_import
+        ? strstr(zeta_high_import, "\"address\": \"0x00003184\"")
+        : NULL;
+    assert(zeta_tls_export && zeta_variable_export &&
+           zeta_tls_export < zeta_variable_export);
+    assert(zeta_high_import && zeta_low_import &&
+           zeta_high_import < zeta_low_import);
+    assert(zeta_high_site && zeta_low_site && zeta_high_site < zeta_low_site);
     assert(!strstr(first_c, "Github"));
     assert(!strstr(first_h, "Github"));
     assert(!strstr(first_text, "Github"));
@@ -645,6 +687,12 @@ static void test_rejections(void) {
     assert(compose("test_compose_reject.c", "export_left", ambiguous,
                    order, 2, error, sizeof(error)) != 0);
     assert(strstr(error, "ambiguous export"));
+    replace_all_same_size("test_compose_export_left.module.json",
+                          "0x50009000", "0x00000000");
+    replace_all_same_size("test_compose_export_right.module.json",
+                          "0x50009000", "0x00000000");
+    assert(compose("test_compose_reject.c", "export_left", ambiguous,
+                   order, 2, error, sizeof(error)) == 0);
     remove_fixture(&ambiguous[0]);
     remove_fixture(&ambiguous[1]);
 

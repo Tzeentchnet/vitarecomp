@@ -52,7 +52,7 @@ typedef struct binding_fixture {
     vita_dispatch_entry dispatch_a[2];
     vita_dispatch_entry dispatch_b[4];
     vita_generated_module_descriptor generated[2];
-    vita_binding_export_metadata exports_a[2];
+    vita_binding_export_metadata exports_a[3];
     vita_binding_export_metadata exports_b[1];
     vita_binding_function_import_metadata functions_b[4];
     vita_fn_import generated_functions_b[4];
@@ -366,6 +366,24 @@ static void test_duplicates_and_mode_mismatch(void) {
                &view, &error) == VITA_BINDING_ERROR_DUPLICATE_EXPORT);
     assert_error(&error, VITA_BINDING_ERROR_DUPLICATE_EXPORT, 1, 0);
     assert(error.related_module_index == 0);
+
+    make_fixture(&fixture);
+    fixture.exports_a[2] = (vita_binding_export_metadata){
+        VITA_BINDING_EXPORT_FUNCTION,
+        0u, UINT32_C(0x77770000), A_FUNCTION
+    };
+    fixture.post_link[0].export_count = 3;
+    fixture.exports_b[0] = (vita_binding_export_metadata){
+        VITA_BINDING_EXPORT_FUNCTION,
+        0u, UINT32_C(0x77770000), B_CROSS
+    };
+    fixture.post_link[1].exports = fixture.exports_b;
+    fixture.post_link[1].export_count = 1;
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 1,
+               &view, &error) == VITA_BINDING_OK);
+    assert(view.export_count == 2);
+    vita_binding_view_destroy(&view);
 
     make_fixture(&fixture);
     fixture.dispatch_b[1].addr = fixture.dispatch_b[0].addr;

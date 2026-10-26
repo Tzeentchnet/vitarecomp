@@ -724,6 +724,7 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
     }
 
     int ok = 1;
+    int explicit_trap = 0;
     switch (in->op) {
         case OP_MOV: {
             /* A MOVW at a variable import's site builds the low half of an
@@ -1558,6 +1559,7 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
                     fprintf(f, "    if (vita_cond(%u)) vita_trap_unimpl(0x%08X, 0x%08X, \"branch out of segment\");\n",
                             in->cond, in->addr, in->raw);
                 note_trap(st, "branch: target off-segment");
+                explicit_trap = 1;
                 ok = 0;
             } else {
                 /* A branch out of this function's extent is a tail call. */
@@ -1578,6 +1580,7 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
                         fprintf(f, "    if (vita_cond(%u)) vita_trap_indirect(0x%08X, 0x%08X);\n",
                                 in->cond, in->addr, in->target);
                     note_trap(st, "branch: target not a function");
+                    explicit_trap = 1;
                     ok = 0;
                 }
             }
@@ -1841,7 +1844,7 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
     /* Control-flow classes the operand decoder does not cover are handled by
      * class rather than by op, so a call is still a call even when its exact
      * encoding was not decoded. */
-    if (!ok) {
+    if (!ok && !explicit_trap) {
         if (in->cls == A_CALL && in->has_target && fs_has(fs, target_key(in))) {
             char sym[96];
             function_symbol(sym, sizeof(sym), module_id, target_key(in));
@@ -2851,8 +2854,14 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
         insns_in_part += b.n;
         if (inventory != UINT32_MAX) {
             em_part *inv = &st->part_inventory[inventory];
-            if (!inv->funcs) inv->first_key = func_key(fn);
-            inv->last_key = func_key(fn);
+            uint32_t key = func_key(fn);
+            if (!inv->funcs) {
+                inv->first_key = key;
+                inv->last_key = key;
+            } else {
+                if (key < inv->first_key) inv->first_key = key;
+                if (key > inv->last_key) inv->last_key = key;
+            }
             inv->funcs++;
             inv->insns += b.n;
         }

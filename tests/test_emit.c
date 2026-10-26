@@ -108,6 +108,24 @@ static void test_module_metadata_failures(void) {
     assert(mod.exports[0].address == BASE + 0x101);
     vm_free(&mod);
 
+    img.data_seg_count = 1;
+    img.data_segs[0].vaddr = BASE + 0x200;
+    img.data_segs[0].len = 0;
+    img.data_segs[0].mem_len = 0x20;
+    put32(bytes, 0xD0, BASE + 0x201);
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) == 0);
+    assert(mod.function_export_count == 0);
+    assert(mod.variable_export_count == 2);
+    assert(mod.exports[0].kind == VM_EXPORT_VARIABLE);
+    assert(mod.exports[0].address == BASE + 0x201);
+    vm_free(&mod);
+
+    put32(bytes, 0xD0, BASE + 0x301);
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) != 0);
+    assert(strstr(err, "exported function"));
+    put32(bytes, 0xD0, BASE + 0x101);
+    img.data_seg_count = 0;
+
     put32(bytes, 0x24, 0x80);
     put32(bytes, 0x28, 0x84);
     assert(vm_parse(&img, 0, &mod, err, sizeof(err)) != 0);
@@ -194,16 +212,19 @@ int main(void) {
     put16(code, 0x70, 0xF980u);     /* VST1.8 {d0[0]}, [r0]! */
     put16(code, 0x72, 0x000Du);
     put16(code, 0x74, 0x4770u);
+    put32(code, 0x80, 0xEA00005Eu); /* B 0x1200, outside the segment. */
+    put32(code, 0x84, 0xE12FFF1Eu);
 
-    add_func(&disc, BASE + 0x00, ARM_A32);
-    add_func(&disc, BASE + 0x10, ARM_A32);
-    add_func(&disc, BASE + 0x20, ARM_A32);
-    add_func(&disc, BASE + 0x30, ARM_A32);
-    add_func(&disc, BASE + 0x40, ARM_A32);
-    add_func(&disc, BASE + 0x50, ARM_A32);
-    add_func(&disc, BASE + 0x60, ARM_A32);
-    add_func(&disc, BASE + 0x60, ARM_T32);
+    add_func(&disc, BASE + 0x80, ARM_A32);
     add_func(&disc, BASE + 0x70, ARM_T32);
+    add_func(&disc, BASE + 0x60, ARM_T32);
+    add_func(&disc, BASE + 0x60, ARM_A32);
+    add_func(&disc, BASE + 0x50, ARM_A32);
+    add_func(&disc, BASE + 0x40, ARM_A32);
+    add_func(&disc, BASE + 0x30, ARM_A32);
+    add_func(&disc, BASE + 0x20, ARM_A32);
+    add_func(&disc, BASE + 0x10, ARM_A32);
+    add_func(&disc, BASE + 0x00, ARM_A32);
 
 #ifdef _WIN32
     assert(_putenv_s("VITARECOMP_EMIT_SPLIT", "0") == 0);
@@ -233,8 +254,14 @@ int main(void) {
     assert(!strstr(text, "vita_write16(r0 + 0"));
     assert(!strstr(text, "vita_write32(r0 + 0"));
     assert(stats.trapped >= 1);
+    uint32_t classified_traps = stats.traps_other;
+    for (uint32_t index = 0; index < stats.trap_kinds; index++)
+        classified_traps += stats.traps[index].count;
+    assert(classified_traps == stats.trapped);
     assert(stats.part_inventory_count == 1);
     assert(stats.part_inventory[0].funcs == disc.count);
+    assert(stats.part_inventory[0].first_key <=
+           stats.part_inventory[0].last_key);
 
     char *json = read_all("test_emit_generated.report.json");
     char *report = read_all("test_emit_generated.report.txt");

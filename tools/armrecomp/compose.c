@@ -3,6 +3,7 @@
 #include "compose.h"
 #include "emit.h"
 
+#include "vitarecomp/binding.h"
 #include "vitarecomp/generated_module.h"
 
 #include <errno.h>
@@ -1603,37 +1604,6 @@ static int ac_import_cmp(const void *left, const void *right) {
     return strcmp(a->symbol, b->symbol);
 }
 
-static int ac_export_cmp(const void *left, const void *right) {
-    const ac_export *a = (const ac_export *)left;
-    const ac_export *b = (const ac_export *)right;
-    if (a->kind != b->kind) return (int)a->kind - (int)b->kind;
-    if (a->library_nid != b->library_nid)
-        return a->library_nid < b->library_nid ? -1 : 1;
-    if (a->nid != b->nid) return a->nid < b->nid ? -1 : 1;
-    if (a->address != b->address) return a->address < b->address ? -1 : 1;
-    return 0;
-}
-
-static int ac_variable_cmp(const void *left, const void *right) {
-    const ac_variable_import *a = (const ac_variable_import *)left;
-    const ac_variable_import *b = (const ac_variable_import *)right;
-    if (a->library_nid != b->library_nid)
-        return a->library_nid < b->library_nid ? -1 : 1;
-    if (a->variable_nid != b->variable_nid)
-        return a->variable_nid < b->variable_nid ? -1 : 1;
-    return strcmp(a->symbol, b->symbol);
-}
-
-static int ac_site_cmp(const void *left, const void *right) {
-    const ac_variable_site *a = (const ac_variable_site *)left;
-    const ac_variable_site *b = (const ac_variable_site *)right;
-    if (a->address != b->address) return a->address < b->address ? -1 : 1;
-    if (a->addend != b->addend) return a->addend < b->addend ? -1 : 1;
-    if (a->relocation_code != b->relocation_code)
-        return a->relocation_code < b->relocation_code ? -1 : 1;
-    return 0;
-}
-
 static int ac_in_ranges(uint32_t address, const ac_range *ranges,
                         size_t range_count) {
     size_t i;
@@ -1776,14 +1746,8 @@ static int ac_validate_module(ac_module *module,
           sizeof(*module->exec_ranges), ac_range_cmp);
     qsort(module->function_imports, module->function_import_count,
           sizeof(*module->function_imports), ac_import_cmp);
-    qsort(module->exports, module->export_count,
-          sizeof(*module->exports), ac_export_cmp);
-    qsort(module->variable_imports, module->variable_import_count,
-          sizeof(*module->variable_imports), ac_variable_cmp);
-    for (i = 0; i < module->variable_import_count; i++)
-        qsort(module->variable_imports[i].sites,
-              module->variable_imports[i].site_count,
-              sizeof(*module->variable_imports[i].sites), ac_site_cmp);
+    /* Aggregate reports are provenance evidence and must preserve exact
+     * sidecar order for exports, variable imports, and their sites. */
     for (i = 1; i < module->load_range_count; i++)
         if (module->load_ranges[i - 1].end > module->load_ranges[i].begin)
             return ac_fail(error, error_size,
@@ -2789,7 +2753,8 @@ int ac_compose(const char *out_c, const char *entry_module_id,
                 for (n = 0; n < modules[j].export_count; n++) {
                     const ac_export *a = &modules[i].exports[k];
                     const ac_export *b = &modules[j].exports[n];
-                    if (a->library_nid == b->library_nid &&
+                    if (vita_binding_export_is_global(a->library_nid) &&
+                        a->library_nid == b->library_nid &&
                         a->nid == b->nid) {
                         ac_fail(error, error_size,
                                 "ambiguous export 0x%08X:0x%08X in %s/%s",

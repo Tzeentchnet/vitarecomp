@@ -21,6 +21,23 @@ typedef enum vita_binding_export_kind {
     VITA_BINDING_EXPORT_TLS_VARIABLE = 2
 } vita_binding_export_kind;
 
+/* Retail modules can place data objects in the function prefix of an export
+ * table. A non-executable address cannot have a generated dispatch key, so
+ * preserve such records as variable exports instead of inventing code. */
+static inline vita_binding_export_kind vita_binding_effective_export_kind(
+    vita_binding_export_kind declared_kind, int address_is_executable) {
+    return declared_kind == VITA_BINDING_EXPORT_FUNCTION &&
+                   !address_is_executable
+        ? VITA_BINDING_EXPORT_VARIABLE
+        : declared_kind;
+}
+
+/* Library NID zero is the per-module system-export namespace used for
+ * module_start/module_stop/module_exit and module metadata. */
+static inline int vita_binding_export_is_global(uint32_t library_nid) {
+    return library_nid != 0u;
+}
+
 /* Records supplied by the strict module-table/post-link validation extension.
  * Function addresses retain bit 0. `target_site` is the loaded ABS32 word that
  * recorded the linker's selected function target. */

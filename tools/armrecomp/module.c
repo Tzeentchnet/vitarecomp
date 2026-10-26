@@ -8,6 +8,7 @@
  */
 
 #include "module.h"
+#include "vitarecomp/binding.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -30,6 +31,26 @@ static int stub_cmp(const void *a, const void *b) {
 static int fail(char *err, size_t errsz, const char *msg) {
     if (err && errsz) snprintf(err, errsz, "%s", msg);
     return 1;
+}
+
+static int address_in_range(uint32_t address, uint32_t base, uint32_t size) {
+    return address >= base && (uint64_t)address < (uint64_t)base + size;
+}
+
+static int export_address_is_executable(const vm_image *img,
+                                        uint32_t address) {
+    return address_in_range(
+        address & ~1u, img->seg_vaddr, img->seg_len);
+}
+
+static int export_address_is_data(const vm_image *img, uint32_t address) {
+    for (uint32_t i = 0; i < img->data_seg_count; i++) {
+        uint32_t size = img->data_segs[i].mem_len
+            ? img->data_segs[i].mem_len : img->data_segs[i].len;
+        if (address_in_range(address, img->data_segs[i].vaddr, size))
+            return 1;
+    }
+    return 0;
 }
 
 static int parse_fail(vm_module *out, char *err, size_t errsz,
@@ -108,11 +129,11 @@ static int parse_exports(const vm_image *img, vm_module *out,
         if (count && (!nids || !entries))
             return fail(err, errsz, "export tables are incomplete");
         for (uint32_t i = 0; i < nfunc; i++) {
-            uint32_t addr = r32(entries + i * 4) & ~1u;
-            if (addr < img->seg_vaddr ||
-                addr - img->seg_vaddr >= img->seg_len)
+            uint32_t address = r32(entries + i * 4);
+            if (!export_address_is_executable(img, address) &&
+                !export_address_is_data(img, address))
                 return fail(err, errsz,
-                            "exported function lies outside executable segment");
+                            "exported function lies outside load segments");
         }
         if (UINT32_MAX - total < count)
             return fail(err, errsz, "export count overflows");
@@ -144,17 +165,22 @@ static int parse_exports(const vm_image *img, vm_module *out,
             : NULL;
         for (uint32_t i = 0; i < count; i++) {
             vm_export *item = &out->exports[cursor++];
+            vita_binding_export_kind declared_kind =
+                i < nfunc ? VITA_BINDING_EXPORT_FUNCTION
+                : i < (uint32_t)nfunc + nvar
+                ? VITA_BINDING_EXPORT_VARIABLE
+                : VITA_BINDING_EXPORT_TLS_VARIABLE;
             item->library_nid = library_nid;
             item->nid = r32(nids + i * 4);
             item->address = r32(entries + i * 4);
-            if (i < nfunc) {
-                item->kind = VM_EXPORT_FUNCTION;
+            item->kind = (uint8_t)vita_binding_effective_export_kind(
+                declared_kind,
+                export_address_is_executable(img, item->address));
+            if (item->kind == VM_EXPORT_FUNCTION) {
                 out->function_export_count++;
-            } else if (i < (uint32_t)nfunc + nvar) {
-                item->kind = VM_EXPORT_VARIABLE;
+            } else if (item->kind == VM_EXPORT_VARIABLE) {
                 out->variable_export_count++;
             } else {
-                item->kind = VM_EXPORT_TLS_VARIABLE;
                 out->tls_variable_export_count++;
             }
         }
