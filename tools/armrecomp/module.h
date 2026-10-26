@@ -28,6 +28,7 @@ typedef struct {
     uint32_t len;             /* p_filesz  */
     uint32_t mem_len;         /* p_memsz, for composed load ranges */
     uint32_t align;           /* p_align, retained for TLS contracts */
+    uint32_t program_header_index;
 } vm_seg;
 
 #define VM_MAX_DATA_SEGS 8
@@ -40,6 +41,7 @@ typedef struct {
     uint32_t       seg_len;   /* p_filesz                               */
     uint32_t       seg_mem_len; /* p_memsz, for composed load ranges     */
     uint32_t       seg_align; /* p_align                                */
+    uint32_t       seg_program_header_index;
 
     /* The other PT_LOAD segments — the writable data the module ships with.
      *

@@ -476,6 +476,23 @@ static void test_relocation_identity_normalization(void) {
     vita_reloc_free(&table);
 
     make_relocation_elf(image, 12);
+    wr32(image, 0x180, (0xFu << 4) | (VITA_RELOC_ABS32 << 8));
+    wr32(image, 0x184, 0x88776655u);
+    wr32(image, 0x188, 0);
+    memcpy(original, image, sizeof(image));
+    {
+        const uint32_t post_link_patch = BASE + 0x100u;
+        assert(vita_reloc_normalize_elf_identity_except(
+                   image, sizeof(image), &post_link_patch, 1u,
+                   &table, &identity, &error) == VITA_RELOC_OK);
+    }
+    assert(identity.changed == 0 && identity.preserved == 1 &&
+           identity.unsupported == 0 && identity.outside == 0);
+    assert(rd32(image, 0x100) == 0x44332211u);
+    assert(memcmp(image, original, sizeof(image)) == 0);
+    vita_reloc_free(&table);
+
+    make_relocation_elf(image, 12);
     wr32(image, 0x180, (0xFu << 4) | (0x7Eu << 8));
     wr32(image, 0x184, 0);
     wr32(image, 0x188, 0);
@@ -516,6 +533,50 @@ static void test_relocation_identity_normalization(void) {
     assert(memcmp(image, original, sizeof(image)) == 0);
     vita_reloc_free(&table);
     puts("  relocation normalization        ok");
+}
+
+static void test_variable_relocation_blocks(void) {
+    uint8_t block[32];
+    vita_var_reloc_table table;
+    vita_reloc_error error;
+
+    memset(block, 0, sizeof(block));
+    wr32(block, 0, 24u << 4);
+    wr32(block, 4, 1u | (2u << 4) |
+                       (VITA_RELOC_ABS32 << 8) | (0xABCDu << 16));
+    wr32(block, 8, 0x10203040u);
+    wr32(block, 12, 2u | (3u << 4) |
+                        (VITA_RELOC_THM_MOVW_ABS_NC << 8));
+    wr32(block, 16, 0x50607080u);
+    wr32(block, 20, 0x89ABCDEFu);
+    assert(vita_var_reloc_parse_block(
+               block, sizeof(block), &table, &error) == VITA_RELOC_OK);
+    assert(table.declared_bytes == 24u && table.n == 2u);
+    assert(table.by_format[1] == 1u && table.by_format[2] == 1u);
+    assert(table.v[0].format == 1u && table.v[0].patch_seg == 2u &&
+           table.v[0].code == VITA_RELOC_ABS32 &&
+           table.v[0].offset == 0x10203040u &&
+           table.v[0].addend == 0xABCDu);
+    assert(table.v[1].format == 2u && table.v[1].patch_seg == 3u &&
+           table.v[1].code == VITA_RELOC_THM_MOVW_ABS_NC &&
+           table.v[1].offset == 0x50607080u &&
+           table.v[1].addend == 0x89ABCDEFu);
+    vita_var_reloc_free(&table);
+
+    wr32(block, 0, 12u << 4);
+    wr32(block, 4, 2u);
+    assert(vita_var_reloc_parse_block(
+               block, 12u, &table, &error) ==
+           VITA_RELOC_ERROR_TRUNCATED_RECORD);
+    vita_var_reloc_free(&table);
+
+    wr32(block, 0, 8u << 4);
+    wr32(block, 4, 3u);
+    assert(vita_var_reloc_parse_block(
+               block, 8u, &table, &error) ==
+           VITA_RELOC_ERROR_UNKNOWN_FORMAT);
+    vita_var_reloc_free(&table);
+    puts("  variable relocation blocks      ok");
 }
 
 typedef struct extension_state {
@@ -600,6 +661,7 @@ int main(void) {
     test_module_set_transactionality();
     test_relocation_identity_validation();
     test_relocation_identity_normalization();
+    test_variable_relocation_blocks();
     test_validation_extensions();
     vita_mem_free();
     {

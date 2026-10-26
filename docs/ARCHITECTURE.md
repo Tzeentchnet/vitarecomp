@@ -318,8 +318,12 @@ Strict runtime relocation validation uses the same ten-format PT_SCE_RELA
 decoder and relocation writers as translation. It rejects unknown, truncated,
 trailing, bad-segment, out-of-file, and unsupported records, then compares the
 declared bytes with the identity-load result without modifying them. A changed
-byte proves the image is pre-link rather than post-link and fails preflight;
-static ET_SCE_EXEC images remain valid with no relocation stream.
+byte outside a validated variable-import patch site proves the image is
+pre-link rather than post-link and fails preflight. Variable-import blocks use
+their own mixed-width formats and explicit program-header patch selectors.
+Their post-link bytes are checked by strict binding instead of being replaced
+with the identity-relocation result. Static ET_SCE_EXEC images remain valid
+with no relocation stream.
 
 ### Post-link export/import binding
 

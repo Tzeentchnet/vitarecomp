@@ -9,6 +9,7 @@
 
 #include "module.h"
 #include "vitarecomp/binding.h"
+#include "vitarecomp/reloc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +71,38 @@ const uint8_t *vm_ptr(const vm_image *img, uint32_t off, uint32_t need) {
 const uint8_t *vm_va(const vm_image *img, uint32_t vaddr, uint32_t need) {
     if (vaddr < img->seg_vaddr) return NULL;
     return vm_ptr(img, vaddr - img->seg_vaddr, need);
+}
+
+static const uint8_t *vm_segment_offset(
+    const vm_image *img, uint32_t selector, uint32_t offset, uint32_t need,
+    uint32_t *address) {
+    uint32_t file;
+    uint32_t length;
+    uint32_t base;
+    if (selector == img->seg_program_header_index) {
+        file = img->seg_file;
+        length = img->seg_len;
+        base = img->seg_vaddr;
+    } else {
+        uint32_t index;
+        const vm_seg *segment = NULL;
+        for (index = 0; index < img->data_seg_count; index++) {
+            if (img->data_segs[index].program_header_index == selector) {
+                segment = &img->data_segs[index];
+                break;
+            }
+        }
+        if (!segment) return NULL;
+        file = segment->file;
+        length = segment->len;
+        base = segment->vaddr;
+    }
+    if (offset > length || need > length - offset ||
+        (uint64_t)file + offset + need > img->size ||
+        (uint64_t)base + offset > UINT32_MAX)
+        return NULL;
+    if (address) *address = base + offset;
+    return img->data + file + offset;
 }
 
 /* Copy a NUL-terminated string named by an ABSOLUTE virtual address. Library
@@ -194,13 +227,11 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
     memset(out, 0, sizeof(*out));
     if (err && errsz) err[0] = '\0';
 
-    /* e_entry carries a segment index in its top two bits. Only segment 0 is
-     * handled here because the module info always lives in the executable
-     * segment; a different index means the layout is not what we think. */
+    /* e_entry carries a program-header selector in its top two bits. */
     uint32_t seg = entry >> 30;
     uint32_t off = entry & 0x3FFFFFFF;
-    if (seg != 0)
-        return fail(err, errsz, "module info is not in segment 0");
+    if (seg != img->seg_program_header_index)
+        return fail(err, errsz, "module info is not in the executable segment");
 
     const uint8_t *mi = vm_ptr(img, off, 0x5C);
     if (!mi) return fail(err, errsz, "module info offset lies outside the segment");
@@ -240,7 +271,8 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
     if (m->module_start != 0xFFFFFFFFu) {
         uint32_t start_seg = m->module_start >> 30;
         uint32_t start_off = m->module_start & 0x3FFFFFFFu;
-        if (start_seg != 0 || (start_off & ~1u) >= img->seg_len)
+        if (start_seg != img->seg_program_header_index ||
+            (start_off & ~1u) >= img->seg_len)
             return fail(err, errsz,
                         "module_start lies outside executable segment");
     }
@@ -252,12 +284,21 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
         uint32_t tls_seg = m->tls_start >> 30;
         uint32_t tls_off = m->tls_start & 0x3FFFFFFFu;
         uint32_t tls_len;
-        if (tls_seg == 0) {
+        if (tls_seg == img->seg_program_header_index) {
             tls_len = img->seg_len;
-        } else if (tls_seg - 1 < img->data_seg_count) {
-            tls_len = img->data_segs[tls_seg - 1].len;
         } else {
-            return fail(err, errsz, "TLS image names an unavailable segment");
+            uint32_t index;
+            const vm_seg *segment = NULL;
+            for (index = 0; index < img->data_seg_count; index++) {
+                if (img->data_segs[index].program_header_index == tls_seg) {
+                    segment = &img->data_segs[index];
+                    break;
+                }
+            }
+            if (!segment)
+                return fail(err, errsz,
+                            "TLS image names an unavailable segment");
+            tls_len = segment->len;
         }
         if (tls_off > tls_len || m->tls_filesz > tls_len - tls_off)
             return fail(err, errsz, "TLS file image lies outside its segment");
@@ -394,17 +435,7 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
     }
 
     /* --- the variables ---------------------------------------------------- */
-    /*
-     * The same parallel arrays as the functions, but an entry names a block
-     * rather than a stub: a header word whose bits 4..27 give the block's
-     * size in bytes, header included, then two-word relocation entries, the
-     * ARM relocation code in bits 8..15 of the first and the offset into the
-     * executable segment in the second, and the addend in bits 16..27 of
-     * the first. The retail module uses three codes: ABS32 with an addend
-     * of 8 for the vtable pointers in its RTTI objects (past the vtable's
-     * two-word header), and the THM_MOVW_ABS_NC / THM_MOVT_ABS pair, addend
-     * 0, for the instructions that build a variable's address.
-     */
+    /* Each entry names a mixed-width variable-relocation block. */
     if (out->total_var_imports) {
         out->vars = (vm_var *)calloc(out->total_var_imports, sizeof(vm_var));
         if (!out->vars) return fail(err, errsz, "out of memory");
@@ -432,39 +463,63 @@ int vm_parse(const vm_image *img, uint32_t entry, vm_module *out,
                     return parse_fail(out, err, errsz,
                                       "variable import relocation block is missing");
                 uint32_t bytes = (r32(hdr) >> 4) & 0x00FFFFFFu;
-                if (bytes < 4 || (bytes - 4) % 8 != 0)
+                if (bytes < 4)
                     return parse_fail(out, err, errsz,
                                       "variable import relocation block has invalid size");
-                uint32_t n = (bytes - 4) / 8;
-                if (v->stub > UINT32_MAX - 4)
-                    return parse_fail(out, err, errsz,
-                                      "variable import relocation block address overflows");
-                const uint8_t *body = n
-                    ? vm_va(img, v->stub + 4, n * 8)
-                    : NULL;
-                if (n && !body)
+                const uint8_t *block = vm_va(img, v->stub, bytes);
+                if (!block)
                     return parse_fail(out, err, errsz,
                                       "variable import relocation block is incomplete");
-                if (n) {
-                    v->sites = (vm_var_site *)calloc(n, sizeof(vm_var_site));
-                    if (!v->sites)
+                {
+                    vita_var_reloc_table relocations;
+                    vita_reloc_error relocation_error;
+                    vita_reloc_status relocation_status =
+                        vita_var_reloc_parse_block(
+                            block, bytes, &relocations, &relocation_error);
+                    if (relocation_status != VITA_RELOC_OK) {
+                        vita_var_reloc_free(&relocations);
+                        return parse_fail(
+                            out, err, errsz,
+                            relocation_error.message[0]
+                                ? relocation_error.message
+                                : "variable import relocation block is invalid");
+                    }
+                    if (relocations.n)
+                        v->sites = (vm_var_site *)calloc(
+                            relocations.n, sizeof(vm_var_site));
+                    if (relocations.n && !v->sites) {
+                        vita_var_reloc_free(&relocations);
                         return parse_fail(out, err, errsz, "out of memory");
-                    for (uint32_t s = 0; s < n; s++) {
-                        uint32_t a = r32(body + s * 8);
-                        uint32_t site_off = r32(body + s * 8 + 4);
-                        uint8_t code = (uint8_t)((a >> 8) & 0xFF);
-                        if (site_off > img->seg_len ||
-                            img->seg_len - site_off < 4)
-                            return parse_fail(out, err, errsz,
-                                              "variable import site lies outside executable segment");
-                        if (code != 2 && code != 0x2F && code != 0x30)
-                            return parse_fail(out, err, errsz,
-                                              "unsupported variable import relocation code");
-                        v->sites[v->site_count].addr   = img->seg_vaddr + site_off;
-                        v->sites[v->site_count].addend = (a >> 16) & 0xFFFu;
-                        v->sites[v->site_count].code   = code;
+                    }
+                    for (uint32_t s = 0; s < relocations.n; s++) {
+                        const vita_var_reloc_entry *relocation_entry =
+                            &relocations.v[s];
+                        uint32_t address;
+                        if (!vm_segment_offset(
+                                img, relocation_entry->patch_seg,
+                                relocation_entry->offset, 4,
+                                &address)) {
+                            vita_var_reloc_free(&relocations);
+                            return parse_fail(
+                                out, err, errsz,
+                                "variable import site lies outside its patch segment");
+                        }
+                        if (relocation_entry->code != 2 &&
+                            relocation_entry->code != 0x2F &&
+                            relocation_entry->code != 0x30) {
+                            vita_var_reloc_free(&relocations);
+                            return parse_fail(
+                                out, err, errsz,
+                                "unsupported variable import relocation code");
+                        }
+                        v->sites[v->site_count].addr = address;
+                        v->sites[v->site_count].addend =
+                            relocation_entry->addend;
+                        v->sites[v->site_count].code =
+                            relocation_entry->code;
                         v->site_count++;
                     }
+                    vita_var_reloc_free(&relocations);
                 }
             }
         }

@@ -79,6 +79,7 @@ add_executable(test_emit
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/decode.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/module.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/nids.c
+    ${CMAKE_SOURCE_DIR}/src/reloc.c
 )
 target_include_directories(test_emit PRIVATE
     ${CMAKE_SOURCE_DIR}/tools/armrecomp
@@ -158,6 +159,7 @@ add_executable(generate_binding_e2e
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/decode.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/module.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/nids.c
+    ${CMAKE_SOURCE_DIR}/src/reloc.c
 )
 target_include_directories(generate_binding_e2e PRIVATE
     ${CMAKE_SOURCE_DIR}/tools/armrecomp

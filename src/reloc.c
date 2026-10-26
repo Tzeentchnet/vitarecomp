@@ -32,6 +32,16 @@ typedef struct {
 
 static const uint8_t entry_size[10] = {12, 8, 8, 8, 4, 4, 4, 4, 4, 4};
 
+static vita_reloc_status process_identity(
+    const uint8_t *source,
+    uint8_t *writable,
+    size_t size,
+    const vita_reloc_module *module,
+    const vita_reloc_table *table,
+    const uint32_t *post_link_patches,
+    uint32_t post_link_patch_count,
+    vita_reloc_identity *result);
+
 static uint16_t rd16(const uint8_t *p) {
     return (uint16_t)(p[0] | (p[1] << 8));
 }
@@ -89,6 +99,91 @@ static vita_reloc_status fail(
         va_end(args);
     }
     return status;
+}
+
+vita_reloc_status vita_var_reloc_parse_block(
+    const uint8_t *bytes,
+    size_t size,
+    vita_var_reloc_table *out,
+    vita_reloc_error *error) {
+    uint32_t declared;
+    uint32_t cursor;
+    uint32_t capacity;
+    if (!bytes || !out)
+        return fail(error, VITA_RELOC_ERROR_INVALID_ARGUMENT,
+                    VITA_RELOC_INDEX_NONE, VITA_RELOC_INDEX_NONE,
+                    VITA_RELOC_INDEX_NONE,
+                    "invalid variable relocation block argument");
+    memset(out, 0, sizeof(*out));
+    clear_error(error);
+    if (size < 4u)
+        return fail(error, VITA_RELOC_ERROR_TRUNCATED_RECORD,
+                    VITA_RELOC_INDEX_NONE, 0u, 0u,
+                    "variable relocation block header is truncated");
+    declared = (rd32(bytes) >> 4) & 0x00FFFFFFu;
+    out->declared_bytes = declared;
+    if (declared < 4u)
+        return fail(error, VITA_RELOC_ERROR_TRUNCATED_RECORD,
+                    VITA_RELOC_INDEX_NONE, 0u, 0u,
+                    "variable relocation block has invalid size");
+    if ((size_t)declared > size)
+        return fail(error, VITA_RELOC_ERROR_TRUNCATED_RECORD,
+                    VITA_RELOC_INDEX_NONE, 0u, 0u,
+                    "variable relocation block is truncated");
+    capacity = (declared - 4u) / 8u;
+    if (capacity) {
+        out->v = (vita_var_reloc_entry *)calloc(capacity, sizeof(*out->v));
+        if (!out->v)
+            return fail(error, VITA_RELOC_ERROR_NO_MEMORY,
+                        VITA_RELOC_INDEX_NONE, VITA_RELOC_INDEX_NONE,
+                        VITA_RELOC_INDEX_NONE,
+                        "out of memory decoding variable relocations");
+    }
+    cursor = 4u;
+    while (cursor < declared) {
+        uint32_t attributes;
+        uint32_t record_size;
+        vita_var_reloc_entry *entry;
+        if (declared - cursor < 4u)
+            return fail(error, VITA_RELOC_ERROR_TRUNCATED_RECORD,
+                        VITA_RELOC_INDEX_NONE, out->n, cursor,
+                        "variable relocation record header is truncated");
+        attributes = rd32(bytes + cursor);
+        switch (attributes & 0xFu) {
+        case 1u:
+            record_size = 8u;
+            break;
+        case 2u:
+            record_size = 12u;
+            break;
+        default:
+            return fail(error, VITA_RELOC_ERROR_UNKNOWN_FORMAT,
+                        VITA_RELOC_INDEX_NONE, out->n, cursor,
+                        "unknown variable relocation format %u",
+                        attributes & 0xFu);
+        }
+        if (declared - cursor < record_size)
+            return fail(error, VITA_RELOC_ERROR_TRUNCATED_RECORD,
+                        VITA_RELOC_INDEX_NONE, out->n, cursor,
+                        "variable relocation record is truncated");
+        entry = &out->v[out->n++];
+        entry->format = (uint8_t)(attributes & 0xFu);
+        entry->patch_seg = (uint8_t)((attributes >> 4) & 0xFu);
+        entry->code = (uint8_t)((attributes >> 8) & 0xFFu);
+        entry->offset = rd32(bytes + cursor + 4u);
+        entry->addend = entry->format == 1u
+            ? attributes >> 16
+            : rd32(bytes + cursor + 8u);
+        out->by_format[entry->format]++;
+        cursor += record_size;
+    }
+    return VITA_RELOC_OK;
+}
+
+void vita_var_reloc_free(vita_var_reloc_table *table) {
+    if (!table) return;
+    free(table->v);
+    memset(table, 0, sizeof(*table));
 }
 
 static seginfo seg_lookup(const vita_reloc_module *module, uint32_t index) {
@@ -623,6 +718,8 @@ static vita_reloc_status inspect_elf_identity(
     const uint8_t *bytes,
     size_t size,
     int require_identity,
+    const uint32_t *post_link_patches,
+    uint32_t post_link_patch_count,
     vita_reloc_table *out,
     vita_reloc_identity *identity,
     vita_reloc_error *error,
@@ -671,8 +768,9 @@ static vita_reloc_status inspect_elf_identity(
                     VITA_RELOC_INDEX_NONE,
                     "rebase relocation target is outside every PT_LOAD segment");
     }
-    status = vita_reloc_verify_identity(
-        bytes, size, &module, out, identity);
+    status = process_identity(
+        bytes, NULL, size, &module, out, post_link_patches,
+        post_link_patch_count, identity);
     if (status != VITA_RELOC_OK)
         status = fail(error, status, VITA_RELOC_INDEX_NONE,
                       VITA_RELOC_INDEX_NONE, VITA_RELOC_INDEX_NONE,
@@ -713,7 +811,24 @@ vita_reloc_status vita_reloc_validate_elf_identity(
     vita_reloc_program_header *headers;
     vita_reloc_module module;
     vita_reloc_status status = inspect_elf_identity(
-        bytes, size, 1, out, identity, error, &headers, &module);
+        bytes, size, 1, NULL, 0u, out, identity, error, &headers, &module);
+    free(headers);
+    return status;
+}
+
+vita_reloc_status vita_reloc_validate_elf_identity_except(
+    const uint8_t *bytes,
+    size_t size,
+    const uint32_t *post_link_patches,
+    uint32_t post_link_patch_count,
+    vita_reloc_table *out,
+    vita_reloc_identity *identity,
+    vita_reloc_error *error) {
+    vita_reloc_program_header *headers;
+    vita_reloc_module module;
+    vita_reloc_status status = inspect_elf_identity(
+        bytes, size, 1, post_link_patches, post_link_patch_count,
+        out, identity, error, &headers, &module);
     free(headers);
     return status;
 }
@@ -724,17 +839,33 @@ vita_reloc_status vita_reloc_normalize_elf_identity(
     vita_reloc_table *out,
     vita_reloc_identity *identity,
     vita_reloc_error *error) {
+    return vita_reloc_normalize_elf_identity_except(
+        bytes, size, NULL, 0u, out, identity, error);
+}
+
+vita_reloc_status vita_reloc_normalize_elf_identity_except(
+    uint8_t *bytes,
+    size_t size,
+    const uint32_t *post_link_patches,
+    uint32_t post_link_patch_count,
+    vita_reloc_table *out,
+    vita_reloc_identity *identity,
+    vita_reloc_error *error) {
     vita_reloc_program_header *headers;
     vita_reloc_module module;
     vita_reloc_identity before;
     vita_reloc_identity after;
     vita_reloc_status status = inspect_elf_identity(
-        bytes, size, 0, out, &before, error, &headers, &module);
+        bytes, size, 0, post_link_patches, post_link_patch_count,
+        out, &before, error, &headers, &module);
     if (status != VITA_RELOC_OK) return status;
-    status = vita_reloc_apply(bytes, size, &module, out, &after);
+    status = process_identity(
+        bytes, bytes, size, &module, out, post_link_patches,
+        post_link_patch_count, &after);
     if (status == VITA_RELOC_OK)
-        status = vita_reloc_verify_identity(
-            bytes, size, &module, out, &after);
+        status = process_identity(
+            bytes, NULL, size, &module, out, post_link_patches,
+            post_link_patch_count, &after);
     free(headers);
     if (status != VITA_RELOC_OK)
         return fail(error, status, VITA_RELOC_INDEX_NONE,
@@ -899,13 +1030,20 @@ static vita_reloc_status process_identity(
     size_t size,
     const vita_reloc_module *module,
     const vita_reloc_table *table,
+    const uint32_t *post_link_patches,
+    uint32_t post_link_patch_count,
     vita_reloc_identity *result) {
     uint32_t index;
     if (!source || !module || !table || !result ||
+        (!post_link_patches && post_link_patch_count) ||
         (module->program_header_count && !module->program_headers))
         return VITA_RELOC_ERROR_INVALID_ARGUMENT;
+    for (index = 1; index < post_link_patch_count; index++)
+        if (post_link_patches[index - 1] >= post_link_patches[index])
+            return VITA_RELOC_ERROR_INVALID_ARGUMENT;
     memset(result, 0, sizeof(*result));
     result->first_changed = VITA_RELOC_INDEX_NONE;
+    result->first_preserved = VITA_RELOC_INDEX_NONE;
     result->first_unsupported = VITA_RELOC_INDEX_NONE;
     result->first_outside = VITA_RELOC_INDEX_NONE;
     for (index = 0; index < table->n; index++) {
@@ -936,6 +1074,24 @@ static vita_reloc_status process_identity(
             result->outside++;
             continue;
         }
+        if (post_link_patch_count) {
+            uint32_t low = 0u;
+            uint32_t high = post_link_patch_count;
+            while (low < high) {
+                uint32_t middle = low + (high - low) / 2u;
+                if (post_link_patches[middle] < entry->patch)
+                    low = middle + 1u;
+                else
+                    high = middle;
+            }
+            if (low < post_link_patch_count &&
+                post_link_patches[low] == entry->patch) {
+                if (!result->preserved)
+                    result->first_preserved = index;
+                result->preserved++;
+                continue;
+            }
+        }
         memcpy(expected, source + file_offset, need);
         patch_entry(expected, entry);
         if (memcmp(source + file_offset, expected, need) != 0) {
@@ -953,7 +1109,7 @@ vita_reloc_status vita_reloc_verify_identity(
     const vita_reloc_module *module,
     const vita_reloc_table *table,
     vita_reloc_identity *result) {
-    return process_identity(bytes, NULL, size, module, table, result);
+    return process_identity(bytes, NULL, size, module, table, NULL, 0u, result);
 }
 
 vita_reloc_status vita_reloc_apply(
@@ -962,7 +1118,7 @@ vita_reloc_status vita_reloc_apply(
     const vita_reloc_module *module,
     const vita_reloc_table *table,
     vita_reloc_identity *result) {
-    return process_identity(bytes, bytes, size, module, table, result);
+    return process_identity(bytes, bytes, size, module, table, NULL, 0u, result);
 }
 
 void vita_reloc_free(vita_reloc_table *table) {

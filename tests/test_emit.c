@@ -164,6 +164,56 @@ static void test_module_metadata_failures(void) {
     assert(strstr(err, "TLS variable imports"));
 }
 
+static void test_variable_relocation_segments(void) {
+    uint8_t bytes[0x240];
+    vm_image img;
+    vm_module mod;
+    char err[128];
+
+    memset(bytes, 0, sizeof(bytes));
+    memset(&img, 0, sizeof(img));
+    img.data = bytes;
+    img.size = sizeof(bytes);
+    img.seg_vaddr = BASE;
+    img.seg_len = 0x1E0;
+    img.seg_program_header_index = 0;
+    img.data_seg_count = 1;
+    img.data_segs[0].file = 0x1E0;
+    img.data_segs[0].vaddr = 0x3000;
+    img.data_segs[0].len = 8;
+    img.data_segs[0].mem_len = 8;
+    img.data_segs[0].program_header_index = 2;
+
+    put16(bytes, 0x02, 0x0101);
+    put32(bytes, 0x2C, 0x80);
+    put32(bytes, 0x30, 0xA4);
+    put32(bytes, 0x44, 0xFFFFFFFFu);
+    put16(bytes, 0x80, 0x24);
+    put16(bytes, 0x88, 1);
+    put32(bytes, 0x8C, 0x11223344u);
+    put32(bytes, 0x9C, BASE + 0xC0);
+    put32(bytes, 0xA0, BASE + 0xC4);
+    put32(bytes, 0xC0, 0x55667788u);
+    put32(bytes, 0xC4, BASE + 0xD0);
+    put32(bytes, 0xD0, 24u << 4);
+    put32(bytes, 0xD4,
+          1u | (2u << 4) | (2u << 8) | (0xABCDu << 16));
+    put32(bytes, 0xD8, 0);
+    put32(bytes, 0xDC, 2u | (2u << 4) | (2u << 8));
+    put32(bytes, 0xE0, 4);
+    put32(bytes, 0xE4, 0x89ABCDEFu);
+
+    assert(vm_parse(&img, 0, &mod, err, sizeof(err)) == 0);
+    assert(mod.var_count == 1 && mod.vars[0].site_count == 2);
+    assert(mod.vars[0].sites[0].addr == 0x3000);
+    assert(mod.vars[0].sites[0].addend == 0xABCDu);
+    assert(mod.vars[0].sites[0].code == 2);
+    assert(mod.vars[0].sites[1].addr == 0x3004);
+    assert(mod.vars[0].sites[1].addend == 0x89ABCDEFu);
+    assert(mod.vars[0].sites[1].code == 2);
+    vm_free(&mod);
+}
+
 int main(void) {
     static uint8_t code[0x100];
     static vf_func funcs[10];
@@ -187,6 +237,7 @@ int main(void) {
     long_module_id[sizeof(long_module_id) - 1] = '\0';
     assert(!em_module_id_valid(long_module_id));
     test_module_metadata_failures();
+    test_variable_relocation_segments();
     disc.funcs = funcs;
     disc.cap = (uint32_t)(sizeof(funcs) / sizeof(funcs[0]));
     img.data = code;

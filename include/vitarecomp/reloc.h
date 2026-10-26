@@ -74,6 +74,21 @@ typedef struct vita_reloc_table {
     uint32_t trailing;
 } vita_reloc_table;
 
+typedef struct vita_var_reloc_entry {
+    uint32_t offset;
+    uint32_t addend;
+    uint8_t format;
+    uint8_t code;
+    uint8_t patch_seg;
+} vita_var_reloc_entry;
+
+typedef struct vita_var_reloc_table {
+    vita_var_reloc_entry *v;
+    uint32_t n;
+    uint32_t declared_bytes;
+    uint32_t by_format[3];
+} vita_var_reloc_table;
+
 typedef enum vita_reloc_status {
     VITA_RELOC_OK = 0,
     VITA_RELOC_ERROR_INVALID_ARGUMENT = -1,
@@ -103,12 +118,24 @@ typedef struct vita_reloc_error {
 
 typedef struct vita_reloc_identity {
     uint32_t changed;
+    uint32_t preserved;
     uint32_t unsupported;
     uint32_t outside;
     uint32_t first_changed;
+    uint32_t first_preserved;
     uint32_t first_unsupported;
     uint32_t first_outside;
 } vita_reloc_identity;
+
+/* Decode one variable-import relocation block. Format 1 carries a 16-bit
+ * addend in its attribute word; format 2 carries a full trailing word. */
+vita_reloc_status vita_var_reloc_parse_block(
+    const uint8_t *bytes,
+    size_t size,
+    vita_var_reloc_table *out,
+    vita_reloc_error *error);
+
+void vita_var_reloc_free(vita_var_reloc_table *table);
 
 /* Decode all PT_SCE_RELA streams. Partial entries remain available after an
  * error for diagnostic tools, but a strict runtime must accept only OK. */
@@ -136,12 +163,34 @@ vita_reloc_status vita_reloc_validate_elf_identity(
     vita_reloc_identity *identity,
     vita_reloc_error *error);
 
+/* Variable-import relocations legitimately replace identity-relocated bytes
+ * during post-link binding. The exception list must be strictly increasing;
+ * matching records are structurally validated but neither compared nor
+ * materialized. */
+vita_reloc_status vita_reloc_validate_elf_identity_except(
+    const uint8_t *bytes,
+    size_t size,
+    const uint32_t *post_link_patches,
+    uint32_t post_link_patch_count,
+    vita_reloc_table *out,
+    vita_reloc_identity *identity,
+    vita_reloc_error *error);
+
 /* Materialize the identity-load result in a writable ELF32 image. Validation
  * completes before bytes are changed. On success, identity reports the state
  * before normalization, and a second call reports zero changed records. */
 vita_reloc_status vita_reloc_normalize_elf_identity(
     uint8_t *bytes,
     size_t size,
+    vita_reloc_table *out,
+    vita_reloc_identity *identity,
+    vita_reloc_error *error);
+
+vita_reloc_status vita_reloc_normalize_elf_identity_except(
+    uint8_t *bytes,
+    size_t size,
+    const uint32_t *post_link_patches,
+    uint32_t post_link_patch_count,
     vita_reloc_table *out,
     vita_reloc_identity *identity,
     vita_reloc_error *error);

@@ -190,7 +190,10 @@ armrecomp compose --entry-module <id> --output <registry.c>
 `normalize` writes a separate ELF only after the complete PT_SCE_RELA stream
 decodes, every relocation is supported and targets declared file bytes, and a
 second identity check reports zero remaining changes. It refuses an existing
-output and never modifies the input.
+output and never modifies the input. Variable-import relocation blocks are
+decoded in both alternate formats. PT_SCE_RELA records at those validated
+post-link patch addresses are preserved and reported separately so
+normalization does not overwrite the loader-selected variable targets.
 
 `emit` also writes deterministic `<out>.report.json` and
 `<out>.report.txt` files with the strict unsupported/trap census, structural

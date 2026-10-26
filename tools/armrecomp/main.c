@@ -250,6 +250,96 @@ static int publish_binary(
     return failed;
 }
 
+static int exec_image(const uint8_t *buf, size_t size, const vc_module *m,
+                      vm_image *img);
+
+static int uint32_order(const void *left, const void *right) {
+    uint32_t a = *(const uint32_t *)left;
+    uint32_t b = *(const uint32_t *)right;
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static int collect_post_link_patches(
+    const uint8_t *bytes,
+    size_t size,
+    uint32_t **out_patches,
+    uint32_t *out_count,
+    char *error,
+    size_t error_size) {
+    vc_module container;
+    vm_image image;
+    vm_module module;
+    uint32_t *patches = NULL;
+    size_t count = 0;
+    uint32_t entry_offset;
+    const uint8_t *module_info;
+    int image_result;
+    *out_patches = NULL;
+    *out_count = 0u;
+    if (vc_parse(bytes, size, &container, error, error_size))
+        return 1;
+    image_result = exec_image(bytes, size, &container, &image);
+    if (image_result <= 0) {
+        (void)snprintf(
+            error, error_size,
+            image_result < 0
+                ? "unsupported PT_LOAD layout"
+                : "no executable segment found");
+        return 1;
+    }
+    entry_offset = container.elf.entry & 0x3FFFFFFFu;
+    if ((container.elf.entry >> 30) != image.seg_program_header_index ||
+        entry_offset > image.seg_len ||
+        image.seg_len - entry_offset < 0x5Cu)
+        return 0;
+    module_info = vm_ptr(&image, entry_offset, 0x5Cu);
+    if (!module_info || module_info[3] != 1u)
+        return 0;
+    if (vm_parse(
+            &image, container.elf.entry, &module, error, error_size))
+        return 1;
+    for (uint32_t index = 0; index < module.var_count; index++) {
+        if ((size_t)module.vars[index].site_count > SIZE_MAX - count) {
+            vm_free(&module);
+            (void)snprintf(error, error_size,
+                           "variable import site count overflows");
+            return 1;
+        }
+        count += module.vars[index].site_count;
+    }
+    if (count > UINT32_MAX) {
+        vm_free(&module);
+        (void)snprintf(error, error_size,
+                       "variable import site count exceeds UINT32_MAX");
+        return 1;
+    }
+    if (count) {
+        size_t cursor = 0;
+        patches = (uint32_t *)malloc(count * sizeof(*patches));
+        if (!patches) {
+            vm_free(&module);
+            (void)snprintf(error, error_size, "out of memory");
+            return 1;
+        }
+        for (uint32_t index = 0; index < module.var_count; index++)
+            for (uint32_t site = 0;
+                 site < module.vars[index].site_count; site++)
+                patches[cursor++] = module.vars[index].sites[site].addr;
+        qsort(patches, count, sizeof(*patches), uint32_order);
+        {
+            size_t write = 0;
+            for (size_t read = 0; read < count; read++)
+                if (!write || patches[read] != patches[write - 1])
+                    patches[write++] = patches[read];
+            count = write;
+        }
+    }
+    vm_free(&module);
+    *out_patches = patches;
+    *out_count = (uint32_t)count;
+    return 0;
+}
+
 static int cmd_normalize(const char *path, const char *outpath) {
     size_t size = 0;
     uint8_t *bytes;
@@ -257,6 +347,9 @@ static int cmd_normalize(const char *path, const char *outpath) {
     vita_reloc_identity identity;
     vita_reloc_error error;
     vita_reloc_status status;
+    uint32_t *post_link_patches = NULL;
+    uint32_t post_link_patch_count = 0u;
+    char module_error[256];
     if (strcmp(path, outpath) == 0) {
         fputs("armrecomp: normalize: input and output must differ\n", stderr);
         return 1;
@@ -270,8 +363,16 @@ static int cmd_normalize(const char *path, const char *outpath) {
         fputs("armrecomp: normalize: cannot read input\n", stderr);
         return 1;
     }
-    status = vita_reloc_normalize_elf_identity(
-        bytes, size, &table, &identity, &error);
+    if (collect_post_link_patches(
+            bytes, size, &post_link_patches, &post_link_patch_count,
+            module_error, sizeof(module_error))) {
+        fprintf(stderr, "armrecomp: normalize: %s\n", module_error);
+        free(bytes);
+        return 1;
+    }
+    status = vita_reloc_normalize_elf_identity_except(
+        bytes, size, post_link_patches, post_link_patch_count,
+        &table, &identity, &error);
     if (status != VITA_RELOC_OK) {
         fprintf(stderr, "armrecomp: normalize: %s",
                 error.message[0] ? error.message
@@ -283,12 +384,14 @@ static int cmd_normalize(const char *path, const char *outpath) {
             fprintf(stderr, " (record %u)", error.record_index);
         fputc('\n', stderr);
         vita_reloc_free(&table);
+        free(post_link_patches);
         free(bytes);
         return 1;
     }
     if (publish_binary(outpath, bytes, size)) {
         fputs("armrecomp: normalize: cannot publish output\n", stderr);
         vita_reloc_free(&table);
+        free(post_link_patches);
         free(bytes);
         return 1;
     }
@@ -296,9 +399,11 @@ static int cmd_normalize(const char *path, const char *outpath) {
            table.n, table.n == 1u ? "" : "s",
            table.streams, table.streams == 1u ? "" : "s");
     printf("  changed       %u\n", identity.changed);
+    printf("  preserved     %u\n", identity.preserved);
     printf("  unsupported   %u\n", identity.unsupported);
     printf("  outside file  %u\n", identity.outside);
     vita_reloc_free(&table);
+    free(post_link_patches);
     free(bytes);
     return 0;
 }
@@ -652,6 +757,7 @@ static int exec_image(const uint8_t *buf, size_t size, const vc_module *m,
             img->seg_len   = m->phdr[i].filesz;
             img->seg_mem_len = m->phdr[i].memsz;
             img->seg_align = m->phdr[i].align;
+            img->seg_program_header_index = (uint32_t)i;
             found = 1;
         } else if (img->data_seg_count < VM_MAX_DATA_SEGS) {
             vm_seg *s = &img->data_segs[img->data_seg_count++];
@@ -660,6 +766,7 @@ static int exec_image(const uint8_t *buf, size_t size, const vc_module *m,
             s->len   = m->phdr[i].filesz;
             s->mem_len = m->phdr[i].memsz;
             s->align = m->phdr[i].align;
+            s->program_header_index = (uint32_t)i;
         } else {
             return -1;
         }
