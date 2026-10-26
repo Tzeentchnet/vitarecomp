@@ -84,9 +84,9 @@ but the guest firmware bridge to it is not. Deferred HLE categories are:
 - title-specific patches, timing exceptions, and compatibility behavior.
 
 Unsupported APIs must use `vita_hle_unimplemented` (or a documented firmware
-error) rather than a zero/success placeholder. Vita3K may be compared as a
-separate behavioral oracle; it is not linked, vendored, or required at
-runtime.
+error) rather than a zero/success placeholder. Vita3K source may be consulted
+as code reference, but its runtime output is not a review gate; it is not
+linked, vendored, or required at runtime.
 
 ## Combined validation checkpoint
 
@@ -215,8 +215,8 @@ That last row is not a consolation prize. Structure layouts, GXP container
 format, enum values and calling conventions are functional facts rather than
 expression, and they are most of what the shallow 92 functions need.
 
-Vita3K stays what it has been throughout: a **behavioural oracle**, run as a
-separate process and compared against. No code copied, linked, or vendored.
+Vita3K is a **code reference**, not a runtime review oracle. No code is copied,
+linked, or vendored.
 
 ## Order of work
 

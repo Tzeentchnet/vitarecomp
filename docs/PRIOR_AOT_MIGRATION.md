@@ -56,14 +56,10 @@ The formerly deferred canonical seams now execute in public tests:
 | FPSCR flush-to-zero comparison | Raw FPSCR control/state and comparison helpers | Runtime/prior-AOT vectors |
 | Exclusive monitor and ordinary-write invalidation | Shared synchronized monitor used by checked writes and LDREX/STREX | Cross-thread runtime tests |
 
-The optional full external-oracle adapter remains deferred. Generated-module
-ABI v4 deliberately exposes the title-neutral state required by generated C
-and entry preparation, including explicit deterministic TLS layout, rather
-than a complete emulator-oracle snapshot. Its site-keyed function-import
-binding behavior is unchanged from ABI v3.
-
-The optional oracle deferral is not a test-execution claim and is not required
-for the production loader, binder, or entry boundary.
+A full external runtime-state adapter is not planned. Generated-module ABI v4
+deliberately exposes only the title-neutral state required by generated C and
+entry preparation, including explicit deterministic TLS layout. Its site-keyed
+function-import binding behavior is unchanged from ABI v3.
 
 ## Required semantics retained by the fixtures
 

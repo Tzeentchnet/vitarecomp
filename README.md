@@ -287,7 +287,7 @@ committing:
 |---|---|---|
 | [vita-headers](https://github.com/vitasdk/vita-headers) | MIT | The NID database — the published mapping from import NIDs to function names. The reference for the HLE work list. |
 | [VitaSDK](https://github.com/vitasdk) | MIT | Headers and the published ABI for `sceGxm` / `sceKernel` / `sceCtrl`. |
-| **[Vita3K](https://github.com/Vita3K/Vita3K)** | **GPLv2** | **Oracle only** — run as a separate process and compared against. No code copied, linked, or vendored. |
+| **[Vita3K](https://github.com/Vita3K/Vita3K)** | **GPLv2** | **Code reference only** — source and documentation may be consulted, but runtime output is not a review gate. No code copied, linked, or vendored. |
 | [psprecomp](https://github.com/sp00nznet/psprecomp) | MIT | Sibling project for PSP. Same "`module_start` is not the program" shape, same oracle arrangement with PPSSPP. |
 | [ps3recomp](https://github.com/sp00nznet/ps3recomp) | MIT | Sibling project for PS3. Same project structure and conventions. |
 
@@ -331,8 +331,8 @@ reverse-engineering. With thanks to:
   homebrew SDK and the NID database, without which the import table is just
   hashes.
 - **[Vita3K](https://github.com/Vita3K/Vita3K)** — the best public description
-  of Vita behaviour that exists. Used as a behavioural oracle and as
-  documentation. **Reference only; no code copied.**
+  of Vita behaviour that exists. Used as source documentation, not as a
+  runtime review oracle. **Reference only; no code copied.**
 - The **Vita homebrew and reverse-engineering community**, whose published work
   on the SELF format, the module info structures and the NID scheme is what
   makes any of this tractable.

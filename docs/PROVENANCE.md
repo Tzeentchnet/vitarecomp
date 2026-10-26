@@ -165,10 +165,9 @@ destructor and TLS teardown, and clean restart. `runtime.c`,
 
 The integration intentionally does **not** include downstream `host/`,
 renderer, GXM HLE, audio, movie, input, networking, dialogs, savedata UI, or
-title-specific behavior. The optional Vita3K comparison remains an
-out-of-process behavioral oracle. No Vita3K source, library, generated title
-code, proprietary fixture, host renderer, or runtime dependency was
-incorporated.
+title-specific behavior. Vita3K is only a source-code reference; its runtime
+output is not a review gate. No Vita3K source, library, generated title code,
+proprietary fixture, host renderer, or runtime dependency was incorporated.
 
 ## Excluded material
 
