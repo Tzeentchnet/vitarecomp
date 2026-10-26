@@ -70,7 +70,9 @@ The implemented, synthetic-test-covered categories are:
 - measured SceGxm initialization, partitioned memory and USSE mappings,
   contexts, notification memory, finish/program state, linear textures,
   shader-patcher allocation/registration, and bounds-checked GXP header and
-  parameter reflection;
+  parameter reflection; vertex-program creation now validates its packed ABI,
+  parses bounded primary/secondary GXP streams, and emits a title-neutral USSE
+  family census before failing strictly without creating an object;
 - directory and read-only PSARC mounts, file/directory/stat/seek operations,
   virtual or host clocks, lifecycle counters, restart, and clean shutdown.
 
@@ -81,8 +83,12 @@ implements the synchronization/storage subset, not its fiber scheduler.
 ## Explicitly deferred
 
 The production DX12/Vulkan renderer contract is available to a native host.
-Shader-patcher registration retains validated GXP metadata, but shader object
-creation still fails explicitly because no GXP/USSE translator exists; it does
+Shader-patcher registration retains a validated GXP span. Vertex shader
+creation parses that span and censuses the currently justified VMOV and PHAS
+family encodings. An unknown instruction stops at the named strict boundary;
+even an entirely recognized census stops at the static
+translation-not-implemented boundary. It never calls the patcher allocator or
+writes the output because no GXP/USSE-to-HLSL translation exists, and it does
 not return a success-shaped placeholder. The remaining deferred HLE categories
 are:
 

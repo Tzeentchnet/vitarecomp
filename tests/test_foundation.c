@@ -79,6 +79,7 @@ void vita_hle_sceGxmProgramParameterGetResourceIndex(void);
 void vita_hle_sceGxmProgramParameterGetType(void);
 void vita_hle_sceGxmProgramParameterIsRegFormat(void);
 void vita_hle_sceGxmShaderPatcherCreate(void);
+void vita_hle_sceGxmShaderPatcherCreateVertexProgram(void);
 void vita_hle_sceGxmShaderPatcherRegisterProgram(void);
 void vita_hle_sceGxmSetFragmentProgram(void);
 void vita_hle_sceGxmSetVertexProgram(void);
@@ -170,8 +171,10 @@ void vita_hle_sceKernelDeleteCallback(void);
 typedef struct diagnostics {
     uint32_t total;
     uint32_t import_errors;
+    uint32_t shader_censuses;
     char library[64];
     char function[64];
+    char shader_message[256];
 } diagnostics;
 
 static diagnostics g_diagnostics;
@@ -191,6 +194,7 @@ static uint32_t g_worker_after_stop;
 static uint32_t g_owner_after_stop;
 static uint32_t g_patcher_alloc_user_data;
 static uint32_t g_patcher_alloc_size;
+static uint32_t g_patcher_alloc_calls;
 static uint32_t g_shutdown_ready_uid;
 static uint32_t g_shutdown_waiting_uid;
 static uint32_t g_shutdown_running_uid;
@@ -217,6 +221,12 @@ static void diagnostic(const vita_diagnostic *event, void *userdata) {
                  event->library_name ? event->library_name : "");
         snprintf(state->function, sizeof(state->function), "%s",
                  event->function_name ? event->function_name : "");
+    }
+    if (event->code == VITA_DIAG_RUNTIME && event->message &&
+        strstr(event->message, "USSE census")) {
+        state->shader_censuses++;
+        snprintf(state->shader_message, sizeof(state->shader_message), "%s",
+                 event->message);
     }
 }
 
@@ -373,11 +383,36 @@ static void destructor_entry(void) {
 }
 
 static void patcher_alloc_entry(void) {
+    g_patcher_alloc_calls++;
     g_patcher_alloc_user_data = r0;
     g_patcher_alloc_size = r1;
-    r0 = MEMORY_BASE +
-        (r1 == UINT32_C(0x100) ? UINT32_C(0x18000)
-                               : UINT32_C(0x18100));
+    if (r1 == UINT32_C(0x100)) {
+        r0 = MEMORY_BASE +
+            (r0 == UINT32_C(0xCAFE) ? UINT32_C(0x18000)
+                                    : UINT32_C(0x18200));
+    } else {
+        r0 = MEMORY_BASE +
+            (r0 == UINT32_C(0xCAFE) ? UINT32_C(0x18100)
+                                    : UINT32_C(0x18300));
+    }
+}
+
+static void create_vertex_program_entry(void) {
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+}
+
+static void set_create_vertex_program_args(
+    uint32_t patcher, uint32_t registration, uint32_t attributes,
+    uint32_t attribute_count, uint32_t streams, uint32_t stream_count,
+    uint32_t output) {
+    sp = MAIN_STACK;
+    r0 = patcher;
+    r1 = registration;
+    r2 = attributes;
+    r3 = attribute_count;
+    vita_write32(sp, streams);
+    vita_write32(sp + 4u, stream_count);
+    vita_write32(sp + 8u, output);
 }
 
 static const vita_dispatch_entry DISPATCH[] = {
@@ -779,6 +814,7 @@ static void test_gxm(void) {
     assert(r0 == 0);
     assert(g_patcher_alloc_user_data == UINT32_C(0xCAFE));
     assert(g_patcher_alloc_size == UINT32_C(0x100));
+    assert(g_patcher_alloc_calls == 1u);
     assert(vita_read32(patcher_out) ==
            MEMORY_BASE + UINT32_C(0x18000));
 
@@ -896,9 +932,210 @@ static void test_gxm(void) {
     assert(r0 == 0u);
     assert(g_patcher_alloc_user_data == UINT32_C(0xCAFE));
     assert(g_patcher_alloc_size == 4u);
+    assert(g_patcher_alloc_calls == 2u);
     assert(vita_read32(registration_out) ==
            MEMORY_BASE + UINT32_C(0x18100));
     assert(vita_read32(MEMORY_BASE + UINT32_C(0x18100)) == program);
+
+    const uint32_t patcher = vita_read32(patcher_out);
+    const uint32_t registration = vita_read32(registration_out);
+    const uint32_t vertex_attributes =
+        MEMORY_BASE + UINT32_C(0x1760);
+    const uint32_t vertex_streams =
+        MEMORY_BASE + UINT32_C(0x1768);
+    const uint32_t vertex_program_out =
+        MEMORY_BASE + UINT32_C(0x176C);
+    const uint32_t second_patcher_params =
+        MEMORY_BASE + UINT32_C(0x1770);
+    const uint32_t second_patcher_out =
+        MEMORY_BASE + UINT32_C(0x17B8);
+    for (uint32_t i = 0; i < 17u; i++)
+        vita_write32(second_patcher_params + i * 4u, 0u);
+    vita_write32(second_patcher_params, UINT32_C(0xCAFF));
+    vita_write32(second_patcher_params + 4u, UINT32_C(0xA001));
+    r0 = second_patcher_params;
+    r1 = second_patcher_out;
+    vita_hle_sceGxmShaderPatcherCreate();
+    assert(r0 == 0u);
+    assert(g_patcher_alloc_calls == 3u);
+    const uint32_t second_patcher = vita_read32(second_patcher_out);
+    assert(second_patcher == MEMORY_BASE + UINT32_C(0x18200));
+
+    vita_write16(vertex_attributes, 0u);
+    vita_write32(vertex_streams, 16u);
+    vita_write32(vertex_program_out, UINT32_C(0xA5A5A5A5));
+    set_create_vertex_program_args(
+        0u, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+    assert(g_patcher_alloc_calls == 3u);
+
+    set_create_vertex_program_args(
+        patcher, 0u, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        second_patcher, registration, vertex_attributes, 1u,
+        vertex_streams, 1u, vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0003));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, 0u, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 0u, vertex_streams, 1u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, 0u, 1u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 0u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        0u);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, UINT32_MAX,
+        vertex_streams, 1u, vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0003));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, MEMORY_BASE + MEMORY_SIZE - 4u, 1u,
+        vertex_streams, 1u, vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u,
+        MEMORY_BASE + MEMORY_SIZE - 2u, 1u, vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    sp = MEMORY_BASE + MEMORY_SIZE - 8u;
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0004));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+
+    vita_write16(vertex_attributes, 1u);
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0003));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+    vita_write16(vertex_attributes, 0u);
+
+    vita_write32(program + 20u, 1u);
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0003));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+    vita_write32(program + 20u, 0u);
+
+    vita_write32(program + 8u, UINT32_C(0x101));
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    vita_hle_sceGxmShaderPatcherCreateVertexProgram();
+    assert(r0 == UINT32_C(0x805B0003));
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+    vita_write32(program + 8u, UINT32_C(0x100));
+
+    const uint32_t instruction = program + UINT32_C(0xF0);
+    vita_write32(program + 60u, 1u);
+    vita_write32(program + 64u, UINT32_C(0xB0));
+    vita_write32(program + 68u, 0u);
+    vita_write32(program + 72u, 0u);
+    vita_write32(instruction, 0u);
+    vita_write32(instruction + 4u, UINT32_C(0x08000000));
+    vita_guest_call_result shader_result;
+    const uint32_t census_before_unknown = g_diagnostics.shader_censuses;
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    assert(vita_guest_call(create_vertex_program_entry, &shader_result) ==
+           VITA_OK);
+    assert(shader_result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(shader_result.failure.kind ==
+           VITA_STRICT_FAILURE_UNTRANSLATED_INSTRUCTION);
+    assert(shader_result.failure.source_address == 0u);
+    assert(shader_result.failure.raw_instruction == 0u);
+    assert(strcmp(
+               shader_result.failure.name,
+               "SceGxm::USSE_UNKNOWN instruction unsupported") == 0);
+    assert(g_diagnostics.shader_censuses == census_before_unknown + 1u);
+    assert(strstr(
+               g_diagnostics.shader_message,
+               "total=1 decoded=0 unsupported=1") != NULL);
+    assert(strstr(
+               g_diagnostics.shader_message,
+               "first=PRIMARY/0/UNKNOWN") != NULL);
+    assert(strstr(g_diagnostics.shader_message, "0x") == NULL);
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+    assert(g_patcher_alloc_calls == 3u);
+
+    vita_write32(vertex_program_out, UINT32_C(0x5A5A5A5A));
+    vita_write32(instruction + 4u, UINT32_C(0x38000000));
+    const uint32_t census_before_translation =
+        g_diagnostics.shader_censuses;
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    assert(vita_guest_call(create_vertex_program_entry, &shader_result) ==
+           VITA_OK);
+    assert(shader_result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(shader_result.failure.kind ==
+           VITA_STRICT_FAILURE_UNTRANSLATED_INSTRUCTION);
+    assert(strcmp(
+               shader_result.failure.name,
+               "SceGxm::vertex shader HLSL translation not implemented") ==
+           0);
+    assert(g_diagnostics.shader_censuses ==
+           census_before_translation + 1u);
+    assert(strstr(
+               g_diagnostics.shader_message,
+               "total=1 decoded=1 unsupported=0") != NULL);
+    assert(strstr(
+               g_diagnostics.shader_message,
+               "first=NONE/0/NONE") != NULL);
+    assert(vita_read32(vertex_program_out) == UINT32_C(0x5A5A5A5A));
+    assert(g_patcher_alloc_calls == 3u);
 
     sp = MAIN_STACK;
     vita_write32(sp, 544u);

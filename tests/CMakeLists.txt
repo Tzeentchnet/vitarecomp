@@ -238,6 +238,30 @@ set_tests_properties(runtime-foundation PROPERTIES
     TIMEOUT 30
 )
 
+add_executable(test_gxp test_gxp.c)
+target_link_libraries(test_gxp PRIVATE vitarecomp)
+if(MSVC)
+    target_compile_options(test_gxp PRIVATE /UNDEBUG)
+else()
+    target_compile_options(test_gxp PRIVATE -UNDEBUG)
+endif()
+add_test(NAME gxp-parser COMMAND test_gxp)
+set_tests_properties(gxp-parser PROPERTIES
+    LABELS "runtime;gxm;gxp;shader;negative"
+)
+
+add_executable(test_usse test_usse.c)
+target_link_libraries(test_usse PRIVATE vitarecomp)
+if(MSVC)
+    target_compile_options(test_usse PRIVATE /UNDEBUG)
+else()
+    target_compile_options(test_usse PRIVATE -UNDEBUG)
+endif()
+add_test(NAME usse-census COMMAND test_usse)
+set_tests_properties(usse-census PROPERTIES
+    LABELS "runtime;gxm;usse;shader;negative"
+)
+
 add_executable(test_prior_aot test_prior_aot.c)
 find_package(Threads REQUIRED)
 target_link_libraries(test_prior_aot PRIVATE vitarecomp Threads::Threads)
@@ -495,6 +519,8 @@ set(_vitarecomp_test_targets
     test_emit
     test_runtime
     test_foundation
+    test_gxp
+    test_usse
     test_prior_aot
     test_dispatch_diagnostic
     test_gpu_contract

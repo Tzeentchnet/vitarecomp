@@ -2,7 +2,9 @@
 
 #include "vitarecomp/hle.h"
 #include "vitarecomp/host.h"
+#include "vitarecomp/gxp.h"
 #include "vitarecomp/recomp_rt.h"
+#include "vitarecomp/usse.h"
 #include "hle_sysmem.h"
 
 #include <stdint.h>
@@ -64,6 +66,7 @@ typedef struct gxm_registered_program {
     uint32_t address;
     uint32_t patcher;
     uint32_t program;
+    uint32_t program_size;
 } gxm_registered_program;
 
 typedef struct gxm_state {
@@ -810,6 +813,14 @@ static gxm_shader_patcher *find_shader_patcher(uint32_t address) {
     return NULL;
 }
 
+static gxm_registered_program *find_registered_program(uint32_t address) {
+    for (uint32_t i = 0; i < g_gxm.registered_program_count; i++) {
+        if (g_gxm.registered_programs[i].address == address)
+            return &g_gxm.registered_programs[i];
+    }
+    return NULL;
+}
+
 void vita_hle_sceGxmShaderPatcherRegisterProgram(void) {
     const uint32_t patcher_address = r0;
     const uint32_t program = r1;
@@ -848,6 +859,7 @@ void vita_hle_sceGxmShaderPatcherRegisterProgram(void) {
     registered->address = registration;
     registered->patcher = patcher_address;
     registered->program = program;
+    registered->program_size = program_size;
     vita_write32(registration, program);
     vita_write32(output, registration);
     vita_hle_trace(
@@ -855,6 +867,137 @@ void vita_hle_sceGxmShaderPatcherRegisterProgram(void) {
         "program 0x%08X, size 0x%X) -> 0x%08X",
         patcher_address, program, program_size, registration);
     r0 = 0u;
+}
+
+static uint32_t validate_guest_array(uint32_t address, uint32_t count,
+                                     uint32_t element_size) {
+    if (count > UINT32_MAX / element_size)
+        return SCE_GXM_ERROR_INVALID_VALUE;
+    if ((address == 0u) != (count == 0u))
+        return SCE_GXM_ERROR_INVALID_POINTER;
+    if (count != 0u && !vita_mem_ptr(address, count * element_size))
+        return SCE_GXM_ERROR_INVALID_POINTER;
+    return 0u;
+}
+
+void vita_hle_sceGxmShaderPatcherCreateVertexProgram(void) {
+    const uint32_t patcher_address = r0;
+    const uint32_t registration_address = r1;
+    const uint32_t attributes = r2;
+    const uint32_t attribute_count = r3;
+    uint32_t streams;
+    uint32_t stream_count;
+    uint32_t output;
+    const uint8_t *program_bytes;
+    const uint8_t *attribute_bytes;
+    vita_gxp_program_view program;
+    vita_usse_stream_view primary;
+    vita_usse_stream_view secondary;
+    vita_usse_census census;
+
+    if (!vita_mem_ptr(sp, 12u)) {
+        r0 = SCE_GXM_ERROR_INVALID_POINTER;
+        return;
+    }
+    streams = vita_read32(sp);
+    stream_count = vita_read32(sp + 4u);
+    output = vita_read32(sp + 8u);
+
+    gxm_shader_patcher *patcher = find_shader_patcher(patcher_address);
+    gxm_registered_program *registered =
+        find_registered_program(registration_address);
+    if (!patcher ||
+        !vita_mem_ptr(patcher->address, GXM_SHADER_PATCHER_OBJECT_SIZE) ||
+        !registered ||
+        !vita_mem_ptr(registered->address, GXM_REGISTERED_PROGRAM_SIZE) ||
+        !vita_mem_ptr(output, 4u)) {
+        r0 = SCE_GXM_ERROR_INVALID_POINTER;
+        return;
+    }
+    if (registered->patcher != patcher_address ||
+        vita_read32(registered->address) != registered->program) {
+        r0 = SCE_GXM_ERROR_INVALID_VALUE;
+        return;
+    }
+
+    uint32_t validation =
+        validate_guest_array(attributes, attribute_count, 8u);
+    if (validation == 0u)
+        validation = validate_guest_array(streams, stream_count, 4u);
+    if (validation != 0u) {
+        r0 = validation;
+        return;
+    }
+
+    attribute_bytes = attribute_count != 0u
+        ? (const uint8_t *)vita_mem_ptr(attributes, attribute_count * 8u)
+        : NULL;
+    for (uint32_t i = 0; i < attribute_count; i++) {
+        const uint8_t *attribute = attribute_bytes + (size_t)i * 8u;
+        const uint32_t stream_index =
+            (uint32_t)attribute[0] | ((uint32_t)attribute[1] << 8u);
+        if (stream_index >= stream_count) {
+            r0 = SCE_GXM_ERROR_INVALID_VALUE;
+            return;
+        }
+    }
+
+    program_bytes = (const uint8_t *)vita_mem_ptr(
+        registered->program, registered->program_size);
+    if (!program_bytes) {
+        r0 = SCE_GXM_ERROR_INVALID_POINTER;
+        return;
+    }
+    if (vita_gxp_parse(
+            program_bytes, registered->program_size, VITA_GXP_STAGE_VERTEX,
+            &program) != VITA_GXP_PARSE_OK ||
+        program.declared_size != registered->program_size) {
+        r0 = SCE_GXM_ERROR_INVALID_VALUE;
+        return;
+    }
+
+    primary.bytes = program.primary.bytes;
+    primary.byte_count = program.primary.byte_count;
+    primary.instruction_count = program.primary.instruction_count;
+    secondary.bytes = program.secondary.bytes;
+    secondary.byte_count = program.secondary.byte_count;
+    secondary.instruction_count = program.secondary.instruction_count;
+    if (vita_usse_census_program(&primary, &secondary, &census) !=
+        VITA_USSE_CENSUS_OK) {
+        r0 = SCE_GXM_ERROR_INVALID_VALUE;
+        return;
+    }
+
+    const char *first_phase = census.unsupported != 0u
+        ? vita_usse_phase_name(census.first_unsupported_phase)
+        : "NONE";
+    const char *first_family = census.unsupported != 0u
+        ? vita_usse_opcode_family_name(census.first_unsupported_family)
+        : "NONE";
+    const uint32_t first_index = census.unsupported != 0u
+        ? census.first_unsupported_index
+        : 0u;
+    vita_hle_trace(
+        "sceGxmShaderPatcherCreateVertexProgram USSE census: "
+        "total=%llu decoded=%llu unsupported=%llu "
+        "UNKNOWN=%llu VMOV=%llu PHAS=%llu first=%s/%u/%s",
+        (unsigned long long)census.total,
+        (unsigned long long)census.decoded,
+        (unsigned long long)census.unsupported,
+        (unsigned long long)census.family_counts[VITA_USSE_OPCODE_UNKNOWN],
+        (unsigned long long)census.family_counts[VITA_USSE_OPCODE_VMOV],
+        (unsigned long long)census.family_counts[VITA_USSE_OPCODE_PHAS],
+        first_phase, first_index, first_family);
+
+    r0 = SCE_GXM_ERROR_INVALID_VALUE;
+    if (census.unsupported != 0u) {
+        vita_trap_unimpl(
+            0u, 0u, "SceGxm::USSE_UNKNOWN instruction unsupported");
+        return;
+    }
+    vita_trap_unimpl(
+        0u, 0u,
+        "SceGxm::vertex shader HLSL translation not implemented");
 }
 
 void vita_hle_sceGxmTextureInitLinear(void) {

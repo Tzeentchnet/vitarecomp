@@ -67,6 +67,8 @@ add_library(vitarecomp STATIC
     src/hle_fios.c
     src/hle_gxm.c
     src/hle_ult.c
+    src/gxp.c
+    src/usse.c
     src/clock.c
     src/sched.c
     src/runtime.c
