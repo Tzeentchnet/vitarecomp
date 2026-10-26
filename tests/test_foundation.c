@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 
 #ifdef _WIN32
 #include <direct.h>
@@ -39,6 +40,8 @@
 #define SYSMEM_SIZE UINT32_C(0x00400000)
 #define KERNEL_BASE UINT32_C(0x10C00000)
 #define KERNEL_SIZE UINT32_C(0x00200000)
+#define TLS_BASE    UINT32_C(0x10E00000)
+#define TLS_SIZE    UINT32_C(0x00200000)
 #define MAIN_STACK  UINT32_C(0x106F0000)
 
 void vita_hle_memcpy(void);
@@ -70,7 +73,14 @@ void vita_hle_sceKernelStartThread(void);
 void vita_hle_sceKernelWaitThreadEnd(void);
 void vita_hle_sceKernelDeleteThread(void);
 void vita_sched_on_handover(void (*leave)(void));
+uint32_t vita_thread_create(const char *name, uint32_t entry, uint32_t prio,
+                            uint32_t stack_size);
+int vita_thread_start(uint32_t uid, uint32_t arglen, uint32_t argp);
+int vita_thread_delete(uint32_t uid);
+int vita_sched_block(int kind, uint32_t object, uint32_t timeout_us);
 void vita_sched_wake(int kind, uint32_t object, int all);
+void vita_sched_yield(void);
+int vita_sched_is_shutting_down(void);
 
 void vita_hle_sceFiosInitialize(void);
 void vita_hle_sceFiosTerminate(void);
@@ -134,6 +144,20 @@ static uint32_t g_worker_tls;
 static uint32_t g_worker_errno;
 static uint32_t g_destructor_argument;
 static uint32_t g_handover_calls;
+static uint32_t g_boundary_worker_entry;
+static uint32_t g_boundary_worker_uid;
+static uint32_t g_worker_after_stop;
+static uint32_t g_owner_after_stop;
+static uint32_t g_shutdown_ready_uid;
+static uint32_t g_shutdown_waiting_uid;
+static uint32_t g_shutdown_running_uid;
+static uint32_t g_shutdown_worker_started;
+static uint32_t g_shutdown_worker_resumed;
+static mtx_t g_shutdown_test_lock;
+static cnd_t g_shutdown_test_wake;
+static int g_shutdown_running_started;
+static int g_shutdown_complete;
+static thrd_t g_shutdown_host;
 
 static void handover_regression_callback(void) {
     g_handover_calls++;
@@ -151,6 +175,17 @@ static void diagnostic(const vita_diagnostic *event, void *userdata) {
         snprintf(state->function, sizeof(state->function), "%s",
                  event->function_name ? event->function_name : "");
     }
+}
+
+static void boundary_race_exit_callback(int status, void *userdata) {
+    (void)userdata;
+    assert(status == 91);
+    g_boundary_worker_uid =
+        vita_thread_create("boundary-race", UINT32_C(0x4001),
+                           UINT32_C(0x40), UINT32_C(0x4000));
+    assert(g_boundary_worker_uid != 0);
+    (void)vita_thread_start(g_boundary_worker_uid, 0, 0);
+    g_owner_after_stop++;
 }
 
 static void put_guest(uint32_t address, const void *data, size_t size) {
@@ -179,6 +214,105 @@ static void worker_entry(void) {
     r0 = 77;
 }
 
+static void worker_unimplemented_entry(void) {
+    vita_trap_unimpl(UINT32_C(0x84000100), UINT32_C(0xE7F000F0),
+                     "worker untranslated instruction");
+    g_worker_after_stop++;
+}
+
+static void worker_import_entry(void) {
+    vita_trap_import(UINT32_C(0x84000200), UINT32_C(0xBAADF00D),
+                     "SceWorker::Missing");
+    g_worker_after_stop++;
+}
+
+static void worker_indirect_entry(void) {
+    vita_trap_indirect(UINT32_C(0x84000300), UINT32_C(0x85000001));
+    g_worker_after_stop++;
+}
+
+static void worker_exit_entry(void) {
+    vita_runtime_request_exit(73);
+    g_worker_after_stop++;
+}
+
+static void boundary_worker_owner_entry(void) {
+    g_boundary_worker_uid =
+        vita_thread_create("boundary-worker", g_boundary_worker_entry,
+                           UINT32_C(0x40), UINT32_C(0x4000));
+    assert(g_boundary_worker_uid != 0);
+    assert(vita_thread_start(g_boundary_worker_uid, 0, 0) == 0);
+    g_owner_after_stop++;
+}
+
+static void boundary_race_owner_entry(void) {
+    vita_runtime_request_exit(91);
+    g_owner_after_stop++;
+}
+
+static void shutdown_waiter_entry(void) {
+    g_shutdown_worker_started++;
+    (void)vita_sched_block(0x7FFE, r0, 0);
+    g_shutdown_worker_resumed++;
+}
+
+static void shutdown_running_entry(void) {
+    mtx_lock(&g_shutdown_test_lock);
+    g_shutdown_running_started = 1;
+    cnd_signal(&g_shutdown_test_wake);
+    mtx_unlock(&g_shutdown_test_lock);
+    while (!vita_sched_is_shutting_down())
+        thrd_yield();
+    vita_sched_yield();
+    g_shutdown_worker_resumed++;
+}
+
+static int shutdown_host_main(void *unused) {
+    (void)unused;
+    mtx_lock(&g_shutdown_test_lock);
+    while (!g_shutdown_running_started)
+        cnd_wait(&g_shutdown_test_wake, &g_shutdown_test_lock);
+    mtx_unlock(&g_shutdown_test_lock);
+    vita_runtime_shutdown();
+    mtx_lock(&g_shutdown_test_lock);
+    g_shutdown_complete = 1;
+    cnd_signal(&g_shutdown_test_wake);
+    mtx_unlock(&g_shutdown_test_lock);
+    return 0;
+}
+
+static void shutdown_workers_owner_entry(void) {
+    g_shutdown_ready_uid =
+        vita_thread_create("shutdown-ready", UINT32_C(0x8001),
+                           UINT32_C(0x40), UINT32_C(0x4000));
+    assert(g_shutdown_ready_uid != 0);
+    assert(vita_thread_start(g_shutdown_ready_uid, 0, 0) == 0);
+
+    g_shutdown_waiting_uid =
+        vita_thread_create("shutdown-waiting", UINT32_C(0x8001),
+                           UINT32_C(0x40), UINT32_C(0x4000));
+    assert(g_shutdown_waiting_uid != 0);
+    assert(vita_thread_start(g_shutdown_waiting_uid, 0, 0) == 0);
+
+    vita_sched_wake(0x7FFE, 0, 0);
+
+    assert(thrd_create(&g_shutdown_host, shutdown_host_main, NULL) ==
+           thrd_success);
+    g_shutdown_running_uid =
+        vita_thread_create("shutdown-running", UINT32_C(0x9001),
+                           UINT32_C(0x40), UINT32_C(0x4000));
+    assert(g_shutdown_running_uid != 0);
+    assert(vita_thread_start(g_shutdown_running_uid, 0, 0) ==
+           VITA_ERROR_SHUTDOWN);
+    mtx_lock(&g_shutdown_test_lock);
+    while (!g_shutdown_complete)
+        cnd_wait(&g_shutdown_test_wake, &g_shutdown_test_lock);
+    mtx_unlock(&g_shutdown_test_lock);
+    int host_result = -1;
+    assert(thrd_join(g_shutdown_host, &host_result) == thrd_success);
+    assert(host_result == 0);
+}
+
 static void callback_entry(void) {
     g_callback_count = r1;
     g_callback_arg = r2;
@@ -199,6 +333,12 @@ static const vita_dispatch_entry DISPATCH[] = {
     { UINT32_C(0x1001), worker_entry },
     { UINT32_C(0x2001), callback_entry },
     { UINT32_C(0x3001), destructor_entry },
+    { UINT32_C(0x4001), worker_unimplemented_entry },
+    { UINT32_C(0x5001), worker_import_entry },
+    { UINT32_C(0x6001), worker_indirect_entry },
+    { UINT32_C(0x7001), worker_exit_entry },
+    { UINT32_C(0x8001), shutdown_waiter_entry },
+    { UINT32_C(0x9001), shutdown_running_entry },
 };
 
 static void test_memory(void) {
@@ -941,6 +1081,120 @@ static void test_tls_shutdown_regression(const vita_runtime_config *config) {
     assert(!vita_runtime_is_initialized());
 }
 
+static vita_guest_call_result run_worker_boundary_case(uint32_t entry) {
+    vita_guest_call_result result;
+    g_boundary_worker_entry = entry;
+    g_boundary_worker_uid = 0;
+    g_worker_after_stop = 0;
+    g_owner_after_stop = 0;
+    assert(vita_guest_call(boundary_worker_owner_entry, &result) == VITA_OK);
+    assert(g_boundary_worker_uid != 0);
+    assert(g_worker_after_stop == 0);
+    assert(g_owner_after_stop == 0);
+    assert(vita_thread_delete(g_boundary_worker_uid) == 0);
+    return result;
+}
+
+static void test_worker_boundaries(const vita_runtime_config *config) {
+    vita_guest_call_result result;
+    assert(vita_runtime_init(config) == VITA_OK);
+    vita_main_stack_init(MAIN_STACK, 0x10000);
+    vita_dispatch_init(DISPATCH,
+                       (uint32_t)(sizeof(DISPATCH) / sizeof(DISPATCH[0])));
+
+    result = run_worker_boundary_case(UINT32_C(0x4001));
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.kind ==
+           VITA_STRICT_FAILURE_UNTRANSLATED_INSTRUCTION);
+    assert(result.failure.source_address == UINT32_C(0x84000100));
+    assert(result.failure.raw_instruction == UINT32_C(0xE7F000F0));
+
+    result = run_worker_boundary_case(UINT32_C(0x5001));
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_UNIMPLEMENTED_IMPORT);
+    assert(result.failure.source_address == UINT32_C(0x84000200));
+    assert(result.failure.nid == UINT32_C(0xBAADF00D));
+    assert(strcmp(result.failure.name, "SceWorker::Missing") == 0);
+
+    result = run_worker_boundary_case(UINT32_C(0x6001));
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_UNRESOLVED_TRANSFER);
+    assert(result.failure.source_address == UINT32_C(0x84000300));
+    assert(result.failure.target_address == UINT32_C(0x85000001));
+
+    result = run_worker_boundary_case(UINT32_C(0x7001));
+    assert(result.outcome == VITA_GUEST_CALL_EXIT_REQUESTED);
+    assert(result.exit_status == 73);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_NONE);
+
+    vita_runtime_shutdown();
+    assert(!vita_runtime_is_initialized());
+}
+
+static void test_live_worker_shutdown(const vita_runtime_config *config) {
+    vita_guest_call_result result;
+    vita_runtime_counters counters;
+    assert(vita_runtime_init(config) == VITA_OK);
+    vita_main_stack_init(MAIN_STACK, 0x10000);
+    vita_dispatch_init(DISPATCH,
+                       (uint32_t)(sizeof(DISPATCH) / sizeof(DISPATCH[0])));
+    g_shutdown_ready_uid = 0;
+    g_shutdown_waiting_uid = 0;
+    g_shutdown_running_uid = 0;
+    g_shutdown_worker_started = 0;
+    g_shutdown_worker_resumed = 0;
+    g_shutdown_running_started = 0;
+    g_shutdown_complete = 0;
+    assert(mtx_init(&g_shutdown_test_lock, mtx_plain) == thrd_success);
+    assert(cnd_init(&g_shutdown_test_wake) == thrd_success);
+
+    assert(vita_guest_call(shutdown_workers_owner_entry, &result) == VITA_OK);
+    cnd_destroy(&g_shutdown_test_wake);
+    mtx_destroy(&g_shutdown_test_lock);
+    assert(result.outcome == VITA_GUEST_CALL_COMPLETED);
+    assert(g_shutdown_ready_uid != 0);
+    assert(g_shutdown_waiting_uid != 0);
+    assert(g_shutdown_running_uid != 0);
+    assert(g_shutdown_worker_started == 2);
+    assert(g_shutdown_worker_resumed == 0);
+
+    assert(!vita_runtime_is_initialized());
+    assert(g_shutdown_worker_resumed == 0);
+    vita_runtime_get_counters(&counters);
+    assert(counters.threads_created == 3);
+    assert(counters.threads_finished == 3);
+    assert(counters.live_threads == 0);
+    vita_runtime_shutdown();
+    vita_runtime_get_counters(&counters);
+    assert(counters.shutdowns == 1);
+}
+
+static void test_boundary_first_result_race(
+    const vita_runtime_config *base_config) {
+    vita_runtime_config config = *base_config;
+    vita_guest_call_result result;
+    config.exit_requested = boundary_race_exit_callback;
+    config.exit_userdata = NULL;
+    assert(vita_runtime_init(&config) == VITA_OK);
+    vita_main_stack_init(MAIN_STACK, 0x10000);
+    vita_dispatch_init(DISPATCH,
+                       (uint32_t)(sizeof(DISPATCH) / sizeof(DISPATCH[0])));
+    g_boundary_worker_uid = 0;
+    g_worker_after_stop = 0;
+    g_owner_after_stop = 0;
+
+    assert(vita_guest_call(boundary_race_owner_entry, &result) == VITA_OK);
+    assert(result.outcome == VITA_GUEST_CALL_EXIT_REQUESTED);
+    assert(result.exit_status == 91);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_NONE);
+    assert(g_boundary_worker_uid != 0);
+    assert(g_worker_after_stop == 0);
+    assert(g_owner_after_stop == 0);
+    assert(vita_thread_delete(g_boundary_worker_uid) == 0);
+    vita_runtime_shutdown();
+    assert(!vita_runtime_is_initialized());
+}
+
 int main(void) {
     vita_runtime_config config;
     memset(&config, 0, sizeof(config));
@@ -952,6 +1206,8 @@ int main(void) {
     config.sysmem_size = SYSMEM_SIZE;
     config.kernel_base = KERNEL_BASE;
     config.kernel_size = KERNEL_SIZE;
+    config.tls_base = TLS_BASE;
+    config.tls_size = TLS_SIZE;
     config.virtual_clock = 1;
     config.virtual_epoch_us = 1000;
     config.virtual_read_step_us = 5;
@@ -996,6 +1252,9 @@ int main(void) {
     vita_runtime_get_counters(&counters);
     assert(counters.shutdowns == 1);
 
+    test_worker_boundaries(&config);
+    test_boundary_first_result_race(&config);
+    test_live_worker_shutdown(&config);
     test_tls_shutdown_regression(&config);
     puts("runtime/HLE foundation tests passed");
     return 0;

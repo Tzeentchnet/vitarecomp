@@ -9,9 +9,11 @@
 #include "vitarecomp/recomp_rt.h"
 #include "vitarecomp/dispatch.h"
 #include "vitarecomp/hle.h"
+#include "vitarecomp/runtime.h"
 
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 #ifdef NDEBUG
 #error "tests must be built with asserts enabled (NDEBUG is defined)"
@@ -186,6 +188,136 @@ static void test_bitfields(void) {
     assert(vita_bfi(0x12345678u, 0x0u, 0, 32) == 0x00000000u);
 
     printf("  bitfields                      ok\n");
+}
+
+/* --- scoped guest-call boundary --------------------------------------------
+ */
+
+static int g_entry_progress;
+static int g_nested_status;
+static int g_reentrant_status;
+static vita_guest_call_result g_nested_result;
+static vita_guest_call_result g_reentrant_result;
+
+static void boundary_completed_entry(void) { g_entry_progress++; }
+
+static void boundary_untranslated_entry(void) {
+    g_entry_progress = 1;
+    vita_trap_unimpl(UINT32_C(0x81000100), UINT32_C(0xE7F000F0),
+                     "synthetic untranslated instruction");
+    g_entry_progress = 2;
+}
+
+static void boundary_transfer_entry(void) {
+    g_entry_progress = 1;
+    vita_trap_indirect(UINT32_C(0x81000200), UINT32_C(0x82000001));
+    g_entry_progress = 2;
+}
+
+static void boundary_import_entry(void) {
+    g_entry_progress = 1;
+    vita_trap_import(UINT32_C(0x81000300), UINT32_C(0xBFE02B3A),
+                     "SceSynthetic::Missing");
+    g_entry_progress = 2;
+}
+
+static void boundary_reentrant_entry(void) {
+    g_nested_status =
+        vita_guest_call(boundary_completed_entry, &g_nested_result);
+    g_reentrant_status =
+        vita_guest_call(boundary_reentrant_entry, &g_reentrant_result);
+    g_entry_progress = 1;
+    vita_trap_unimpl(UINT32_C(0x81000400), UINT32_C(0xFFFFFFFF),
+                     "boundary remains active");
+    g_entry_progress = 2;
+}
+
+static void boundary_exit_entry(void) {
+    g_entry_progress = 1;
+    vita_runtime_request_exit(37);
+    g_entry_progress = 2;
+}
+
+static void test_guest_boundary(void) {
+    vita_guest_call_result result;
+
+    assert(vita_guest_call(NULL, &result) == VITA_ERROR_INVALID_ARGUMENT);
+    assert(vita_guest_call(boundary_completed_entry, NULL) ==
+           VITA_ERROR_INVALID_ARGUMENT);
+
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_completed_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 1);
+    assert(result.outcome == VITA_GUEST_CALL_COMPLETED);
+    assert(result.exit_status == 0);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_NONE);
+
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_untranslated_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 1);
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_UNTRANSLATED_INSTRUCTION);
+    assert(result.failure.source_address == UINT32_C(0x81000100));
+    assert(result.failure.raw_instruction == UINT32_C(0xE7F000F0));
+    assert(result.failure.target_address == 0);
+    assert(result.failure.nid == 0);
+    assert(strcmp(result.failure.name, "synthetic untranslated instruction") ==
+           0);
+
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_transfer_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 1);
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_UNRESOLVED_TRANSFER);
+    assert(result.failure.source_address == UINT32_C(0x81000200));
+    assert(result.failure.raw_instruction == 0);
+    assert(result.failure.target_address == UINT32_C(0x82000001));
+    assert(result.failure.nid == 0);
+    assert(result.failure.name == NULL);
+
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_import_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 1);
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_UNIMPLEMENTED_IMPORT);
+    assert(result.failure.source_address == UINT32_C(0x81000300));
+    assert(result.failure.raw_instruction == 0);
+    assert(result.failure.target_address == 0);
+    assert(result.failure.nid == UINT32_C(0xBFE02B3A));
+    assert(strcmp(result.failure.name, "SceSynthetic::Missing") == 0);
+
+    memset(&g_nested_result, 0xA5, sizeof(g_nested_result));
+    memset(&g_reentrant_result, 0xA5, sizeof(g_reentrant_result));
+    g_nested_status = VITA_OK;
+    g_reentrant_status = VITA_OK;
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_reentrant_entry, &result) == VITA_OK);
+    assert(g_nested_status == VITA_ERROR_BUSY);
+    assert(g_reentrant_status == VITA_ERROR_BUSY);
+    assert(g_entry_progress == 1);
+    assert(result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(result.failure.source_address == UINT32_C(0x81000400));
+
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_completed_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 1);
+    assert(result.outcome == VITA_GUEST_CALL_COMPLETED);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_NONE);
+
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_exit_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 1);
+    assert(result.outcome == VITA_GUEST_CALL_EXIT_REQUESTED);
+    assert(result.exit_status == 37);
+    assert(result.failure.kind == VITA_STRICT_FAILURE_NONE);
+
+    g_entry_progress = 0;
+    assert(vita_guest_call(boundary_completed_entry, &result) == VITA_OK);
+    assert(g_entry_progress == 0);
+    assert(result.outcome == VITA_GUEST_CALL_EXIT_REQUESTED);
+    assert(result.exit_status == 37);
+
+    printf("  guest-call strict boundary     ok\n");
 }
 
 /* --- dispatch ----------------------------------------------------------------
@@ -367,6 +499,7 @@ int main(void) {
     test_dispatch();
     test_hle_libc();
     test_memory();
+    test_guest_boundary();
     printf("all runtime tests passed\n");
     return 0;
 }

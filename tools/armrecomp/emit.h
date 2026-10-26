@@ -16,6 +16,7 @@
  * its instruction count suggested. */
 #define EM_MAX_TRAP_KINDS 64
 #define EM_MAX_PARTS 256
+#define EM_MODULE_ID_MAX 63
 
 typedef struct {
     const char *what;      /* mnemonic, or the class when unnamed */
@@ -49,6 +50,22 @@ typedef struct {
     uint32_t imports_used; /* distinct imports actually reached      */
     uint32_t var_imports;  /* variables the module imports           */
     uint32_t var_refs;     /* sites in the code that read one        */
+    uint32_t dispatch_entries;
+
+    uint32_t unclassified_traps;
+    uint32_t pc_instrumented;
+    uint32_t entry_present;
+    uint32_t entry_raw_address;
+    uint32_t entry_dispatch_key;
+    uint32_t entry_resolved;
+    uint32_t tls_present;
+    uint32_t tls_resolved;
+    uint32_t tls_address;
+    uint32_t tls_filesz;
+    uint32_t tls_memsz;
+    uint32_t tls_alignment;
+    uint32_t structural_ready;
+    uint32_t production_ready;
 
     /* Addresses discovery registered as functions that are really import
      * stubs. The stub wins in the dispatch table; this counts how often
@@ -81,9 +98,21 @@ typedef struct {
  * <base>_NNN.c and <base>.h. VITARECOMP_EMIT_SPLIT in the environment sets
  * the functions per part (default 2000; 0 keeps everything in `out`).
  * Deterministic <base>.report.json and <base>.report.txt files contain the
- * unsupported/trap census and translation-unit inventory. */
+ * unsupported/trap census and translation-unit inventory. <base>.module.json
+ * is the path-free per-module ABI sidecar, including load/executable ranges
+ * and complete dispatch, export, import, TLS, and variable metadata. */
 int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
             const vf_result *disc, FILE *out, const char *outpath, const char *impdir,
             uint32_t limit, emit_stats *st);
+
+/* Versioned emission. `module_id` must pass em_module_id_valid(); when present
+ * it is included in every module-owned external symbol. Passing NULL is exactly
+ * the legacy em_emit() naming mode. */
+int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
+                   const vf_result *disc, FILE *out, const char *outpath,
+                   const char *impdir, const char *module_id, uint32_t limit,
+                   emit_stats *st);
+
+int em_module_id_valid(const char *module_id);
 
 #endif /* ARMRECOMP_EMIT_H */

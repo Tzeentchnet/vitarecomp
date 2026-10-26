@@ -57,6 +57,16 @@ typedef struct vita_hle_import {
 
 int vita_hle_register(const vita_hle_import *imports, size_t count);
 void vita_hle_registry_reset(void);
+
+/* Resolve only an exact registered implementation. NID lookup requires both
+ * NIDs to match; name lookup is used only when both NIDs are zero and requires
+ * both names. This strict query is used by module binding and never treats a
+ * wildcard registration or a missing import as successful. */
+int vita_hle_resolve_registered(uint32_t library_nid, uint32_t function_nid,
+                                const char *library_name,
+                                const char *function_name,
+                                vita_hle_fn *function);
+
 int vita_hle_dispatch_import(uint32_t stub_address, uint32_t library_nid,
                              uint32_t function_nid,
                              const char *library_name,

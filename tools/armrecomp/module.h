@@ -26,6 +26,8 @@ typedef struct {
     uint32_t file;            /* p_offset  */
     uint32_t vaddr;           /* p_vaddr   */
     uint32_t len;             /* p_filesz  */
+    uint32_t mem_len;         /* p_memsz, for composed load ranges */
+    uint32_t align;           /* p_align, retained for TLS contracts */
 } vm_seg;
 
 #define VM_MAX_DATA_SEGS 8
@@ -36,6 +38,8 @@ typedef struct {
     uint32_t       seg_file;  /* p_offset of the executable segment     */
     uint32_t       seg_vaddr; /* p_vaddr of the executable segment      */
     uint32_t       seg_len;   /* p_filesz                               */
+    uint32_t       seg_mem_len; /* p_memsz, for composed load ranges     */
+    uint32_t       seg_align; /* p_align                                */
 
     /* The other PT_LOAD segments — the writable data the module ships with.
      *
@@ -90,6 +94,7 @@ typedef struct {
  * function whose body is a placeholder the loader was supposed to overwrite. */
 typedef struct {
     uint32_t addr;        /* stub address in .text, Thumb bit cleared */
+    uint32_t target_site; /* import-table entry word, before stub sorting */
     uint32_t lib_nid;
     uint32_t func_nid;
 } vm_stub;
@@ -117,11 +122,25 @@ typedef struct {
     uint32_t     site_count;
 } vm_var;
 
+enum {
+    VM_EXPORT_FUNCTION = 0,
+    VM_EXPORT_VARIABLE = 1,
+    VM_EXPORT_TLS_VARIABLE = 2
+};
+
+typedef struct {
+    uint32_t library_nid;
+    uint32_t nid;
+    uint32_t address;       /* raw table value; function mode bit retained */
+    uint8_t  kind;          /* one of VM_EXPORT_* */
+} vm_export;
+
 #define VM_MAX_IMPORTS 256
 
 typedef struct {
     vm_module_info info;
     int            have_info;
+    int            metadata_complete; /* module/import/export tables validated */
     vm_import      imports[VM_MAX_IMPORTS];
     int            import_count;
     int            import_truncated;   /* more than VM_MAX_IMPORTS present */
@@ -133,6 +152,12 @@ typedef struct {
     vm_var        *vars;               /* imported variables; free with vm_free() */
     uint32_t       var_count;
     uint32_t       total_var_imports;
+
+    vm_export     *exports;             /* complete function/variable export table */
+    uint32_t       export_count;
+    uint32_t       function_export_count;
+    uint32_t       variable_export_count;
+    uint32_t       tls_variable_export_count;
 } vm_module;
 
 void vm_free(vm_module *m);

@@ -11,7 +11,7 @@
   "registryVectors": [
     {
       "id": "deterministic-non-overlapping-images",
-      "status": "deferred",
+      "status": "executed-in-test-compose",
       "inputs": [
         { "name": "zeta", "begin": "0x00003000", "endExclusive": "0x00003400" },
         { "name": "alpha", "begin": "0x00001000", "endExclusive": "0x00001800" },
@@ -20,13 +20,13 @@
       "expectedOrder": ["alpha", "middle", "zeta"],
       "expectedResult": "accept",
       "integrationPoints": [
-        "tools/armrecomp/main.c",
-        "tools/armrecomp/module.h"
+        "tools/armrecomp/compose.c",
+        "tests/test_compose.c"
       ]
     },
     {
       "id": "reject-overlapping-images",
-      "status": "deferred",
+      "status": "executed-in-test-compose",
       "inputs": [
         { "name": "left", "begin": "0x00001000", "endExclusive": "0x00001800" },
         { "name": "right", "begin": "0x00001700", "endExclusive": "0x00002000" }
@@ -34,8 +34,8 @@
       "expectedResult": "reject",
       "expectedDiagnosticFields": ["left", "right", "overlapBegin", "overlapEndExclusive"],
       "integrationPoints": [
-        "tools/armrecomp/main.c",
-        "tools/armrecomp/module.h"
+        "tools/armrecomp/compose.c",
+        "tests/test_compose.c"
       ]
     },
     {
@@ -65,6 +65,37 @@
         "include/vitarecomp/dispatch.h",
         "src/dispatch.c",
         "src/trap.c"
+      ]
+    },
+    {
+      "id": "site-keyed-bindable-function-imports",
+      "status": "executed-in-emitted-module-set-binding",
+      "generatedModuleAbiVersion": 3,
+      "imports": [
+        {
+          "libraryNid": "0x11110000",
+          "functionNid": "0x11110001",
+          "dispatchKey": "0x10001081",
+          "targetSite": "0x10001200"
+        },
+        {
+          "libraryNid": "0x11110000",
+          "functionNid": "0x11110001",
+          "dispatchKey": "0x10001091",
+          "targetSite": "0x10001204"
+        }
+      ],
+      "expectedResult": {
+        "duplicateNidsRemainDistinct": true,
+        "directAndIndirectTargetsAgree": true,
+        "rollbackPreservesTargetSlots": true
+      },
+      "integrationPoints": [
+        "include/vitarecomp/generated_module.h",
+        "tools/armrecomp/module.c",
+        "tools/armrecomp/emit.c",
+        "src/binding.c",
+        "tests/test_emitted_binding.c"
       ]
     }
   ],

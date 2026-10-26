@@ -50,6 +50,8 @@ add_library(vitarecomp STATIC
     src/excl.c
     src/trap.c
     src/loader.c
+    src/reloc.c
+    src/binding.c
     src/dispatch.c
     src/vfp.c
     src/hle_libc.c

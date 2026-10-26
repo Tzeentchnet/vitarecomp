@@ -10,6 +10,7 @@
 #define VITARECOMP_RECOMP_RT_H
 
 #include "cpu.h"
+#include "generated_module.h"
 #include "mem.h"
 #include "vfp.h"
 #include "neon.h"
@@ -131,18 +132,8 @@ static inline uint32_t vita_add16(uint32_t a, uint32_t b) {
     return ((a + b) & 0x0000FFFFu) | (((a & 0xFFFF0000u) + (b & 0xFFFF0000u)) & 0xFFFF0000u);
 }
 
-/* A variable the module imports from a firmware library. The generated code
- * reads its guest address through `value`; the loader writes that address
- * into the image at every word that held a placeholder (`abs_sites`), and
- * binds the value to what the runtime provides under `name`. */
-typedef struct { uint32_t addr, addend; } vita_var_site;
-typedef struct {
-    uint32_t             lib_nid, var_nid;
-    const char          *name;        /* "SceLibc::_Tolotab"; NULL when the database had no name */
-    uint32_t            *value;
-    const vita_var_site *abs_sites;   /* each gets the address plus its addend */
-    uint32_t             abs_count;
-} vita_var_import;
+/* Legacy single-module names. Versioned output instead reaches these records
+ * through its vita_generated_module_descriptor. */
 extern const vita_var_import vita_var_imports[];
 extern const uint32_t        vita_var_import_count;
 
@@ -259,15 +250,17 @@ void vita_trap_unimpl(uint32_t addr, uint32_t raw, const char *what);
 void vita_trap_indirect(uint32_t addr, uint32_t target);
 void vita_trap_import(uint32_t addr, uint32_t nid, const char *name);
 
-/* Total traps hit. Only meaningful under VITARECOMP_TRACE=1, where execution
- * continues past them; otherwise the first one ends the program. */
+/* Total traps hit. Under VITARECOMP_TRACE=1 outside a guest-call boundary,
+ * execution continues past them. Strict mode aborts outside a boundary and
+ * returns the first structured failure from an active boundary. */
 uint32_t vita_trap_count(void);
 
 /* Function-entry trace. The core default is a no-op; a later host layer may
  * replace it without changing generated code. */
 void vita_trace_fn(uint32_t addr);
 
-/* --- the time slice -----------------------------------------------------------
+/* --- the time slice
+ * -----------------------------------------------------------
  *
  * One guest thread runs at a time (sched.h), and on the console several do:
  * a thread that waits for another by spinning on a word of memory waits for

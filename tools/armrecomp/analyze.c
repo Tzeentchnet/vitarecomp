@@ -867,20 +867,43 @@ int vf_discover(const vm_image *img, const vm_module *mod,
     /* 2. Export entry tables. Each export names a real function. */
     if (mod->have_info) {
         uint32_t p = mod->info.export_top;
-        while (p + 0x20 <= mod->info.export_end) {
+        while (p < mod->info.export_end) {
+            if (mod->info.export_end - p < 0x20) {
+                free(q.v);
+                vf_free(out);
+                return 1;
+            }
             const uint8_t *e = vm_ptr(img, p, 0x20);
-            if (!e) break;
+            if (!e) {
+                free(q.v);
+                vf_free(out);
+                return 1;
+            }
             uint16_t size  = (uint16_t)(e[0] | (e[1] << 8));
             uint16_t nfunc = (uint16_t)(e[6] | (e[7] << 8));
             uint32_t etab  = (uint32_t)e[0x1C] | ((uint32_t)e[0x1D] << 8)
                            | ((uint32_t)e[0x1E] << 16) | ((uint32_t)e[0x1F] << 24);
-            if (size < 0x20) break;
+            if (size < 0x20 || size > mod->info.export_end - p ||
+                !vm_ptr(img, p, size)) {
+                free(q.v);
+                vf_free(out);
+                return 1;
+            }
 
             const uint8_t *t = vm_va(img, etab, (uint32_t)nfunc * 4);
-            for (uint32_t i = 0; t && i < nfunc; i++) {
+            if (nfunc && !t) {
+                free(q.v);
+                vf_free(out);
+                return 1;
+            }
+            for (uint32_t i = 0; i < nfunc; i++) {
                 uint32_t v = (uint32_t)t[i*4] | ((uint32_t)t[i*4+1] << 8)
                            | ((uint32_t)t[i*4+2] << 16) | ((uint32_t)t[i*4+3] << 24);
-                if (v < base || v >= base + img->seg_len) continue;
+                if (v < base || v - base >= img->seg_len) {
+                    free(q.v);
+                    vf_free(out);
+                    return 1;
+                }
                 sq_push(&q, v & ~1u, (v & 1) ? ARM_T32 : ARM_A32, VF_R_EXPORT);
                 out->seeds_export++;
             }

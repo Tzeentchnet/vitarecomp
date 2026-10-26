@@ -11,6 +11,7 @@
 #include "module.h"
 #include "reloc.h"
 #include "analyze.h"
+#include "compose.h"
 #include "emit.h"
 #include "nids.h"
 
@@ -38,7 +39,10 @@ static const char *USAGE =
     "  armrecomp funcs   <file.elf> [niddb]  module info and the HLE work list\n"
     "  armrecomp relocs  <file.elf>      the relocation stream, decoded and classified\n"
     "  armrecomp discover <file.elf>     function discovery\n"
-    "  armrecomp emit    <file.elf> <out.c> [n] [niddb]  translate to C + deterministic reports\n"
+    "  armrecomp emit    [--module-id <id>] <file.elf> <out.c> [n] [niddb]\n"
+    "                    translate to C + deterministic reports and module sidecar\n"
+    "  armrecomp compose --entry-module <id> --output <registry.c>\n"
+    "                    <module/report JSON>...  compose a generated image set\n"
     "\n"
     "Accepts a SELF (eboot.bin, *.suprx) or a plain ELF/velf. A PFS-encrypted\n"
     "NoNpDrm dump is reported as such rather than parsed as garbage.\n";
@@ -539,26 +543,37 @@ static int exec_image(const uint8_t *buf, size_t size, const vc_module *m,
     int found = 0;
     img->data           = buf;
     img->size           = size;
+    img->seg_mem_len    = 0;
+    img->seg_align      = 0;
     img->data_seg_count = 0;
 
     for (int i = 0; i < m->phdr_count; i++) {
-        if (m->phdr[i].filesz == 0) continue;
-        if ((uint64_t)m->phdr[i].offset + m->phdr[i].filesz > size) continue;
         /* PT_LOAD only. The SCE_RELA and SCE_VERSION segments carry a vaddr of
          * zero and are not part of the address space. */
         if (m->phdr[i].type != 1) continue;
+        if (!m->phdr[i].memsz) continue;
+        if (m->phdr[i].filesz &&
+            (uint64_t)m->phdr[i].offset + m->phdr[i].filesz > size)
+            continue;
 
         if (m->phdr[i].flags & 1) {
-            if (found) continue;                 /* first executable segment wins */
+            if (!m->phdr[i].filesz) continue;
+            if (found) return -1; /* emission supports one complete executable range */
             img->seg_file  = m->phdr[i].offset;
             img->seg_vaddr = m->phdr[i].vaddr;
             img->seg_len   = m->phdr[i].filesz;
+            img->seg_mem_len = m->phdr[i].memsz;
+            img->seg_align = m->phdr[i].align;
             found = 1;
         } else if (img->data_seg_count < VM_MAX_DATA_SEGS) {
             vm_seg *s = &img->data_segs[img->data_seg_count++];
             s->file  = m->phdr[i].offset;
             s->vaddr = m->phdr[i].vaddr;
             s->len   = m->phdr[i].filesz;
+            s->mem_len = m->phdr[i].memsz;
+            s->align = m->phdr[i].align;
+        } else {
+            return -1;
         }
     }
     return found;
@@ -587,8 +602,11 @@ static int load_module(const char *path, uint8_t **buf, size_t *size,
         fprintf(stderr, "armrecomp: this is a SELF; run `extract` first\n");
         free(*buf); return 0;
     }
-    if (!exec_image(*buf, *size, vc, img)) {
-        fprintf(stderr, "armrecomp: no executable segment found\n");
+    int image_result = exec_image(*buf, *size, vc, img);
+    if (image_result <= 0) {
+        fprintf(stderr, "armrecomp: %s\n", image_result < 0
+            ? "unsupported PT_LOAD layout (multiple executable or too many data ranges)"
+            : "no executable segment found");
         free(*buf); return 0;
     }
     if (vm_parse(img, vc->elf.entry, vm, err, sizeof(err))) {
@@ -857,7 +875,7 @@ static int cmd_discover(const char *path) {
 /* --- emit: functions to C --------------------------------------------------- */
 
 static int cmd_emit(const char *path, const char *outpath, uint32_t limit,
-                    const char *dbdir) {
+                    const char *dbdir, const char *module_id) {
     uint8_t *buf; size_t size;
     vc_module vc; vm_image img; vm_module vm; vr_table rt;
     if (!load_module(path, &buf, &size, &vc, &img, &vm, &rt)) return 1;
@@ -895,10 +913,11 @@ static int cmd_emit(const char *path, const char *outpath, uint32_t limit,
         fprintf(stderr, "armrecomp: cannot create %s\n", imppath);
 
     emit_stats st;
-    int emit_rc = em_emit(&img, &vm, db, &r, f, outpath, imppath, limit, &st);
+    int emit_rc = em_emit_module(&img, &vm, db, &r, f, outpath, imppath,
+                                 module_id, limit, &st);
     fclose(f);
     if (emit_rc) {
-        fprintf(stderr, "armrecomp: emission or generation-report write failed\n");
+        fprintf(stderr, "armrecomp: emission, report, or module-sidecar write failed\n");
         nid_db_free(db);
         vm_free(&vm);
         vf_free(&r);
@@ -913,6 +932,8 @@ static int cmd_emit(const char *path, const char *outpath, uint32_t limit,
     else
         printf("wrote %s\n", outpath);
     printf("  reports       deterministic .report.json and .report.txt beside output\n");
+    printf("  module ABI    deterministic .module.json beside output%s\n",
+           module_id ? "" : " (legacy naming; not composition-ready)");
     printf("  functions     %u\n", st.funcs);
     if (st.funcs_dropped)
         printf("  not emitted   %u  of %u discovered: reachable from no entry point, export or stored pointer\n",
@@ -986,6 +1007,125 @@ static int cmd_emit(const char *path, const char *outpath, uint32_t limit,
     return 0;
 }
 
+static int cmd_emit_args(int argc, char **argv) {
+    const char *module_id = NULL;
+    const char *positional[4];
+    int positional_count = 0;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--module-id") == 0) {
+            if (module_id || i + 1 >= argc) {
+                fputs("armrecomp: --module-id requires one value and may "
+                      "appear only once\n", stderr);
+                return 2;
+            }
+            module_id = argv[++i];
+        } else if (strncmp(argv[i], "--module-id=", 12) == 0) {
+            if (module_id) {
+                fputs("armrecomp: --module-id may appear only once\n", stderr);
+                return 2;
+            }
+            module_id = argv[i] + 12;
+        } else {
+            if (positional_count == 4) {
+                fputs(USAGE, stderr);
+                return 2;
+            }
+            positional[positional_count++] = argv[i];
+        }
+    }
+
+    if (positional_count < 2) {
+        fputs(USAGE, stderr);
+        return 2;
+    }
+    if (module_id && !em_module_id_valid(module_id)) {
+        fprintf(stderr, "armrecomp: invalid module ID '%s' "
+                "(use 1-%u ASCII letters/digits/underscores, starting "
+                "with a letter)\n", module_id, EM_MODULE_ID_MAX);
+        return 2;
+    }
+
+    return cmd_emit(positional[0], positional[1],
+                    positional_count >= 3
+                        ? (uint32_t)strtoul(positional[2], NULL, 0)
+                        : 0,
+                    positional_count >= 4 ? positional[3] : NULL,
+                    module_id);
+}
+
+static int cmd_compose_args(int argc, char **argv) {
+    const char *entry_module = NULL;
+    const char *output = NULL;
+    const char **inputs;
+    size_t input_count = 0;
+    int rc;
+    char error[512];
+
+    inputs = (const char **)calloc((size_t)argc, sizeof(*inputs));
+    if (!inputs) {
+        fputs("armrecomp: out of memory\n", stderr);
+        return 1;
+    }
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--entry-module") == 0) {
+            if (entry_module || i + 1 >= argc) {
+                fputs("armrecomp: --entry-module requires one value and may "
+                      "appear only once\n", stderr);
+                free(inputs);
+                return 2;
+            }
+            entry_module = argv[++i];
+        } else if (strncmp(argv[i], "--entry-module=", 15) == 0) {
+            if (entry_module) {
+                fputs("armrecomp: --entry-module may appear only once\n",
+                      stderr);
+                free(inputs);
+                return 2;
+            }
+            entry_module = argv[i] + 15;
+        } else if (strcmp(argv[i], "--output") == 0) {
+            if (output || i + 1 >= argc) {
+                fputs("armrecomp: --output requires one value and may appear "
+                      "only once\n", stderr);
+                free(inputs);
+                return 2;
+            }
+            output = argv[++i];
+        } else if (strncmp(argv[i], "--output=", 9) == 0) {
+            if (output) {
+                fputs("armrecomp: --output may appear only once\n", stderr);
+                free(inputs);
+                return 2;
+            }
+            output = argv[i] + 9;
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "armrecomp: unknown compose option %s\n", argv[i]);
+            free(inputs);
+            return 2;
+        } else {
+            inputs[input_count++] = argv[i];
+        }
+    }
+    if (!entry_module || !output || input_count < 2 || (input_count & 1u) ||
+        !em_module_id_valid(entry_module)) {
+        fputs(USAGE, stderr);
+        free(inputs);
+        return 2;
+    }
+    rc = ac_compose(output, entry_module, inputs, input_count,
+                    error, sizeof(error));
+    free(inputs);
+    if (rc) {
+        fprintf(stderr, "armrecomp: compose: %s\n",
+                error[0] ? error : "composition failed");
+        return 1;
+    }
+    printf("wrote %s, its header, and deterministic aggregate reports\n",
+           output);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fputs(USAGE, stderr);
@@ -1001,10 +1141,11 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "relocs") == 0 && argc >= 3)
         return cmd_relocs(argv[2]);
 
-    if (strcmp(argv[1], "emit") == 0 && argc >= 4)
-        return cmd_emit(argv[2], argv[3],
-                        argc >= 5 ? (uint32_t)strtoul(argv[4], NULL, 0) : 0,
-                        argc >= 6 ? argv[5] : NULL);
+    if (strcmp(argv[1], "emit") == 0)
+        return cmd_emit_args(argc, argv);
+
+    if (strcmp(argv[1], "compose") == 0)
+        return cmd_compose_args(argc, argv);
 
     if (strcmp(argv[1], "info") == 0 && argc >= 3)
         return cmd_info(argv[2]);

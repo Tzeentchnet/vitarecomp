@@ -218,7 +218,8 @@ Anything untranslated emits a **named run-time trap**, never silence.
 discovery aid and is labelled as one: past the first missing piece the machine
 state is wrong and every later trap is reached down a path that would not have
 happened on hardware. What it is good for is one run naming many missing pieces
-instead of one.
+instead of one. A strict host entry must not enable that diagnostic continuation
+mode.
 
 Emission is reachability-filtered and body-bounded. Large modules are split
 into deterministic translation units that share one generated header. Every
@@ -226,6 +227,49 @@ run also writes path-free JSON and text reports containing the sorted
 unsupported/trap census and each partition's function, instruction, and key
 range inventory. Reports are suitable for byte-for-byte repeat checks; they do
 not contain the input path, output path, or a module content hash.
+
+### Generated-module ABI and composition
+
+`vitarecomp/generated_module.h` defines generated-module ABI version 4. Every
+descriptor starts with `abi_version` and `struct_size`, followed by stable
+module identity, complete ARM/Thumb dispatch, entry/TLS records, variable
+imports, site-keyed function imports with writable direct-call target slots,
+and a compact schema-v4 generation-report summary. TLS records include an
+explicit power-of-two alignment. Consumers reject a version
+or size mismatch before reading later fields.
+
+TLS-variable import tables are not represented by this ABI. A nonzero
+TLS-variable import count is rejected during generation and strict host
+preflight rather than being omitted or bound to a process-global address.
+
+Entry metadata preserves the raw resolved `module_start` address and separately
+records its normalized dispatch key. SNC retail modules commonly leave the raw
+low bit clear even though their entry is Thumb, so the shared ABI contract
+normalizes that key to `(raw & ~1) | 1`; descriptors, sidecars, reports, the
+composer, and the host all validate the same pair.
+
+The deterministic multi-image command is:
+
+```text
+armrecomp compose --entry-module <id> --output <registry.c> \
+  <module/report JSON>...
+```
+
+It consumes exactly one schema-v4 sidecar and schema-v4 report per module,
+independent of input order. It rejects malformed or disagreeing records,
+overlapping ranges, duplicate full ARM/Thumb keys, ambiguous exports, and an
+entry that does not resolve exactly once. Output is a registry C/header pair
+and schema-v4 JSON/text aggregate reports. The registry and reports carry the
+TLS-bearing descriptor index/order, aligned offset, and aggregate
+size/alignment, all recomputed and checked by the runtime before use.
+
+`productionReady` requires no generated gaps. `structuralReady` and
+`entryEligible` instead require complete metadata, resolved entry/TLS records,
+function-entry and PC instrumentation, and zero body cuts, unreported
+partitions, or unclassified traps. Fully classified named traps remain
+entry-eligible but keep production readiness false. Under the strict
+guest-call boundary, only the first such trap is observable; execution cannot
+continue past it.
 
 ### Indirect transfers need a run-time table
 
@@ -262,6 +306,63 @@ The search assumes a sorted table, and an unsorted one does not crash — it
 silently fails to find entries that are present, which looks exactly like
 missing coverage. `vita_dispatch_init` checks the order once and refuses to
 search a table that fails.
+
+Module-set startup uses the checked form,
+`vita_dispatch_init_checked`. It rejects table/count mismatches, null
+functions, descending keys, and duplicate keys, and installs a private copy.
+The void initializer remains for ABI-v1 generated code and normalizes its
+historical dummy empty table. Runtime shutdown clears the installed copy so a
+fresh initialization cannot retain function pointers from the prior image set.
+
+Strict runtime relocation validation uses the same ten-format PT_SCE_RELA
+decoder and relocation writers as translation. It rejects unknown, truncated,
+trailing, bad-segment, out-of-file, and unsupported records, then compares the
+declared bytes with the identity-load result without modifying them. A changed
+byte proves the image is pre-link rather than post-link and fails preflight;
+static ET_SCE_EXEC images remain valid with no relocation stream.
+
+### Post-link export/import binding
+
+`vita_binding_install_module_set` consumes, for every module, the metadata
+validated by the strict loader, post-link module-table records from that
+loader's validation extension, and the generated-module descriptor. It builds
+one deterministic NID-sorted export/import view and one exact-key-sorted
+dispatch table. Function export identity is `(library NID, symbol NID)`;
+duplicates are errors even when their kinds differ. An exported function must
+have its exact ARM/Thumb dispatch key—finding only the opposite mode is a
+mode-mismatch error.
+
+A post-link function target is accepted only when its NID selects a generated
+function export, an exact dynamic HLE registration exists, or the import names
+an explicit generated strict-unsupported target. The loaded target word must
+equal the validated post-link record. There is no unresolved-success path.
+Import-stub dispatch entries are rebound to the selected generated or HLE
+function before the single merged table is installed.
+
+Variable imports resolve from exactly one variable/TLS-variable export or
+explicit runtime provider. Generated value storage and strict-loader ABS32
+records must agree one-for-one. Every site must be aligned, inside its importing
+module, free of address/addend overflow, and already contain the validated
+post-link value. The binder preflights every function target, variable source,
+storage pointer, and guest word before changing any generated storage or guest
+memory; failure therefore leaves both memory and the previous dispatcher
+untouched. Structured failures identify module, record, and site indices only.
+
+### Checked entry boundary
+
+Strict loading consumes caller-owned immutable byte buffers and never opens or
+reopens a path. Whole-set metadata, validation extensions, cross-module ranges,
+and every destination are preflighted before the transactional memory commit.
+This lets a host retain bytes from its validation handle and avoid a
+validation-to-load path race.
+
+After loading and binding, `vita_main_stack_prepare`,
+`vita_tls_prepare_generated_modules`, and `vita_cpu_prepare_module_start`
+validate stack, TLS, and deterministic initial CPU state without invoking
+generated code. A host can then call exactly one prepared capability through
+`vita_guest_call`. The API returns clean completion, the runtime's explicit
+exit request, or the first named strict failure as distinct outcomes. Invalid,
+nested, or reentrant boundary calls fail without invoking the entry.
 
 ### Imports are bound, so firmware calls say what they are
 

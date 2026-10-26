@@ -9,7 +9,13 @@
 #ifndef VITARECOMP_CPU_H
 #define VITARECOMP_CPU_H
 
+#include "vitarecomp/runtime.h"
+
 #include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #if defined(VITARECOMP_THREADED)
 #  if defined(__cplusplus)
@@ -58,10 +64,37 @@ extern VITA_TLS int      vita_trace_insns;
 extern VITA_TLS uint32_t vita_trace_lo, vita_trace_hi;   /* the window, inclusive */
 void vita_trace_insn(uint32_t addr);
 
+/* Deterministic state used to enter a generated module-start function.
+ *
+ * `argument_size` and `argument_pointer` become r0 and r1. `stack_pointer`
+ * becomes sp and must be 16-byte aligned inside the checked main-stack
+ * configuration. `return_address` becomes lr; zero is a valid host-selected
+ * sentinel. The generated entry's result remains in r0 when it returns. */
+typedef struct vita_module_start_state {
+    uint32_t argument_size;
+    uint32_t argument_pointer;
+    uint32_t stack_pointer;
+    uint32_t return_address;
+} vita_module_start_state;
+
+/* Clear all represented CPU-local state, including the exclusive monitor.
+ * This operation does not require an initialized runtime and applies no entry
+ * arguments. */
+void vita_cpu_reset(void);
+
+/* Validate runtime, argument and stack state; reset the main guest thread; and
+ * apply an explicit module-start state. No generated entry is invoked. */
+vita_result vita_cpu_prepare_module_start(
+    const vita_module_start_state *state);
+
 static inline void vita_trace_pc(uint32_t addr) {
     vita_last_pc = addr;
     if (vita_trace_insns && addr >= vita_trace_lo && addr <= vita_trace_hi)
         vita_trace_insn(addr);
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* VITARECOMP_CPU_H */

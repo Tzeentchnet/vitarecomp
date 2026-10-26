@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 #include "vitarecomp/runtime.h"
 
+#include "vitarecomp/cpu.h"
 #include "vitarecomp/hle.h"
 #include "vitarecomp/host.h"
 #include "vitarecomp/mem.h"
@@ -15,12 +16,14 @@
 void vita_fios_shutdown(void);
 void vita_io_shutdown(void);
 void vita_threadmgr_shutdown(void);
+void vita_sched_quiesce(void);
 void vita_sched_shutdown(void);
 void vita_mspace_shutdown(void);
 void vita_sysmem_shutdown(void);
 void vita_hle_registry_reset(void);
 void vita_libc_finalize(uint32_t dso);
 void vita_libc_reset(void);
+vita_result vita_tls_arena_init(uint32_t base, uint32_t size);
 
 typedef struct runtime_state {
     mtx_t lock;
@@ -54,21 +57,34 @@ static int ranges_overlap(uint32_t a, uint32_t as, uint32_t b, uint32_t bs) {
 
 int vita_runtime_init(const vita_runtime_config *config) {
     if (!config || !config->memory_size ||
-        (uint64_t)config->memory_base + config->memory_size > UINT64_C(0x100000000))
+        config->memory_size >
+            UINT64_C(0x100000000) - config->memory_base)
         return VITA_ERROR_INVALID_ARGUMENT;
     if (!range_inside(config->memory_base, config->memory_size,
                       config->heap_base, config->heap_size) ||
         !range_inside(config->memory_base, config->memory_size,
                       config->sysmem_base, config->sysmem_size) ||
         !range_inside(config->memory_base, config->memory_size,
-                      config->kernel_base, config->kernel_size))
+                      config->kernel_base, config->kernel_size) ||
+        !range_inside(config->memory_base, config->memory_size,
+                      config->tls_base, config->tls_size))
         return VITA_ERROR_OUT_OF_BOUNDS;
+    if (((config->tls_size == 0u) != (config->tls_base == 0u)) ||
+        (config->tls_size &&
+         (((config->tls_base | config->tls_size) & 15u) != 0)))
+        return VITA_ERROR_INVALID_ARGUMENT;
     if (ranges_overlap(config->heap_base, config->heap_size,
                        config->sysmem_base, config->sysmem_size) ||
         ranges_overlap(config->heap_base, config->heap_size,
                        config->kernel_base, config->kernel_size) ||
+        ranges_overlap(config->heap_base, config->heap_size,
+                       config->tls_base, config->tls_size) ||
         ranges_overlap(config->sysmem_base, config->sysmem_size,
-                       config->kernel_base, config->kernel_size))
+                       config->kernel_base, config->kernel_size) ||
+        ranges_overlap(config->sysmem_base, config->sysmem_size,
+                       config->tls_base, config->tls_size) ||
+        ranges_overlap(config->kernel_base, config->kernel_size,
+                       config->tls_base, config->tls_size))
         return VITA_ERROR_INVALID_ARGUMENT;
 
     call_once(&g_once, runtime_once);
@@ -88,11 +104,21 @@ int vita_runtime_init(const vita_runtime_config *config) {
     mtx_unlock(&g_runtime.lock);
 
     vita_libc_reset();
+    vita_cpu_reset();
     if (vita_mem_init(config->memory_base, config->memory_size) != 0) {
         mtx_lock(&g_runtime.lock);
         g_runtime.initializing = 0;
         mtx_unlock(&g_runtime.lock);
         return VITA_ERROR_NO_MEMORY;
+    }
+    const vita_result tls_result =
+        vita_tls_arena_init(config->tls_base, config->tls_size);
+    if (tls_result != VITA_OK) {
+        vita_mem_free();
+        mtx_lock(&g_runtime.lock);
+        g_runtime.initializing = 0;
+        mtx_unlock(&g_runtime.lock);
+        return tls_result;
     }
     if (config->heap_size) vita_heap_init(config->heap_base, config->heap_size);
     if (config->sysmem_size)
@@ -125,6 +151,7 @@ void vita_runtime_shutdown(void) {
     g_runtime.shutting_down = 1;
     mtx_unlock(&g_runtime.lock);
 
+    vita_sched_quiesce();
     vita_libc_finalize(0);
     vita_fios_shutdown();
     vita_io_shutdown();
@@ -135,9 +162,11 @@ void vita_runtime_shutdown(void) {
     vita_sysmem_shutdown();
     vita_heap_shutdown();
     vita_libc_reset();
+    vita_binding_runtime_reset();
     vita_hle_registry_reset();
     vita_mem_free();
     vita_clock_reset();
+    vita_cpu_reset();
 
     mtx_lock(&g_runtime.lock);
     g_runtime.counters.shutdowns++;
@@ -159,6 +188,16 @@ int vita_runtime_is_initialized(void) {
     initialized = g_runtime.initialized;
     mtx_unlock(&g_runtime.lock);
     return initialized;
+}
+
+int vita_runtime_can_bind(void) {
+    int ready;
+    call_once(&g_once, runtime_once);
+    mtx_lock(&g_runtime.lock);
+    ready = g_runtime.initialized && !g_runtime.initializing &&
+            !g_runtime.shutting_down;
+    mtx_unlock(&g_runtime.lock);
+    return ready;
 }
 
 void vita_runtime_get_counters(vita_runtime_counters *out) {
@@ -250,7 +289,9 @@ void vita_runtime_request_exit(int status) {
     callback = g_runtime.config.exit_requested;
     userdata = g_runtime.config.exit_userdata;
     mtx_unlock(&g_runtime.lock);
+    vita_guest_boundary_note_exit_requested(status);
     if (callback) callback(status, userdata);
+    vita_guest_boundary_exit_requested(status);
 }
 
 int vita_runtime_exit_requested(int *status) {

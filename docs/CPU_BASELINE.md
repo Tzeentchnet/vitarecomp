@@ -17,8 +17,11 @@ filesystem, or title-specific behavior. Exact file and topic provenance is in
 - Reachability-filtered, bounded, partitioned generated C
 - Scalar ARM/VFP and measured NEON forms, with explicit named traps for every
   unsupported instruction, shape, or transfer target
-- Deterministic `.report.json` and `.report.txt` files beside generated output,
-  containing a sorted trap census and per-translation-unit inventory
+- Deterministic `.report.json`, `.report.txt`, and `.module.json` files beside
+  generated output, containing readiness/instrumentation evidence, a sorted
+  trap census, translation-unit inventory, and versioned module ABI metadata
+- Strict deterministic `armrecomp compose` over unordered per-module artifacts,
+  producing an aggregate report and collision-safe generated registry
 - Strict runtime traps by default; `VITARECOMP_TRACE=1` remains a diagnostic
   opt-in and is not a production continuation policy
 
@@ -78,13 +81,38 @@ Public CTest coverage includes:
 - aligned Thumb TBB table bases and single-lane VST1 emission;
 - ARM/Thumb same-address keys through discovery, emitter, and dispatch;
 - FPSCR FZ comparison behavior;
-- checked memory and cross-thread exclusive-monitor invalidation; and
+- checked memory and cross-thread exclusive-monitor invalidation;
 - three MIT-licensed public homebrew fixtures, each extracted, emitted twice,
-  byte-compared, and compiled as C without requiring VitaSDK.
+  byte-compared, and compiled as C without requiring VitaSDK; and
+- public synthetic multi-image composition vectors covering input-order
+  independence, ARM/Thumb key retention, overlap/duplicate rejection, strict
+  report parsing, structural blockers, and exact entry resolution.
 
 Unsupported generated operations remain visible in the report and execute a
 named aborting trap. Consequently, a report sets `productionReady` only when
-its trap/body-cut/unreported-part counts are all zero.
+its trap/body-cut/unreported-part counts are all zero. `structuralReady` is
+reported separately and requires complete module metadata, an explicit stable
+module ID, and resolved entry/TLS records; it does not claim zero translation
+gaps.
+
+Composition keeps those two questions separate at image-set scale. Fully
+classified named traps make `productionReady` false without making an otherwise
+complete image set ineligible for entry. Body cuts, unreported partitions,
+unclassified traps, missing PC instrumentation, unresolved entry/TLS records,
+or incomplete module metadata make `structuralReady` and `entryEligible` false.
+An entry-eligible classified trap may only become the first named strict stop;
+the strict guest-call boundary never continues beyond it.
+
+The current format versions are generated-module ABI v4, module-sidecar schema
+v4, module-report schema v4, and compose-report schema v4. ABI v4 adds
+explicit TLS alignment plus deterministic aggregate descriptor order and
+offset metadata; consumers reject missing or mismatched layouts. The exact
+image-set command is:
+
+```text
+armrecomp compose --entry-module <id> --output <registry.c> \
+  <module/report JSON>...
+```
 
 ## Checkpoint
 
@@ -95,6 +123,18 @@ generated 809 files (356,792,679 bytes) twice with identical relative file
 sets and bytes. All three generated-source targets then compiled with MSVC
 `/W4 /WX /permissive- /bigobj`; the final compile log contained no warning or
 error diagnostics.
+
+On 2026-10-25, the current public Gate 1 CPU/runtime selection passed 6/6:
+
+```powershell
+ctest --test-dir out\build\vitarecomp-public-debug -C Debug `
+  --output-on-failure `
+  -R "^(emit|compose-generated-image-set|runtime|entry-state|loader-strict|module-set-binding)$"
+```
+
+This public result covers composition, structural blockers, classified traps,
+strict loading/binding, stack/TLS/CPU entry state, and guest-call outcomes. It
+does not contain or execute a private title bundle.
 
 ## Renderer merge revalidation
 

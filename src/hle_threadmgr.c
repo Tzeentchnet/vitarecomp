@@ -22,6 +22,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+#include <threads.h>
 
 #define SCE_KERNEL_ERROR_INVALID_ARGUMENT 0x80020005u
 #define SCE_KERNEL_ERROR_INVALID_UID      0x80024501u
@@ -51,6 +52,147 @@ static uint32_t g_kbase, g_ksize;
 static kernel_chunk g_kchunks[MAX_KERNEL_CHUNKS];
 static uint32_t g_kchunk_count;
 
+#define MAX_TLS_CHUNKS 129
+static uint32_t g_tls_arena_base, g_tls_arena_size;
+static kernel_chunk g_tls_chunks[MAX_TLS_CHUNKS];
+static uint32_t g_tls_chunk_count;
+static once_flag g_tls_arena_once = ONCE_FLAG_INIT;
+static mtx_t g_tls_arena_lock;
+
+static void tls_arena_once(void) {
+    (void)mtx_init(&g_tls_arena_lock, mtx_plain);
+}
+
+vita_result vita_tls_arena_init(uint32_t base, uint32_t size) {
+    call_once(&g_tls_arena_once, tls_arena_once);
+    mtx_lock(&g_tls_arena_lock);
+    g_tls_arena_base = 0;
+    g_tls_arena_size = 0;
+    g_tls_chunk_count = 0;
+    memset(g_tls_chunks, 0, sizeof(g_tls_chunks));
+    if (size) {
+        if ((base & 15u) != 0 || (size & 15u) != 0 ||
+            vita_mem_set_guest(base, 0, size) != VITA_OK) {
+            mtx_unlock(&g_tls_arena_lock);
+            return VITA_ERROR_INVALID_ARGUMENT;
+        }
+        g_tls_arena_base = base;
+        g_tls_arena_size = size;
+        g_tls_chunks[0] = (kernel_chunk){base, size, 0};
+        g_tls_chunk_count = 1;
+    }
+    mtx_unlock(&g_tls_arena_lock);
+    return VITA_OK;
+}
+
+static int tls_arena_can_fit(uint32_t requested, uint32_t alignment) {
+    int fits = 0;
+    if (!requested || alignment < 16u ||
+        (alignment & (alignment - 1u)) != 0)
+        return 0;
+    call_once(&g_tls_arena_once, tls_arena_once);
+    mtx_lock(&g_tls_arena_lock);
+    if (g_tls_arena_size) {
+        const uint64_t aligned =
+            ((uint64_t)g_tls_arena_base + alignment - 1u) &
+            ~(uint64_t)(alignment - 1u);
+        const uint64_t end = (uint64_t)g_tls_arena_base + g_tls_arena_size;
+        fits = aligned <= end && requested <= end - aligned;
+    }
+    mtx_unlock(&g_tls_arena_lock);
+    return fits;
+}
+
+static uint32_t tls_arena_alloc(uint32_t requested, uint32_t alignment) {
+    if (!requested || requested > UINT32_MAX - 15u ||
+        alignment < 16u || (alignment & (alignment - 1u)) != 0)
+        return 0;
+    const uint32_t size = (requested + 15u) & ~UINT32_C(15);
+    call_once(&g_tls_arena_once, tls_arena_once);
+    mtx_lock(&g_tls_arena_lock);
+    for (uint32_t i = 0; i < g_tls_chunk_count; i++) {
+        kernel_chunk *chunk = &g_tls_chunks[i];
+        if (chunk->used) continue;
+        const uint64_t aligned =
+            ((uint64_t)chunk->address + alignment - 1u) &
+            ~(uint64_t)(alignment - 1u);
+        if (aligned > UINT32_MAX) continue;
+        const uint32_t address = (uint32_t)aligned;
+        const uint32_t before = address - chunk->address;
+        if (before > chunk->size || size > chunk->size - before)
+            continue;
+        const uint32_t after = chunk->size - before - size;
+        const uint32_t piece_count =
+            1u + (before != 0u) + (after != 0u);
+        if (piece_count - 1u > MAX_TLS_CHUNKS - g_tls_chunk_count)
+            continue;
+
+        kernel_chunk pieces[3];
+        uint32_t piece = 0;
+        if (before)
+            pieces[piece++] =
+                (kernel_chunk){chunk->address, before, 0};
+        pieces[piece++] = (kernel_chunk){address, size, 1};
+        if (after)
+            pieces[piece++] =
+                (kernel_chunk){address + size, after, 0};
+        memmove(&g_tls_chunks[i + piece_count], &g_tls_chunks[i + 1],
+                (size_t)(g_tls_chunk_count - i - 1u) *
+                    sizeof(g_tls_chunks[0]));
+        memcpy(&g_tls_chunks[i], pieces,
+               (size_t)piece_count * sizeof(g_tls_chunks[0]));
+        g_tls_chunk_count += piece_count - 1u;
+        if (vita_mem_set_guest(address, 0, size) != VITA_OK) {
+            g_tls_chunks[i + (before != 0u)].used = 0;
+            mtx_unlock(&g_tls_arena_lock);
+            return 0;
+        }
+        mtx_unlock(&g_tls_arena_lock);
+        return address;
+    }
+    mtx_unlock(&g_tls_arena_lock);
+    return 0;
+}
+
+static void tls_arena_free(uint32_t address) {
+    call_once(&g_tls_arena_once, tls_arena_once);
+    mtx_lock(&g_tls_arena_lock);
+    for (uint32_t i = 0; i < g_tls_chunk_count; i++) {
+        if (g_tls_chunks[i].address != address || !g_tls_chunks[i].used)
+            continue;
+        (void)vita_mem_set_guest(g_tls_chunks[i].address, 0,
+                                 g_tls_chunks[i].size);
+        g_tls_chunks[i].used = 0;
+        if (i && !g_tls_chunks[i - 1].used) {
+            g_tls_chunks[i - 1].size += g_tls_chunks[i].size;
+            memmove(&g_tls_chunks[i], &g_tls_chunks[i + 1],
+                    (size_t)(g_tls_chunk_count - i - 1u) *
+                        sizeof(g_tls_chunks[0]));
+            g_tls_chunk_count--;
+            i--;
+        }
+        if (i + 1 < g_tls_chunk_count && !g_tls_chunks[i + 1].used) {
+            g_tls_chunks[i].size += g_tls_chunks[i + 1].size;
+            memmove(&g_tls_chunks[i + 1], &g_tls_chunks[i + 2],
+                    (size_t)(g_tls_chunk_count - i - 2u) *
+                        sizeof(g_tls_chunks[0]));
+            g_tls_chunk_count--;
+        }
+        break;
+    }
+    mtx_unlock(&g_tls_arena_lock);
+}
+
+static void tls_arena_reset(void) {
+    call_once(&g_tls_arena_once, tls_arena_once);
+    mtx_lock(&g_tls_arena_lock);
+    g_tls_arena_base = 0;
+    g_tls_arena_size = 0;
+    g_tls_chunk_count = 0;
+    memset(g_tls_chunks, 0, sizeof(g_tls_chunks));
+    mtx_unlock(&g_tls_arena_lock);
+}
+
 void vita_kernel_init(uint32_t base, uint32_t size) {
     const uint64_t start = ((uint64_t)base + 15u) & ~UINT64_C(15);
     const uint64_t end = (uint64_t)base + size;
@@ -67,33 +209,55 @@ void vita_kernel_init(uint32_t base, uint32_t size) {
     }
 }
 
-static uint32_t kalloc(uint32_t requested) {
-    if (!requested || requested > UINT32_MAX - 15u)
+static uint32_t kalloc_aligned(uint32_t requested, uint32_t alignment) {
+    if (!requested || requested > UINT32_MAX - 15u ||
+        alignment < 16u || (alignment & (alignment - 1u)) != 0)
         return 0;
     uint32_t size = (requested + 15u) & ~UINT32_C(15);
     for (uint32_t i = 0; i < g_kchunk_count; i++) {
         kernel_chunk *chunk = &g_kchunks[i];
-        if (chunk->used || chunk->size < size) continue;
-        uint32_t address = chunk->address;
-        if (chunk->size > size) {
-            if (g_kchunk_count == MAX_KERNEL_CHUNKS) return 0;
-            memmove(&g_kchunks[i + 2], &g_kchunks[i + 1],
-                    (size_t)(g_kchunk_count - i - 1) *
-                    sizeof(g_kchunks[0]));
-            g_kchunks[i + 1] =
-                (kernel_chunk){ address + size, chunk->size - size, 0 };
-            g_kchunk_count++;
-            chunk = &g_kchunks[i];
-            chunk->size = size;
-        }
-        chunk->used = 1;
+        if (chunk->used) continue;
+        const uint64_t aligned =
+            ((uint64_t)chunk->address + alignment - 1u) &
+            ~(uint64_t)(alignment - 1u);
+        if (aligned > UINT32_MAX) continue;
+        const uint32_t address = (uint32_t)aligned;
+        const uint32_t before = address - chunk->address;
+        if (before > chunk->size || size > chunk->size - before)
+            continue;
+        const uint32_t after = chunk->size - before - size;
+        const uint32_t piece_count =
+            1u + (before != 0u) + (after != 0u);
+        if (piece_count - 1u > MAX_KERNEL_CHUNKS - g_kchunk_count)
+            continue;
+
+        kernel_chunk pieces[3];
+        uint32_t piece = 0;
+        if (before)
+            pieces[piece++] =
+                (kernel_chunk){chunk->address, before, 0};
+        const uint32_t allocated_piece = piece;
+        pieces[piece++] = (kernel_chunk){address, size, 1};
+        if (after)
+            pieces[piece++] =
+                (kernel_chunk){address + size, after, 0};
+        memmove(&g_kchunks[i + piece_count], &g_kchunks[i + 1],
+                (size_t)(g_kchunk_count - i - 1u) *
+                sizeof(g_kchunks[0]));
+        memcpy(&g_kchunks[i], pieces,
+               (size_t)piece_count * sizeof(g_kchunks[0]));
+        g_kchunk_count += piece_count - 1u;
         if (vita_mem_set_guest(address, 0, requested) != VITA_OK) {
-            chunk->used = 0;
+            g_kchunks[i + allocated_piece].used = 0;
             return 0;
         }
         return address;
     }
     return 0;
+}
+
+static uint32_t kalloc(uint32_t requested) {
+    return kalloc_aligned(requested, 16u);
 }
 
 static void kfree(uint32_t address) {
@@ -144,57 +308,372 @@ void vita_hle_sceKernelGetProcessId(void) { r0 = PROCESS_UID; }
 
 /* --- thread-local storage ----------------------------------------------------
  *
- * A thread's TLS block has the layout the console gives it, which Vita3K
- * reproduces (kernel/src/thread.cpp, kernel.cpp): 0x800 bytes of kernel-side
- * slots, then the module's thread-local image, and TPIDRURO points at the
- * image. The kernel part holds the 0x101 word slots that sceKernelGetTLSAddr
- * hands out by key (the C runtime keeps its reent pointer in one); the image
- * is what `mrc p15, 0, rt, c13, c0, 3` plus a linker-chosen offset reaches,
- * and how Sony's own runtime finds its per-thread state. Getting the two
- * into one block matters because both kinds of access happen in one program.
- * One block per thread, made the first time the thread asks. */
+ * The framework reserves 0x800 bytes for the key-addressed slots used by its
+ * implemented thread-manager API, followed by the explicitly configured,
+ * aligned module templates. TPIDRURO points at the template-data base. This
+ * is the runtime's supported contract, not a complete model of the Vita
+ * loader's TLS registration or offset assignment. One zeroed block is made
+ * lazily for each thread. */
 
 #define TLS_KERNEL_SIZE 0x800
 #define TLS_SLOTS       0x101
+#define TLS_MAX_MODULES 256
 
-static uint32_t g_tls_image, g_tls_filesz, g_tls_memsz;
+typedef struct tls_module {
+    uint32_t image;
+    uint32_t filesz;
+    uint32_t memsz;
+    uint32_t alignment;
+    uint32_t offset;
+    uint8_t *initial_data;
+} tls_module;
+
+static tls_module *g_tls_modules;
+static uint32_t g_tls_module_count;
+static uint32_t g_tls_data_size;
+static uint32_t g_tls_data_alignment;
+static uint32_t g_tls_data_offset;
+static uint32_t g_tls_allocation_size;
+
+static void tls_modules_free(tls_module *modules, uint32_t module_count) {
+    if (!modules) return;
+    for (uint32_t i = 0; i < module_count; i++)
+        free(modules[i].initial_data);
+    free(modules);
+}
+
+static int tls_power_of_two(uint32_t value) {
+    return value && (value & (value - 1u)) == 0;
+}
+
+static int tls_align_up(uint32_t value, uint32_t alignment, uint32_t *out) {
+    const uint64_t aligned =
+        ((uint64_t)value + alignment - 1u) &
+        ~(uint64_t)(alignment - 1u);
+    if (aligned > UINT32_MAX) return 0;
+    *out = (uint32_t)aligned;
+    return 1;
+}
+
+static void tls_default_layout(uint32_t *alignment, uint32_t *data_offset,
+                               uint32_t *allocation_size) {
+    *alignment = g_tls_data_alignment ? g_tls_data_alignment : 16u;
+    *data_offset = g_tls_data_offset ? g_tls_data_offset : TLS_KERNEL_SIZE;
+    *allocation_size = g_tls_allocation_size
+        ? g_tls_allocation_size
+        : TLS_KERNEL_SIZE;
+}
+
+vita_result vita_tls_prepare(
+    const vita_tls_template *templates,
+    size_t template_count,
+    vita_tls_module_layout *module_layouts,
+    size_t module_layout_capacity,
+    vita_tls_layout *layout) {
+    if (!vita_runtime_is_initialized())
+        return VITA_ERROR_NOT_INITIALIZED;
+    if (template_count > TLS_MAX_MODULES)
+        return VITA_ERROR_LIMIT;
+    if (template_count && !templates)
+        return VITA_ERROR_INVALID_ARGUMENT;
+    if (module_layouts && module_layout_capacity < template_count)
+        return VITA_ERROR_INVALID_ARGUMENT;
+
+    tls_module *prepared = NULL;
+    if (template_count) {
+        prepared = (tls_module *)calloc(template_count, sizeof(*prepared));
+        if (!prepared) return VITA_ERROR_NO_MEMORY;
+    }
+
+    uint32_t data_size = 0;
+    uint32_t data_alignment = 16u;
+    vita_result result = VITA_OK;
+    for (size_t i = 0; i < template_count; i++) {
+        const vita_tls_template *source = &templates[i];
+        if (source->initialized_size > source->memory_size ||
+            !source->memory_size || !tls_power_of_two(source->alignment)) {
+            result = VITA_ERROR_INVALID_ARGUMENT;
+            break;
+        }
+        const uint64_t image_end =
+            (uint64_t)source->image_address + source->initialized_size;
+        if (image_end > UINT64_C(0x100000000)) {
+            result = VITA_ERROR_OVERFLOW;
+            break;
+        }
+        if (source->initialized_size) {
+            void *image = NULL;
+            if (vita_mem_range(source->image_address,
+                               source->initialized_size, &image) != VITA_OK) {
+                result = VITA_ERROR_OUT_OF_BOUNDS;
+                break;
+            }
+            (void)image;
+        }
+        uint32_t offset = 0;
+        if (!tls_align_up(data_size, source->alignment, &offset) ||
+            source->memory_size > UINT32_MAX - offset) {
+            result = VITA_ERROR_OVERFLOW;
+            break;
+        }
+        prepared[i] = (tls_module){
+            source->image_address,
+            source->initialized_size,
+            source->memory_size,
+            source->alignment,
+            offset,
+            NULL
+        };
+        if (source->initialized_size) {
+            prepared[i].initial_data =
+                (uint8_t *)malloc(source->initialized_size);
+            if (!prepared[i].initial_data) {
+                result = VITA_ERROR_NO_MEMORY;
+                break;
+            }
+            if (vita_mem_copy_from_guest(
+                    prepared[i].initial_data, source->image_address,
+                    source->initialized_size) != VITA_OK) {
+                result = VITA_ERROR_OUT_OF_BOUNDS;
+                break;
+            }
+        }
+        data_size = offset + source->memory_size;
+        if (source->alignment > data_alignment)
+            data_alignment = source->alignment;
+    }
+
+    uint32_t data_offset = 0;
+    uint32_t allocation_size = 0;
+    if (result == VITA_OK &&
+        (!tls_align_up(TLS_KERNEL_SIZE, data_alignment, &data_offset) ||
+         data_size > UINT32_MAX - data_offset ||
+         !tls_align_up(data_offset + data_size, 16u, &allocation_size))) {
+        result = VITA_ERROR_OVERFLOW;
+    }
+    if (result == VITA_OK &&
+        !tls_arena_can_fit(allocation_size, data_alignment))
+        result = VITA_ERROR_NO_MEMORY;
+    if (result == VITA_OK)
+        result = vita_sched_restart_tls();
+    if (result != VITA_OK) {
+        tls_modules_free(prepared, (uint32_t)template_count);
+        return result;
+    }
+
+    tls_modules_free(g_tls_modules, g_tls_module_count);
+    g_tls_modules = prepared;
+    g_tls_module_count = (uint32_t)template_count;
+    g_tls_data_size = data_size;
+    g_tls_data_alignment = data_alignment;
+    g_tls_data_offset = data_offset;
+    g_tls_allocation_size = allocation_size;
+
+    if (module_layouts) {
+        for (size_t i = 0; i < template_count; i++) {
+            module_layouts[i] = (vita_tls_module_layout){
+                prepared[i].offset,
+                prepared[i].filesz,
+                prepared[i].memsz,
+                prepared[i].alignment
+            };
+        }
+    }
+    if (layout) {
+        *layout = (vita_tls_layout){
+            (uint32_t)template_count,
+            data_size,
+            data_alignment,
+            allocation_size
+        };
+    }
+    return VITA_OK;
+}
+
+vita_result vita_tls_restart(void) {
+    if (!vita_runtime_is_initialized())
+        return VITA_ERROR_NOT_INITIALIZED;
+    return vita_sched_restart_tls();
+}
+
+vita_result vita_tls_prepare_generated_modules(
+    const vita_generated_module_descriptor *const *modules,
+    size_t module_count,
+    const vita_generated_tls_layout *generated_layout,
+    vita_tls_module_layout *module_layouts,
+    size_t module_layout_capacity,
+    vita_tls_layout *layout) {
+    if ((module_count && !modules) || !generated_layout ||
+        generated_layout->abi_version != VITA_GENERATED_MODULE_ABI_VERSION ||
+        generated_layout->struct_size < sizeof(*generated_layout) ||
+        generated_layout->descriptor_count != module_count ||
+        (generated_layout->entries != NULL) !=
+            (generated_layout->tls_module_count != 0u) ||
+        generated_layout->tls_module_count > module_count)
+        return VITA_ERROR_INVALID_ARGUMENT;
+
+    const size_t expected_count = generated_layout->tls_module_count;
+    if (module_layouts && module_layout_capacity < expected_count)
+        return VITA_ERROR_INVALID_ARGUMENT;
+    vita_tls_template *templates = NULL;
+    if (expected_count) {
+        templates = (vita_tls_template *)calloc(expected_count,
+                                                 sizeof(*templates));
+        if (!templates) return VITA_ERROR_NO_MEMORY;
+    }
+
+    size_t prepared_count = 0;
+    uint32_t data_size = 0;
+    uint32_t data_alignment = 16u;
+    vita_result result = VITA_OK;
+    for (size_t i = 0; i < module_count; i++) {
+        const vita_generated_module_descriptor *module = modules[i];
+        if (!module ||
+            module->abi_version != VITA_GENERATED_MODULE_ABI_VERSION ||
+            module->struct_size < sizeof(*module)) {
+            result = VITA_ERROR_INVALID_ARGUMENT;
+            break;
+        }
+        if (!module->tls.present) {
+            if (module->tls.resolved || module->tls.address ||
+                module->tls.file_size || module->tls.memory_size ||
+                module->tls.alignment) {
+                result = VITA_ERROR_INVALID_ARGUMENT;
+                break;
+            }
+            continue;
+        }
+        if (!module->tls.resolved) {
+            result = VITA_ERROR_NOT_FOUND;
+            break;
+        }
+        if (!module->tls.memory_size ||
+            module->tls.file_size > module->tls.memory_size ||
+            !tls_power_of_two(module->tls.alignment) ||
+            prepared_count >= generated_layout->tls_module_count) {
+            result = VITA_ERROR_INVALID_ARGUMENT;
+            break;
+        }
+        const vita_generated_tls_layout_entry *expected =
+            &generated_layout->entries[prepared_count];
+        if (expected->module != module ||
+            expected->descriptor_index != i ||
+            expected->tls_order != prepared_count ||
+            expected->expected_alignment != module->tls.alignment) {
+            result = VITA_ERROR_INVALID_ARGUMENT;
+            break;
+        }
+        uint32_t offset = 0;
+        if (!tls_align_up(data_size, module->tls.alignment, &offset) ||
+            module->tls.memory_size > UINT32_MAX - offset) {
+            result = VITA_ERROR_OVERFLOW;
+            break;
+        }
+        if (expected->expected_offset != offset) {
+            result = VITA_ERROR_INVALID_ARGUMENT;
+            break;
+        }
+        templates[prepared_count] = (vita_tls_template){
+            module->tls.address,
+            module->tls.file_size,
+            module->tls.memory_size,
+            module->tls.alignment
+        };
+        data_size = offset + module->tls.memory_size;
+        if (module->tls.alignment > data_alignment)
+            data_alignment = module->tls.alignment;
+        prepared_count++;
+    }
+    if (result == VITA_OK &&
+        (prepared_count != generated_layout->tls_module_count ||
+         generated_layout->data_size != data_size ||
+         generated_layout->data_alignment != data_alignment))
+        result = VITA_ERROR_INVALID_ARGUMENT;
+    if (result == VITA_OK)
+        result = vita_tls_prepare(templates, prepared_count, module_layouts,
+                                  module_layout_capacity, layout);
+    free(templates);
+    return result;
+}
 
 void vita_tls_init(uint32_t image, uint32_t filesz, uint32_t memsz) {
-    if (filesz > memsz || memsz > UINT32_MAX - TLS_KERNEL_SIZE ||
-        (filesz && !vita_mem_ptr(image, filesz))) {
-        image = filesz = memsz = 0;
+    if (!filesz && !memsz) {
+        (void)vita_tls_prepare(NULL, 0, NULL, 0, NULL);
+        return;
     }
-    g_tls_image  = image;
-    g_tls_filesz = filesz;
-    g_tls_memsz  = memsz;
+    const vita_tls_template single = {image, filesz, memsz, 16u};
+    (void)vita_tls_prepare(&single, 1, NULL, 0, NULL);
+}
+
+static vita_result tls_materialize_of(uint32_t uid, uint32_t *block) {
+    if (!block) return VITA_ERROR_INVALID_ARGUMENT;
+    uint32_t *slot = vita_thread_tls_slot(uid);
+    if (!slot) return VITA_ERROR_NOT_FOUND;
+    if (!*slot) {
+        uint32_t alignment = 0;
+        uint32_t data_offset = 0;
+        uint32_t allocation_size = 0;
+        tls_default_layout(&alignment, &data_offset, &allocation_size);
+        const uint32_t allocated =
+            tls_arena_alloc(allocation_size, alignment);
+        if (!allocated) return VITA_ERROR_NO_MEMORY;
+        for (uint32_t i = 0; i < g_tls_module_count; i++) {
+            const tls_module *module = &g_tls_modules[i];
+            if (!module->filesz) continue;
+            const uint32_t destination =
+                allocated + data_offset + module->offset;
+            if (vita_mem_copy_to_guest(
+                    destination, module->initial_data,
+                    module->filesz) != VITA_OK) {
+                tls_arena_free(allocated);
+                return VITA_ERROR_OUT_OF_BOUNDS;
+            }
+        }
+        *slot = allocated;
+    }
+    *block = *slot;
+    return VITA_OK;
 }
 
 static uint32_t tls_block_of(uint32_t uid) {
-    uint32_t *slot = vita_thread_tls_slot(uid);
-    if (!slot) return 0;
-    if (!*slot) {
-        if (g_tls_memsz > UINT32_MAX - TLS_KERNEL_SIZE - 15u)
-            return 0;
-        *slot = kalloc(TLS_KERNEL_SIZE + ((g_tls_memsz + 15u) & ~15u));
-        if (*slot && g_tls_filesz) {
-            void       *dst = vita_mem_ptr(*slot + TLS_KERNEL_SIZE, g_tls_filesz);
-            const void *src = vita_mem_ptr(g_tls_image, g_tls_filesz);
-            if (dst && src)
-                (void)vita_mem_move_guest(*slot + TLS_KERNEL_SIZE,
-                                          g_tls_image, g_tls_filesz);
-        }
-    }
-    return *slot;
+    uint32_t block = 0;
+    return tls_materialize_of(uid, &block) == VITA_OK ? block : 0;
+}
+
+vita_result vita_tls_materialize_current(uint32_t *tls_base) {
+    if (!tls_base) return VITA_ERROR_INVALID_ARGUMENT;
+    if (!vita_runtime_is_initialized())
+        return VITA_ERROR_NOT_INITIALIZED;
+    uint32_t block = 0;
+    vita_result result =
+        tls_materialize_of(vita_thread_self(), &block);
+    if (result != VITA_OK) return result;
+    uint32_t alignment = 0;
+    uint32_t data_offset = 0;
+    uint32_t allocation_size = 0;
+    tls_default_layout(&alignment, &data_offset, &allocation_size);
+    (void)alignment;
+    (void)allocation_size;
+    if (!block || block > UINT32_MAX - data_offset)
+        return VITA_ERROR_OVERFLOW;
+    *tls_base = block + data_offset;
+    return VITA_OK;
 }
 
 uint32_t vita_thread_tls_base_impl(void) {
     uint32_t b = tls_block_of(vita_thread_self());
-    return b ? b + TLS_KERNEL_SIZE : 0;
+    uint32_t alignment = 0;
+    uint32_t data_offset = 0;
+    uint32_t allocation_size = 0;
+    tls_default_layout(&alignment, &data_offset, &allocation_size);
+    (void)alignment;
+    (void)allocation_size;
+    return b ? b + data_offset : 0;
 }
 
 void vita_thread_tls_release(uint32_t *slot) {
     if (!slot || !*slot) return;
-    kfree(*slot);
+    tls_arena_free(*slot);
     *slot = 0;
 }
 
@@ -1012,5 +1491,12 @@ void vita_threadmgr_shutdown(void) {
     g_kbase = g_ksize = 0;
     g_kchunk_count = 0;
     memset(g_kchunks, 0, sizeof(g_kchunks));
-    g_tls_image = g_tls_filesz = g_tls_memsz = 0;
+    tls_modules_free(g_tls_modules, g_tls_module_count);
+    g_tls_modules = NULL;
+    g_tls_module_count = 0;
+    g_tls_data_size = 0;
+    g_tls_data_alignment = 0;
+    g_tls_data_offset = 0;
+    g_tls_allocation_size = 0;
+    tls_arena_reset();
 }

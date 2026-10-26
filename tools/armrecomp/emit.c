@@ -17,11 +17,44 @@
  */
 
 #include "emit.h"
+#include "vitarecomp/generated_module.h"
 
 #include <stdlib.h>
 #include <string.h>
 
 #define MAX_INSNS_PER_FUNC 65536
+
+int em_module_id_valid(const char *module_id) {
+    if (!module_id || !module_id[0]) return 0;
+    size_t n = strlen(module_id);
+    if (n > EM_MODULE_ID_MAX) return 0;
+    unsigned char c = (unsigned char)module_id[0];
+    if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) return 0;
+    for (size_t i = 1; i < n; i++) {
+        c = (unsigned char)module_id[i];
+        if (!((c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_'))
+            return 0;
+    }
+    return 1;
+}
+
+static void function_symbol(char *dst, size_t cap, const char *module_id,
+                            uint32_t key) {
+    if (module_id)
+        snprintf(dst, cap, "vita_func_%s_%08X", module_id, key);
+    else
+        snprintf(dst, cap, "vita_func_%08X", key);
+}
+
+static void module_symbol(char *dst, size_t cap, const char *base,
+                          const char *module_id) {
+    if (module_id)
+        snprintf(dst, cap, "%s_%s", base, module_id);
+    else
+        snprintf(dst, cap, "%s", base);
+}
 
 static const char *reg_name(int r) {
     static const char *n[16] = {
@@ -554,9 +587,25 @@ static void hle_symbol(char *dst, size_t cap, const nid_db *db,
     else   snprintf(dst, cap, "vita_hle_nid_%08X", s->func_nid);
 }
 
+static void import_target_symbol(char *dst, size_t cap,
+                                 const vm_stub *s,
+                                 const char *module_id) {
+    if (module_id)
+        snprintf(dst, cap, "vita_import_target_%s_%08X", module_id,
+                 s->target_site);
+    else
+        snprintf(dst, cap, "vita_import_target_%08X", s->target_site);
+}
+
 /* The C symbol for an imported variable: a host global holding the guest
  * address the loader bound it to. */
-static void var_symbol(char *dst, size_t cap, const nid_db *db, const vm_var *v) {
+static void var_symbol(char *dst, size_t cap, const nid_db *db,
+                       const vm_var *v, const char *module_id) {
+    if (module_id) {
+        snprintf(dst, cap, "vita_var_%s_%08X_%08X", module_id,
+                 v->lib_nid, v->var_nid);
+        return;
+    }
     const char *n = nid_var_name(db, v->lib_nid, v->var_nid);
     if (n) snprintf(dst, cap, "vita_var_%s", n);
     else   snprintf(dst, cap, "vita_var_nid_%08X", v->var_nid);
@@ -574,12 +623,12 @@ static int vsite_cmp(const void *a, const void *b) {
     uint32_t x = ((const vsite *)a)->addr, y = ((const vsite *)b)->addr;
     return x < y ? -1 : x > y;
 }
-static void vsites_build(const vm_module *mod) {
+static int vsites_build(const vm_module *mod) {
     uint32_t n = 0;
     for (uint32_t i = 0; i < mod->var_count; i++) n += mod->vars[i].site_count;
     g_vsites = n ? (vsite *)calloc(n, sizeof(vsite)) : NULL;
     g_nvsites = 0;
-    if (!g_vsites) return;
+    if (n && !g_vsites) return 1;
     for (uint32_t i = 0; i < mod->var_count; i++)
         for (uint32_t s = 0; s < mod->vars[i].site_count; s++) {
             g_vsites[g_nvsites].addr = mod->vars[i].sites[s].addr;
@@ -588,6 +637,7 @@ static void vsites_build(const vm_module *mod) {
             g_nvsites++;
         }
     qsort(g_vsites, g_nvsites, sizeof(vsite), vsite_cmp);
+    return 0;
 }
 static const vsite *vsite_find(uint32_t addr) {
     uint32_t lo = 0, hi = g_nvsites;
@@ -601,7 +651,8 @@ static const vsite *vsite_find(uint32_t addr) {
 
 static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db,
                      const funcset *fs, const fbody *b,
-                     const arm_insn *in, FILE *f, emit_stats *st) {
+                     const arm_insn *in, FILE *f, emit_stats *st,
+                     const char *module_id) {
     char o2[64], addr[64], rn_s[32];
 
     /* The first operand, with r15 resolved. Computed once because several
@@ -619,7 +670,7 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
         const vm_stub *s = vm_find_stub(mod, in->target);
         if (s) {
             char sym[96];
-            hle_symbol(sym, sizeof(sym), db, s);
+            import_target_symbol(sym, sizeof(sym), s, module_id);
             /* Inside an IT block the call is conditional like anything else. */
             char guard[40] = "";
             if (in->cond != ARM_COND_AL)
@@ -681,7 +732,8 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
             const vsite *vs = in->has_imm ? vsite_find(in->addr) : NULL;
             if (vs && vs->code == 0x2F) {
                 char vsym[96];
-                var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var]);
+                var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var],
+                           module_id);
                 uint32_t add = mod->vars[vs->var].sites[0].addend;   /* the site's own, below */
                 for (uint32_t s = 0; s < mod->vars[vs->var].site_count; s++)
                     if (mod->vars[vs->var].sites[s].addr == in->addr) add = mod->vars[vs->var].sites[s].addend;
@@ -700,7 +752,8 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
             const vsite *vs = vsite_find(in->addr);
             if (vs && vs->code == 0x30) {
                 char vsym[96];
-                var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var]);
+                var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var],
+                           module_id);
                 uint32_t add = 0;
                 for (uint32_t s = 0; s < mod->vars[vs->var].site_count; s++)
                     if (mod->vars[vs->var].sites[s].addr == in->addr) add = mod->vars[vs->var].sites[s].addend;
@@ -1279,7 +1332,8 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
                 const vsite *vs = in->op == OP_LDR ? vsite_find(at) : NULL;
                 if (vs && vs->code == 2) {
                     char vsym[96];
-                    var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var]);
+                    var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var],
+                               module_id);
                     fprintf(f, "    %s = %s;  /* imported variable */\n", reg_name(in->rt), vsym);
                     st->var_refs++;
                     break;
@@ -1455,8 +1509,17 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
             if (fb_has_label(b, in->target))
                 fprintf(f, "    if (%s %s 0) goto L_%08X;\n", src_name(in, in->rn),
                         in->op == OP_CBZ ? "==" : "!=", in->target);
-            else
-                if (fs_has(fs, target_key(in))) fprintf(f, "    if (%s %s 0) { vita_call(vita_func_%08X); return; }\n", src_name(in, in->rn), in->op == OP_CBZ ? "==" : "!=", target_key(in)); else { fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n", in->addr, in->target); ok = 0; }
+            else if (fs_has(fs, target_key(in))) {
+                char sym[96];
+                function_symbol(sym, sizeof(sym), module_id, target_key(in));
+                fprintf(f, "    if (%s %s 0) { vita_call(%s); return; }\n",
+                        src_name(in, in->rn),
+                        in->op == OP_CBZ ? "==" : "!=", sym);
+            } else {
+                fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n",
+                        in->addr, in->target);
+                ok = 0;
+            }
             break;
 
         case OP_B:
@@ -1498,10 +1561,25 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
                 ok = 0;
             } else {
                 /* A branch out of this function's extent is a tail call. */
-                if (in->cond == ARM_COND_AL)
-                    if (fs_has(fs, target_key(in))) fprintf(f, "    vita_call(vita_func_%08X); return;\n", target_key(in)); else { fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n", in->addr, in->target); note_trap(st, "branch: target not a function"); ok = 0; }
-                else
-                    if (fs_has(fs, target_key(in))) fprintf(f, "    if (vita_cond(%u)) { vita_call(vita_func_%08X); return; }\n", in->cond, target_key(in)); else { fprintf(f, "    if (vita_cond(%u)) vita_trap_indirect(0x%08X, 0x%08X);\n", in->cond, in->addr, in->target); note_trap(st, "branch: target not a function"); ok = 0; }
+                if (fs_has(fs, target_key(in))) {
+                    char sym[96];
+                    function_symbol(sym, sizeof(sym), module_id,
+                                    target_key(in));
+                    if (in->cond == ARM_COND_AL)
+                        fprintf(f, "    vita_call(%s); return;\n", sym);
+                    else
+                        fprintf(f, "    if (vita_cond(%u)) { vita_call(%s); return; }\n",
+                                in->cond, sym);
+                } else {
+                    if (in->cond == ARM_COND_AL)
+                        fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n",
+                                in->addr, in->target);
+                    else
+                        fprintf(f, "    if (vita_cond(%u)) vita_trap_indirect(0x%08X, 0x%08X);\n",
+                                in->cond, in->addr, in->target);
+                    note_trap(st, "branch: target not a function");
+                    ok = 0;
+                }
             }
             break;
 
@@ -1765,8 +1843,10 @@ static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db
      * encoding was not decoded. */
     if (!ok) {
         if (in->cls == A_CALL && in->has_target && fs_has(fs, target_key(in))) {
-            fprintf(f, "    lr = 0x%08Xu; vita_call(vita_func_%08X);\n",
-                    link_value(in), target_key(in));
+            char sym[96];
+            function_symbol(sym, sizeof(sym), module_id, target_key(in));
+            fprintf(f, "    lr = 0x%08Xu; vita_call(%s);\n",
+                    link_value(in), sym);
             ok = 1;
         } else if (in->cls == A_CALL && in->has_target) {
             fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n", in->addr, in->target);
@@ -1879,7 +1959,12 @@ static uint32_t reachable(const vm_image *img, const vm_module *mod, const vf_re
     uint8_t *clean = (uint8_t *)calloc(n ? n : 1, 1);
     uint32_t *refs = NULL, cap = 0, total = 0;
     *promoted = 0;
-    if (!ai || !ref_start || !clean) { free(ai); free(ref_start); free(clean); return 0; }
+    if (!ai || !ref_start || !clean) {
+        free(ai);
+        free(ref_start);
+        free(clean);
+        return UINT32_MAX;
+    }
     for (uint32_t i = 0; i < n; i++) { ai[i].addr = func_key(&disc->funcs[i]); ai[i].idx = i; }
     qsort(ai, n, sizeof(addr_idx), ai_cmp);
 
@@ -1893,19 +1978,24 @@ static uint32_t reachable(const vm_image *img, const vm_module *mod, const vf_re
 
     uint32_t *queue = (uint32_t *)malloc((n ? n : 1) * sizeof(uint32_t));
     uint32_t head = 0, tail = 0, kept = 0;
-    if (queue) {
-        for (uint32_t i = 0; i < n; i++) {
-            int root = (disc->funcs[i].reasons & VF_R_ROOTS) != 0;
-            if (!root && (disc->funcs[i].reasons & VF_R_WEAK_PTR) && clean[i]) { root = 1; (*promoted)++; }
-            if (root) { keep[i] = 1; queue[tail++] = i; }
-        }
-        while (head < tail) {
-            uint32_t i = queue[head++];
-            kept++;
-            for (uint32_t r = ref_start[i]; r < ref_start[i + 1]; r++) {
-                uint32_t j = refs[r];
-                if (!keep[j]) { keep[j] = 1; queue[tail++] = j; }
-            }
+    if (!queue) {
+        free(refs);
+        free(ref_start);
+        free(clean);
+        free(ai);
+        return UINT32_MAX;
+    }
+    for (uint32_t i = 0; i < n; i++) {
+        int root = (disc->funcs[i].reasons & VF_R_ROOTS) != 0;
+        if (!root && (disc->funcs[i].reasons & VF_R_WEAK_PTR) && clean[i]) { root = 1; (*promoted)++; }
+        if (root) { keep[i] = 1; queue[tail++] = i; }
+    }
+    while (head < tail) {
+        uint32_t i = queue[head++];
+        kept++;
+        for (uint32_t r = ref_start[i]; r < ref_start[i + 1]; r++) {
+            uint32_t j = refs[r];
+            if (!keep[j]) { keep[j] = 1; queue[tail++] = j; }
         }
     }
     free(queue);
@@ -1930,8 +2020,9 @@ static void base_name(char *dst, size_t cap, const char *outpath) {
  * every function. One header rather than a copy per part, so the
  * declaration set stays one thing. */
 static int write_header(const char *outpath, const vm_module *mod, const nid_db *db,
-                        const vf_result *disc, const uint32_t *list, uint32_t nlist) {
-    char path[1200], base[256];
+                        const vf_result *disc, const uint32_t *list,
+                        uint32_t nlist, const char *module_id) {
+    char path[1200], base[256], descriptor[128], register_fn[128];
     base_name(base, sizeof(base), outpath);
     snprintf(path, sizeof(path), "%s", outpath);
     char *dot = strrchr(path, '.');
@@ -1945,21 +2036,28 @@ static int write_header(const char *outpath, const vm_module *mod, const nid_db 
     fprintf(h, " *\n");
     fprintf(h, " * module: %s -- what every part of the output declares.\n", mod->info.name);
     fprintf(h, " */\n\n");
-    fprintf(h, "#ifndef VITARECOMP_GENERATED_%s_H\n#define VITARECOMP_GENERATED_%s_H\n\n", base, base);
+    const char *guard = module_id ? module_id : base;
+    fprintf(h, "#ifndef VITARECOMP_GENERATED_%s_H\n#define VITARECOMP_GENERATED_%s_H\n\n",
+            guard, guard);
     fprintf(h, "#include \"vitarecomp/recomp_rt.h\"\n");
-    fprintf(h, "#include \"vitarecomp/dispatch.h\"\n\n");
+    fprintf(h, "#include \"vitarecomp/dispatch.h\"\n");
+    fprintf(h, "#include \"vitarecomp/generated_module.h\"\n\n");
     fprintf(h, "#if defined(_MSC_VER)\n");
     fprintf(h, "/* Address-sorted guest blocks and constant-folded inline ARM helpers can\n");
     fprintf(h, " * make MSVC report C4702 after proving one host path unreachable. The guest\n");
     fprintf(h, " * block is retained deliberately; every other /W4 diagnostic remains live. */\n");
     fprintf(h, "#pragma warning(disable: 4702)\n");
     fprintf(h, "#endif\n\n");
+    fprintf(h, "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n");
     if (mod->stub_count) {
         fprintf(h, "/* firmware imports */\n");
         for (uint32_t i = 0; i < mod->stub_count; i++) {
-            char sym[96];
+            char sym[96], target[128];
             hle_symbol(sym, sizeof(sym), db, &mod->stubs[i]);
+            import_target_symbol(target, sizeof(target), &mod->stubs[i],
+                                 module_id);
             fprintf(h, "void %s(void);\n", sym);
+            fprintf(h, "extern vita_fn %s;\n", target);
         }
         fprintf(h, "\n");
     }
@@ -1967,17 +2065,28 @@ static int write_header(const char *outpath, const vm_module *mod, const nid_db 
         fprintf(h, "/* imported variables: the guest address of each, bound by the loader */\n");
         for (uint32_t i = 0; i < mod->var_count; i++) {
             char sym[96];
-            var_symbol(sym, sizeof(sym), db, &mod->vars[i]);
+            var_symbol(sym, sizeof(sym), db, &mod->vars[i], module_id);
             fprintf(h, "extern uint32_t %s;\n", sym);
         }
         fprintf(h, "\n");
     }
     fprintf(h, "/* functions: the call graph has cycles, so every one is declared before any body */\n");
-    for (uint32_t i = 0; i < nlist; i++)
-        fprintf(h, "void vita_func_%08X(void);\n", func_key(&disc->funcs[list[i]]));
-    fprintf(h, "\n#endif\n");
-    fclose(h);
-    return 0;
+    for (uint32_t i = 0; i < nlist; i++) {
+        char sym[96];
+        function_symbol(sym, sizeof(sym), module_id,
+                        func_key(&disc->funcs[list[i]]));
+        fprintf(h, "void %s(void);\n", sym);
+    }
+    module_symbol(descriptor, sizeof(descriptor), "vita_generated_module",
+                  module_id);
+    module_symbol(register_fn, sizeof(register_fn), "vita_register_functions",
+                  module_id);
+    fprintf(h, "\nextern const vita_generated_module_descriptor %s;\n",
+            descriptor);
+    fprintf(h, "void %s(void);\n", register_fn);
+    fprintf(h, "\n#ifdef __cplusplus\n}\n#endif\n\n");
+    fprintf(h, "#endif\n");
+    return fclose(h) != 0;
 }
 
 /* Opens part `n` of the output beside `outpath`. */
@@ -2028,6 +2137,20 @@ static void json_string(FILE *f, const char *s) {
     fputc('"', f);
 }
 
+static void c_string(FILE *f, const char *s) {
+    fputc('"', f);
+    for (; *s; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') fprintf(f, "\\%c", c);
+        else if (c == '\n') fputs("\\n", f);
+        else if (c == '\r') fputs("\\r", f);
+        else if (c == '\t') fputs("\\t", f);
+        else if (c < 0x20 || c >= 0x7F) fprintf(f, "\\%03o", c);
+        else fputc(c, f);
+    }
+    fputc('"', f);
+}
+
 static void trap_order(const emit_stats *st, uint32_t *order) {
     for (uint32_t i = 0; i < st->trap_kinds; i++) order[i] = i;
     for (uint32_t i = 1; i < st->trap_kinds; i++) {
@@ -2046,7 +2169,8 @@ static void trap_order(const emit_stats *st, uint32_t *order) {
     }
 }
 
-static int write_reports(const char *outpath, const emit_stats *st) {
+static int write_reports(const char *outpath, const vm_module *mod,
+                         const char *module_id, const emit_stats *st) {
     char json_path[1200], text_path[1200];
     if (report_path(json_path, sizeof(json_path), outpath, ".report.json") ||
         report_path(text_path, sizeof(text_path), outpath, ".report.txt"))
@@ -2057,16 +2181,38 @@ static int write_reports(const char *outpath, const emit_stats *st) {
     uint64_t trap_total = st->traps_other;
     for (uint32_t i = 0; i < st->trap_kinds; i++)
         trap_total += st->traps[i].count;
-    int ready = st->trapped == 0 && trap_total == 0 && st->bodies_cut == 0 &&
-                st->traps_other == 0 && st->parts_unreported == 0;
+    uint64_t all_traps = trap_total + st->unclassified_traps;
 
     FILE *j = fopen(json_path, "wb");
     if (!j) return 1;
     fputs("{\n", j);
-    fputs("  \"schemaVersion\": 1,\n", j);
+    fprintf(j, "  \"schemaVersion\": %u,\n",
+            VITA_GENERATED_REPORT_SCHEMA_VERSION);
     fputs("  \"generator\": \"armrecomp\",\n", j);
+    fputs("  \"module\": {\"id\": ", j);
+    if (module_id) json_string(j, module_id); else fputs("null", j);
+    fputs(", \"name\": ", j);
+    json_string(j, mod->info.name);
+    fputs("},\n", j);
     fputs("  \"strictUnsupported\": true,\n", j);
-    fprintf(j, "  \"productionReady\": %s,\n", ready ? "true" : "false");
+    fprintf(j, "  \"structuralReady\": %s,\n",
+            st->structural_ready ? "true" : "false");
+    fprintf(j, "  \"productionReady\": %s,\n",
+            st->production_ready ? "true" : "false");
+    fprintf(j, "  \"instrumentation\": {\"functionEntry\": true, \"pc\": %s},\n",
+            st->pc_instrumented ? "true" : "false");
+    fprintf(j, "  \"entry\": {\"present\": %s, "
+               "\"rawAddress\": \"0x%08X\", "
+               "\"dispatchKey\": \"0x%08X\", \"resolved\": %s},\n",
+            st->entry_present ? "true" : "false", st->entry_raw_address,
+            st->entry_dispatch_key,
+            st->entry_resolved ? "true" : "false");
+    fprintf(j, "  \"tls\": {\"present\": %s, \"resolved\": %s, "
+               "\"address\": \"0x%08X\", \"fileSize\": %u, "
+               "\"memorySize\": %u, \"alignment\": %u},\n",
+            st->tls_present ? "true" : "false",
+            st->tls_resolved ? "true" : "false", st->tls_address,
+            st->tls_filesz, st->tls_memsz, st->tls_alignment);
     fprintf(j, "  \"functions\": {\"emitted\": %u, \"discovered\": %u, "
                "\"dropped\": %u, \"promotedWeakRoots\": %u},\n",
             st->funcs, st->funcs_discovered, st->funcs_dropped,
@@ -2074,8 +2220,11 @@ static int write_reports(const char *outpath, const emit_stats *st) {
     fprintf(j, "  \"instructions\": {\"total\": %u, \"translated\": %u, "
                "\"trapped\": %u, \"bodyCuts\": %u},\n",
             st->insns, st->translated, st->trapped, st->bodies_cut);
-    fprintf(j, "  \"traps\": {\"total\": %llu, \"other\": %u, \"kinds\": [\n",
-            (unsigned long long)trap_total, st->traps_other);
+    fprintf(j, "  \"traps\": {\"total\": %llu, \"classified\": %llu, "
+               "\"unclassified\": %u, \"other\": %u, \"kinds\": [\n",
+            (unsigned long long)all_traps,
+            (unsigned long long)trap_total,
+            st->unclassified_traps, st->traps_other);
     for (uint32_t i = 0; i < st->trap_kinds; i++) {
         const em_trap_kind *t = &st->traps[order[i]];
         fputs("    {\"kind\": ", j);
@@ -2101,9 +2250,32 @@ static int write_reports(const char *outpath, const emit_stats *st) {
 
     FILE *t = fopen(text_path, "wb");
     if (!t) return 1;
-    fputs("armrecomp generation report v1\n", t);
+    fprintf(t, "armrecomp generation report v%u\n",
+            VITA_GENERATED_REPORT_SCHEMA_VERSION);
+    fprintf(t, "module.id=%s\n", module_id ? module_id : "");
+    fprintf(t, "module.name=%s\n", mod->info.name);
     fputs("strict_unsupported=true\n", t);
-    fprintf(t, "production_ready=%s\n", ready ? "true" : "false");
+    fprintf(t, "structural_ready=%s\n",
+            st->structural_ready ? "true" : "false");
+    fprintf(t, "production_ready=%s\n",
+            st->production_ready ? "true" : "false");
+    fputs("instrumentation.function_entry=true\n", t);
+    fprintf(t, "instrumentation.pc=%s\n",
+            st->pc_instrumented ? "true" : "false");
+    fprintf(t, "entry.present=%s\n",
+            st->entry_present ? "true" : "false");
+    fprintf(t, "entry.raw_address=0x%08X\n", st->entry_raw_address);
+    fprintf(t, "entry.dispatch_key=0x%08X\n", st->entry_dispatch_key);
+    fprintf(t, "entry.resolved=%s\n",
+            st->entry_resolved ? "true" : "false");
+    fprintf(t, "tls.present=%s\n",
+            st->tls_present ? "true" : "false");
+    fprintf(t, "tls.resolved=%s\n",
+            st->tls_resolved ? "true" : "false");
+    fprintf(t, "tls.address=0x%08X\n", st->tls_address);
+    fprintf(t, "tls.file_size=%u\n", st->tls_filesz);
+    fprintf(t, "tls.memory_size=%u\n", st->tls_memsz);
+    fprintf(t, "tls.alignment=%u\n", st->tls_alignment);
     fprintf(t, "functions.emitted=%u\n", st->funcs);
     fprintf(t, "functions.discovered=%u\n", st->funcs_discovered);
     fprintf(t, "functions.dropped=%u\n", st->funcs_dropped);
@@ -2112,7 +2284,10 @@ static int write_reports(const char *outpath, const emit_stats *st) {
     fprintf(t, "instructions.translated=%u\n", st->translated);
     fprintf(t, "instructions.trapped=%u\n", st->trapped);
     fprintf(t, "instructions.body_cuts=%u\n", st->bodies_cut);
-    fprintf(t, "traps.total=%llu\n", (unsigned long long)trap_total);
+    fprintf(t, "traps.total=%llu\n", (unsigned long long)all_traps);
+    fprintf(t, "traps.classified=%llu\n",
+            (unsigned long long)trap_total);
+    fprintf(t, "traps.unclassified=%u\n", st->unclassified_traps);
     fprintf(t, "traps.other=%u\n", st->traps_other);
     for (uint32_t i = 0; i < st->trap_kinds; i++) {
         const em_trap_kind *kind = &st->traps[order[i]];
@@ -2135,11 +2310,331 @@ static int write_reports(const char *outpath, const emit_stats *st) {
     return fclose(t) != 0;
 }
 
-int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
-            const vf_result *disc, FILE *f, const char *outpath, const char *impdir,
-            uint32_t limit, emit_stats *st) {
+static uint64_t classified_trap_count(const emit_stats *st) {
+    uint64_t total = st->traps_other;
+    for (uint32_t i = 0; i < st->trap_kinds; i++)
+        total += st->traps[i].count;
+    return total;
+}
+
+static void finalize_stats(const vm_module *mod, const char *module_id,
+                           emit_stats *st) {
+    uint64_t classified = classified_trap_count(st);
+    st->unclassified_traps = st->trapped > classified
+        ? st->trapped - (uint32_t)classified
+        : 0;
+    st->production_ready =
+        st->trapped == 0 && classified == 0 && st->bodies_cut == 0 &&
+        st->traps_other == 0 && st->parts_unreported == 0;
+    st->structural_ready =
+        module_id != NULL && mod->have_info && mod->metadata_complete &&
+        !mod->import_truncated &&
+        mod->stub_count == mod->total_func_imports &&
+        mod->var_count == mod->total_var_imports &&
+        (!st->entry_present || st->entry_resolved) &&
+        (!st->tls_present || st->tls_resolved);
+}
+
+typedef struct {
+    uint32_t begin;
+    uint32_t end;
+    uint8_t executable;
+} em_load_range;
+
+static int load_range_cmp(const void *left, const void *right) {
+    const em_load_range *a = (const em_load_range *)left;
+    const em_load_range *b = (const em_load_range *)right;
+    if (a->begin != b->begin) return a->begin < b->begin ? -1 : 1;
+    if (a->end != b->end) return a->end < b->end ? -1 : 1;
+    return (int)b->executable - (int)a->executable;
+}
+
+static int write_module_sidecar(const char *outpath, const vm_image *img,
+                                const vm_module *mod, const nid_db *db,
+                                const funcset *fs, const char *module_id,
+                                const emit_stats *st) {
+    char path[1200], descriptor[128];
+    em_load_range ranges[VM_MAX_DATA_SEGS + 1];
+    uint32_t range_count = 0;
+    if (report_path(path, sizeof(path), outpath, ".module.json"))
+        return 1;
+
+    uint32_t exec_size = img->seg_mem_len ? img->seg_mem_len : img->seg_len;
+    uint64_t exec_end = (uint64_t)img->seg_vaddr + exec_size;
+    if (!exec_size || exec_end > UINT32_MAX) return 1;
+    ranges[range_count].begin = img->seg_vaddr;
+    ranges[range_count].end = (uint32_t)exec_end;
+    ranges[range_count].executable = 1;
+    range_count++;
+    for (uint32_t i = 0; i < img->data_seg_count; i++) {
+        uint32_t size = img->data_segs[i].mem_len
+            ? img->data_segs[i].mem_len : img->data_segs[i].len;
+        uint64_t end = (uint64_t)img->data_segs[i].vaddr + size;
+        if (!size || end > UINT32_MAX) return 1;
+        ranges[range_count].begin = img->data_segs[i].vaddr;
+        ranges[range_count].end = (uint32_t)end;
+        ranges[range_count].executable = 0;
+        range_count++;
+    }
+    qsort(ranges, range_count, sizeof(ranges[0]), load_range_cmp);
+
+    FILE *j = fopen(path, "wb");
+    if (!j) return 1;
+
+    module_symbol(descriptor, sizeof(descriptor), "vita_generated_module",
+                  module_id);
+    fputs("{\n", j);
+    fprintf(j, "  \"schemaVersion\": %u,\n",
+            VITA_GENERATED_REPORT_SCHEMA_VERSION);
+    fprintf(j, "  \"abiVersion\": %u,\n",
+            VITA_GENERATED_MODULE_ABI_VERSION);
+    fputs("  \"generator\": \"armrecomp\",\n", j);
+    fputs("  \"module\": {\"id\": ", j);
+    if (module_id) json_string(j, module_id); else fputs("null", j);
+    fputs(", \"name\": ", j);
+    json_string(j, mod->info.name);
+    fputs(", \"descriptorSymbol\": ", j);
+    json_string(j, descriptor);
+    fputs("},\n", j);
+
+    fprintf(j, "  \"ranges\": {\"load\": [\n");
+    for (uint32_t i = 0; i < range_count; i++) {
+        fprintf(j, "    {\"begin\": \"0x%08X\", "
+                   "\"endExclusive\": \"0x%08X\"}%s\n",
+                ranges[i].begin, ranges[i].end,
+                i + 1 == range_count ? "" : ",");
+    }
+    fputs("  ], \"executable\": [\n", j);
+    for (uint32_t i = 0, written = 0; i < range_count; i++) {
+        if (!ranges[i].executable) continue;
+        written++;
+        fprintf(j, "    {\"begin\": \"0x%08X\", "
+                   "\"endExclusive\": \"0x%08X\"}%s\n",
+                ranges[i].begin, ranges[i].end,
+                written == 1 ? "" : ",");
+    }
+    fputs("  ]},\n", j);
+
+    fprintf(j, "  \"dispatch\": {\"count\": %u, \"entries\": [\n",
+            st->dispatch_entries);
+    uint32_t fi = 0, si = 0, di = 0;
+    while (fi < fs->n || si < mod->stub_count) {
+        int take_stub;
+        uint32_t stub_key = si < mod->stub_count
+            ? mod->stubs[si].addr | 1u
+            : 0u;
+        if (fi >= fs->n) take_stub = 1;
+        else if (si >= mod->stub_count) take_stub = 0;
+        else if (stub_key < fs->v[fi]) take_stub = 1;
+        else if (stub_key > fs->v[fi]) take_stub = 0;
+        else {
+            take_stub = 1;
+            fi++;
+        }
+
+        fputs("    {\"key\": \"", j);
+        fprintf(j, "0x%08X", take_stub ? stub_key : fs->v[fi]);
+        if (take_stub) {
+            char sym[96];
+            const vm_stub *s = &mod->stubs[si++];
+            hle_symbol(sym, sizeof(sym), db, s);
+            fputs("\", \"kind\": \"functionImport\", \"symbol\": ", j);
+            json_string(j, sym);
+            fprintf(j, ", \"libraryNid\": \"0x%08X\", "
+                       "\"functionNid\": \"0x%08X\"}",
+                    s->lib_nid, s->func_nid);
+        } else {
+            char sym[96];
+            function_symbol(sym, sizeof(sym), module_id, fs->v[fi++]);
+            fputs("\", \"kind\": \"function\", \"symbol\": ", j);
+            json_string(j, sym);
+            fputc('}', j);
+        }
+        fprintf(j, "%s\n", ++di == st->dispatch_entries ? "" : ",");
+    }
+    fputs("  ]},\n", j);
+
+    fputs("  \"entry\": {\"present\": ", j);
+    fputs(st->entry_present ? "true" : "false", j);
+    fprintf(j, ", \"rawAddress\": \"0x%08X\", "
+               "\"dispatchKey\": \"0x%08X\", \"function\": ",
+            st->entry_raw_address, st->entry_dispatch_key);
+    if (st->entry_resolved) {
+        char sym[96];
+        function_symbol(sym, sizeof(sym), module_id,
+                        st->entry_dispatch_key);
+        json_string(j, sym);
+    } else {
+        fputs("null", j);
+    }
+    fprintf(j, ", \"resolved\": %s},\n",
+            st->entry_resolved ? "true" : "false");
+
+    fprintf(j, "  \"tls\": {\"present\": %s, \"resolved\": %s, "
+               "\"address\": \"0x%08X\", \"fileSize\": %u, "
+               "\"memorySize\": %u, \"alignment\": %u},\n",
+            st->tls_present ? "true" : "false",
+            st->tls_resolved ? "true" : "false", st->tls_address,
+            st->tls_filesz, st->tls_memsz, st->tls_alignment);
+
+    fprintf(j, "  \"functionImports\": {\"count\": %u, \"items\": [\n",
+            mod->stub_count);
+    for (uint32_t i = 0; i < mod->stub_count; i++) {
+        const vm_stub *s = &mod->stubs[i];
+        const char *lib = nid_lib_name(db, s->lib_nid);
+        const char *name = nid_func_name(db, s->lib_nid, s->func_nid);
+        char sym[96], target[128], full_name[192];
+        hle_symbol(sym, sizeof(sym), db, s);
+        import_target_symbol(target, sizeof(target), s, module_id);
+        fprintf(j, "    {\"key\": \"0x%08X\", \"stubAddress\": "
+                   "\"0x%08X\", \"targetSite\": \"0x%08X\", "
+                   "\"libraryNid\": \"0x%08X\", "
+                   "\"functionNid\": \"0x%08X\", \"name\": ",
+                s->addr | 1u, s->addr, s->target_site,
+                s->lib_nid, s->func_nid);
+        if (name) {
+            snprintf(full_name, sizeof(full_name), "%s::%s",
+                     lib ? lib : "?", name);
+            json_string(j, full_name);
+        } else {
+            fputs("null", j);
+        }
+        fputs(", \"symbol\": ", j);
+        json_string(j, sym);
+        fputs(", \"targetSlot\": ", j);
+        json_string(j, target);
+        fprintf(j, ", \"strictUnsupported\": %s}%s\n",
+                name ? "true" : "false",
+                i + 1 == mod->stub_count ? "" : ",");
+    }
+    fputs("  ]},\n", j);
+
+    fprintf(j, "  \"exports\": {\"count\": %u, \"functions\": %u, "
+               "\"variables\": %u, \"tlsVariables\": %u, \"items\": [\n",
+            mod->export_count, mod->function_export_count,
+            mod->variable_export_count, mod->tls_variable_export_count);
+    for (uint32_t i = 0; i < mod->export_count; i++) {
+        const vm_export *item = &mod->exports[i];
+        const char *kind = item->kind == VM_EXPORT_FUNCTION ? "function"
+            : item->kind == VM_EXPORT_VARIABLE ? "variable"
+            : "tlsVariable";
+        fprintf(j, "    {\"kind\": \"%s\", \"libraryNid\": "
+                   "\"0x%08X\", \"nid\": \"0x%08X\", "
+                   "\"address\": \"0x%08X\", \"dispatchKey\": ",
+                kind, item->library_nid, item->nid,
+                item->kind == VM_EXPORT_FUNCTION
+                    ? item->address & ~1u : item->address);
+        if (item->kind == VM_EXPORT_FUNCTION)
+            fprintf(j, "\"0x%08X\"", item->address);
+        else
+            fputs("null", j);
+        fprintf(j, "}%s\n", i + 1 == mod->export_count ? "" : ",");
+    }
+    fputs("  ]},\n", j);
+
+    fprintf(j, "  \"variableImports\": {\"count\": %u, \"items\": [\n",
+            mod->var_count);
+    for (uint32_t i = 0; i < mod->var_count; i++) {
+        const vm_var *v = &mod->vars[i];
+        const char *lib = nid_lib_name(db, v->lib_nid);
+        const char *name = nid_var_name(db, v->lib_nid, v->var_nid);
+        char sym[96], full_name[192];
+        var_symbol(sym, sizeof(sym), db, v, module_id);
+        fprintf(j, "    {\"libraryNid\": \"0x%08X\", "
+                   "\"variableNid\": \"0x%08X\", "
+                   "\"stubAddress\": \"0x%08X\", \"name\": ",
+                v->lib_nid, v->var_nid, v->stub);
+        if (name) {
+            snprintf(full_name, sizeof(full_name), "%s::%s",
+                     lib ? lib : "?", name);
+            json_string(j, full_name);
+        } else {
+            fputs("null", j);
+        }
+        fputs(", \"symbol\": ", j);
+        json_string(j, sym);
+        fprintf(j, ", \"sites\": [");
+        for (uint32_t s = 0; s < v->site_count; s++) {
+            const vm_var_site *site = &v->sites[s];
+            fprintf(j, "%s{\"address\": \"0x%08X\", \"addend\": %u, "
+                       "\"relocationCode\": %u}",
+                    s ? ", " : "", site->addr, site->addend, site->code);
+        }
+        fprintf(j, "]}%s\n", i + 1 == mod->var_count ? "" : ",");
+    }
+    fputs("  ]},\n", j);
+    fprintf(j, "  \"report\": {\"schemaVersion\": %u, "
+               "\"structuralReady\": %s, \"productionReady\": %s, "
+               "\"strictUnsupported\": true, \"pcInstrumentation\": %s, "
+               "\"unclassifiedTrapCount\": %u}\n",
+            VITA_GENERATED_REPORT_SCHEMA_VERSION,
+            st->structural_ready ? "true" : "false",
+            st->production_ready ? "true" : "false",
+            st->pc_instrumented ? "true" : "false",
+            st->unclassified_traps);
+    fputs("}\n", j);
+    return fclose(j) != 0;
+}
+
+static void write_generated_descriptor(FILE *f, const vm_module *mod,
+                                       const char *module_id,
+                                       const emit_stats *st) {
+    char descriptor[128], dispatch[128], imports[128], vars[128], entry[96];
+    module_symbol(descriptor, sizeof(descriptor), "vita_generated_module",
+                  module_id);
+    module_symbol(dispatch, sizeof(dispatch), "vita_functions", module_id);
+    module_symbol(imports, sizeof(imports), "vita_fn_imports", module_id);
+    module_symbol(vars, sizeof(vars), "vita_var_imports", module_id);
+    if (st->entry_resolved)
+        function_symbol(entry, sizeof(entry), module_id,
+                        st->entry_dispatch_key);
+
+    fprintf(f, "\n/* versioned generated-module ABI */\n");
+    fprintf(f, "const vita_generated_module_descriptor %s = {\n",
+            descriptor);
+    fprintf(f, "    VITA_GENERATED_MODULE_ABI_VERSION,\n");
+    fprintf(f, "    (uint32_t)sizeof(vita_generated_module_descriptor),\n");
+    if (module_id) {
+        fputs("    ", f);
+        c_string(f, module_id);
+        fputs(",\n", f);
+    } else {
+        fputs("    0,\n", f);
+    }
+    fputs("    ", f);
+    c_string(f, mod->info.name);
+    fputs(",\n", f);
+    fprintf(f, "    %s,\n", st->dispatch_entries ? dispatch : "0");
+    fprintf(f, "    %uu,\n", st->dispatch_entries);
+    fprintf(f, "    %uu,\n", st->entry_present);
+    fprintf(f, "    0x%08Xu,\n", st->entry_raw_address);
+    fprintf(f, "    0x%08Xu,\n", st->entry_dispatch_key);
+    fprintf(f, "    %s,\n", st->entry_resolved ? entry : "0");
+    fprintf(f, "    %uu,\n", st->entry_resolved);
+    fprintf(f, "    { %uu, %uu, 0x%08Xu, %uu, %uu, %uu },\n",
+            st->tls_present, st->tls_resolved, st->tls_address,
+            st->tls_filesz, st->tls_memsz, st->tls_alignment);
+    fprintf(f, "    %s,\n", mod->stub_count ? imports : "0");
+    fprintf(f, "    %uu,\n", mod->stub_count);
+    fprintf(f, "    %s,\n", mod->var_count ? vars : "0");
+    fprintf(f, "    %uu,\n", mod->var_count);
+    fprintf(f, "    { VITA_GENERATED_REPORT_SCHEMA_VERSION, %uu, %uu, 1u, "
+               "%uu, %uu, %uu, %uu, %uu }\n",
+            st->structural_ready, st->production_ready,
+            VITA_GENERATED_INSTRUMENT_FUNCTION_ENTRY |
+                (st->pc_instrumented ? VITA_GENERATED_INSTRUMENT_PC : 0u),
+            st->trapped, st->unclassified_traps, st->bodies_cut,
+            st->parts_unreported);
+    fprintf(f, "};\n");
+}
+
+int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
+                   const vf_result *disc, FILE *f, const char *outpath,
+                   const char *impdir, const char *module_id, uint32_t limit,
+                   emit_stats *st) {
+    if (module_id && !em_module_id_valid(module_id)) return 1;
     memset(st, 0, sizeof(*st));
-    vsites_build(mod);
+    if (vsites_build(mod)) return 1;
     st->var_imports = mod->var_count;
 
     /* Functions per part. One translation unit per module was fine at a
@@ -2160,15 +2655,34 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
         const char *e = getenv("VITARECOMP_EMIT_SPLIT_INSNS");
         if (e && *e) split_insns = (uint32_t)strtoul(e, NULL, 10);
     }
+    {
+        const char *e = getenv("VITARECOMP_EMIT_PC");
+        st->pc_instrumented = (e && *e && *e != '0') ? 1u : 0u;
+    }
     char base[256];
     base_name(base, sizeof(base), outpath);
 
     /* The functions to emit, in discovery order. */
     uint8_t *keep = (uint8_t *)calloc(disc->count ? disc->count : 1, 1);
     uint32_t *list = (uint32_t *)malloc((disc->count ? disc->count : 1) * sizeof(uint32_t));
-    if (!keep || !list) { free(keep); free(list); return 1; }
+    if (!keep || !list) {
+        free(keep);
+        free(list);
+        free(g_vsites);
+        g_vsites = NULL;
+        g_nvsites = 0;
+        return 1;
+    }
     uint32_t promoted = 0;
     uint32_t kept = reachable(img, mod, disc, keep, &promoted);
+    if (kept == UINT32_MAX) {
+        free(keep);
+        free(list);
+        free(g_vsites);
+        g_vsites = NULL;
+        g_nvsites = 0;
+        return 1;
+    }
     uint32_t nlist = 0;
     for (uint32_t i = 0; i < disc->count; i++) if (keep[i]) list[nlist++] = i;
     (void)kept;
@@ -2185,7 +2699,14 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
     funcset fs;
     fs.n = nlist;
     fs.v = (uint32_t *)malloc((fs.n ? fs.n : 1) * sizeof(uint32_t));
-    if (!fs.v) { free(keep); free(list); return 1; }
+    if (!fs.v) {
+        free(keep);
+        free(list);
+        free(g_vsites);
+        g_vsites = NULL;
+        g_nvsites = 0;
+        return 1;
+    }
     for (uint32_t i = 0; i < nlist; i++) fs.v[i] = func_key(&disc->funcs[list[i]]);
     qsort(fs.v, fs.n, sizeof(uint32_t), fs_cmp);
 
@@ -2200,20 +2721,44 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
      * unconditionally, rather than only those a limited emit reaches, keeps
      * the declaration set stable: adding functions to the emit does not
      * change which symbols exist. */
-    if (write_header(outpath, mod, db, disc, list, nlist)) {
+    if (write_header(outpath, mod, db, disc, list, nlist, module_id)) {
         free(fs.v); free(keep); free(list);
+        free(g_vsites);
+        g_vsites = NULL;
+        g_nvsites = 0;
         return 1;
     }
     fprintf(f, "#include \"%s.h\"\n\n", base);
+    int generation_error = 0;
+
+    /* Direct calls use one writable, site-unique slot per import. The initial
+     * value names the ordinary HLE symbol, preserving the existing static
+     * archive override rule; strict binding may replace it before entry. */
+    if (mod->stub_count) {
+        fprintf(f, "/* bindable function-import targets */\n");
+        for (uint32_t i = 0; i < mod->stub_count; i++) {
+            char hle[96], target[128];
+            hle_symbol(hle, sizeof(hle), db, &mod->stubs[i]);
+            import_target_symbol(target, sizeof(target), &mod->stubs[i],
+                                 module_id);
+            fprintf(f, "vita_fn %s = %s;\n", target, hle);
+        }
+        fprintf(f, "\n");
+    }
 
     /* A limited emit still references functions it did not emit, so those get
      * a stub that traps. Without this the output would not link, and a silently
      * missing function is exactly the failure this project refuses. */
     if (n_funcs < nlist) {
         fprintf(f, "/* Not emitted under --limit; present so the output links. */\n");
-        for (uint32_t i = n_funcs; i < nlist; i++)
-            fprintf(f, "void vita_func_%08X(void) { vita_trap_unimpl(0x%08X, 0, \"not emitted\"); }\n",
-                    func_key(&disc->funcs[list[i]]), disc->funcs[list[i]].addr);
+        for (uint32_t i = n_funcs; i < nlist; i++) {
+            char sym[96];
+            function_symbol(sym, sizeof(sym), module_id,
+                            func_key(&disc->funcs[list[i]]));
+            fprintf(f, "void %s(void) { vita_trap_unimpl(0x%08X, 0, "
+                       "\"not emitted\"); }\n",
+                    sym, disc->funcs[list[i]].addr);
+        }
         fprintf(f, "\n");
     }
 
@@ -2227,7 +2772,7 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
     for (uint32_t li = 0; li < n_funcs; li++) {
         const vf_func *fn = &disc->funcs[list[li]];
         if (split && (li == 0 || in_part >= split || (split_insns && insns_in_part >= split_insns))) {
-            if (part) fclose(part);
+            if (part && fclose(part) != 0) generation_error = 1;
             part = open_part(outpath, st->parts, base);
             if (part) {
                 uint32_t part_index = st->parts++;
@@ -2263,35 +2808,32 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
         fbody b;
         memset(&b, 0, sizeof(b));
         collect(img, fn, &b);
+        char fn_symbol[96];
+        function_symbol(fn_symbol, sizeof(fn_symbol), module_id, func_key(fn));
 
         fprintf(pf, "/* ---------------------------------------------------------------\n");
-        fprintf(pf, " * vita_func_%08X  --  %u instructions, %u bytes, %s%s\n",
-                func_key(fn), b.n, fn->end - fn->addr,
+        fprintf(pf, " * %s  --  %u instructions, %u bytes, %s%s\n",
+                fn_symbol, b.n, fn->end - fn->addr,
                 fn->mode == ARM_T32 ? "Thumb" : "ARM",
                 fn->from_heuristic == VF_SHAPE ? ", discovered by shape (heuristic)"
               : fn->from_heuristic == VF_RELOC ? ", discovered by relocation" : "");
         fprintf(pf, " * ------------------------------------------------------------- */\n");
-        fprintf(pf, "void vita_func_%08X(void) {\n", func_key(fn));
+        fprintf(pf, "void %s(void) {\n", fn_symbol);
         /* The function-entry trace: a global test and a branch while off. */
         fprintf(pf, "    vita_trace_fn(0x%08Xu);\n", func_key(fn));
 
         /* Per-instruction PC recording, only when asked for in the emitter's
          * environment: it is a store per instruction in the output. */
-        static int emit_pc = -1;
-        if (emit_pc < 0) {
-            const char *e = getenv("VITARECOMP_EMIT_PC");
-            emit_pc = (e && *e && *e != '0') ? 1 : 0;
-        }
-
         for (uint32_t k = 0; k < b.n; k++) {
             const arm_insn *in = &b.v[k];
             if (fb_has_label(&b, in->addr))
                 fprintf(pf, "L_%08X:\n", in->addr);
-            if (emit_pc)
+            if (st->pc_instrumented)
                 fprintf(pf, "    vita_trace_pc(0x%08Xu);\n", in->addr);
 
             fprintf(pf, "    /* %08X  %-16s */\n", in->addr, in->mnemonic);
-            if (emit_insn(img, mod, db, &fs, &b, in, pf, st)) st->translated++;
+            if (emit_insn(img, mod, db, &fs, &b, in, pf, st,
+                          module_id)) st->translated++;
             else                               st->trapped++;
             st->insns++;
         }
@@ -2319,7 +2861,7 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
         free(b.v);
         free(b.labels);
     }
-    if (part) fclose(part);
+    if (part && fclose(part) != 0) generation_error = 1;
     if (!split) st->part_funcs = n_funcs;
 
     /* --- the HLE defaults ----------------------------------------------------
@@ -2346,7 +2888,10 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
             char path[1200];
             snprintf(path, sizeof(path), "%s/%s.c", impdir, sym);
             FILE *one = fopen(path, "w");
-            if (!one) continue;
+            if (!one) {
+                generation_error = 1;
+                continue;
+            }
 
             fprintf(one, "/* Generated by armrecomp. Do not edit.\n");
             fprintf(one, " *\n");
@@ -2370,7 +2915,7 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
                 fprintf(one,
                         "void %s(void) { vita_trap_import(0x%08X, 0x%08X, 0); }\n",
                         sym, s->addr, s->func_nid);
-            fclose(one);
+            if (fclose(one) != 0) generation_error = 1;
             st->imports_used++;
         }
     }
@@ -2383,12 +2928,8 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
      * address is not a function".
      *
      * The stubs belong in the same table because a transfer to one is a
-     * firmware call. Imports bind at emit time on a direct BL, but a module
-     * reaches firmware through pointers too — `module_start` makes its very
-     * first firmware call that way — and those never pass through the BL path.
-     * Without this the dispatcher reports the game's first C++ runtime call as
-     * an unresolved address, which names the wrong problem: the code is not
-     * missing, it is firmware.
+     * firmware call. Direct calls use the site's generated target slot, while
+     * strict binding replaces both that slot and the merged dispatch entry.
      *
      * One merged table rather than a second lookup: the entries have the same
      * shape already (guest address -> void(void)), both lists arrive sorted,
@@ -2399,7 +2940,13 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
             disc->count, mod->stub_count);
     fprintf(f, " * sorted by guest address\n");
     fprintf(f, " * ------------------------------------------------------------- */\n");
-    fprintf(f, "static const vita_dispatch_entry vita_functions[] = {\n");
+    char dispatch_sym[128], register_sym[128];
+    module_symbol(dispatch_sym, sizeof(dispatch_sym), "vita_functions",
+                  module_id);
+    module_symbol(register_sym, sizeof(register_sym),
+                  "vita_register_functions", module_id);
+    fprintf(f, "static const vita_dispatch_entry %s[] = {\n",
+            dispatch_sym);
     {
         uint32_t fi = 0, si = 0;
         while (fi < fs.n || si < mod->stub_count) {
@@ -2427,16 +2974,50 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
                 fprintf(f, "    { 0x%08Xu, %s },\n", stub_key, sym);
                 si++;
             } else {
-                fprintf(f, "    { 0x%08Xu, vita_func_%08X },\n", fs.v[fi], fs.v[fi]);
+                char sym[96];
+                function_symbol(sym, sizeof(sym), module_id, fs.v[fi]);
+                fprintf(f, "    { 0x%08Xu, %s },\n", fs.v[fi], sym);
                 fi++;
             }
+            st->dispatch_entries++;
         }
     }
+    if (!st->dispatch_entries) fprintf(f, "    { 0u, 0 }\n");
     fprintf(f, "};\n\n");
-    fprintf(f, "void vita_register_functions(void) {\n");
-    fprintf(f, "    vita_dispatch_init(vita_functions,\n");
-    fprintf(f, "        (uint32_t)(sizeof(vita_functions) / sizeof(vita_functions[0])));\n");
+    fprintf(f, "void %s(void) {\n", register_sym);
+    fprintf(f, "    vita_dispatch_init(%s, %uu);\n",
+            dispatch_sym, st->dispatch_entries);
     fprintf(f, "}\n");
+
+    {
+        char imports_sym[128];
+        module_symbol(imports_sym, sizeof(imports_sym), "vita_fn_imports",
+                      module_id);
+        fprintf(f, "\n/* function-import descriptors */\n");
+        fprintf(f, "const vita_fn_import %s[] = {\n", imports_sym);
+        for (uint32_t i = 0; i < mod->stub_count; i++) {
+            const vm_stub *s = &mod->stubs[i];
+            const char *lib = nid_lib_name(db, s->lib_nid);
+            const char *fn = nid_func_name(db, s->lib_nid, s->func_nid);
+            char target[128], full_name[192];
+            import_target_symbol(target, sizeof(target), s, module_id);
+            fprintf(f,
+                    "    { 0x%08Xu, 0x%08Xu, 0x%08Xu, 0x%08Xu, ",
+                    s->lib_nid, s->func_nid, s->addr | 1u,
+                    s->target_site);
+            if (fn) {
+                snprintf(full_name, sizeof(full_name), "%s::%s",
+                         lib ? lib : "?", fn);
+                c_string(f, full_name);
+            } else {
+                fputs("0", f);
+            }
+            fprintf(f, ", %uu, &%s },\n", fn ? 1u : 0u, target);
+        }
+        if (!mod->stub_count)
+            fprintf(f, "    { 0u, 0u, 0u, 0u, 0, 0u, 0 }\n");
+        fprintf(f, "};\n");
+    }
 
     /* The imported variables: the global the generated code reads for each,
      * and the table the loader binds them through. The words in the image
@@ -2447,7 +3028,7 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
     fprintf(f, "\n/* imported variables */\n");
     for (uint32_t i = 0; i < mod->var_count; i++) {
         char sym[96];
-        var_symbol(sym, sizeof(sym), db, &mod->vars[i]);
+        var_symbol(sym, sizeof(sym), db, &mod->vars[i], module_id);
         fprintf(f, "uint32_t %s;\n", sym);
         uint32_t nabs = 0;
         for (uint32_t s = 0; s < mod->vars[i].site_count; s++)
@@ -2463,10 +3044,14 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
         }
         fprintf(f, "\n};\n");
     }
-    fprintf(f, "const vita_var_import vita_var_imports[] = {\n");
+    char vars_sym[128], vars_count_sym[128];
+    module_symbol(vars_sym, sizeof(vars_sym), "vita_var_imports", module_id);
+    module_symbol(vars_count_sym, sizeof(vars_count_sym),
+                  "vita_var_import_count", module_id);
+    fprintf(f, "const vita_var_import %s[] = {\n", vars_sym);
     for (uint32_t i = 0; i < mod->var_count; i++) {
         char sym[96];
-        var_symbol(sym, sizeof(sym), db, &mod->vars[i]);
+        var_symbol(sym, sizeof(sym), db, &mod->vars[i], module_id);
         const char *lib = nid_lib_name(db, mod->vars[i].lib_nid);
         const char *vn  = nid_var_name(db, mod->vars[i].lib_nid, mod->vars[i].var_nid);
         uint32_t nabs = 0;
@@ -2481,19 +3066,31 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
     }
     if (!mod->var_count) fprintf(f, "    { 0u, 0u, 0, 0, 0, 0u }\n");
     fprintf(f, "};\n");
-    fprintf(f, "const uint32_t vita_var_import_count = %uu;\n", mod->var_count);
+    fprintf(f, "const uint32_t %s = %uu;\n",
+            vars_count_sym, mod->var_count);
 
-    /* The entry, by name. A host should not have to read .sce_module_info to
-     * learn where the program starts; the module said, and discovery seeded
-     * it, so the function exists. Function keys retain the instruction-set
-     * bit, including in generated symbol names. */
-    if (mod->have_info && mod->info.module_start != 0 &&
-        mod->info.module_start != 0xFFFFFFFF) {
-        uint32_t ms = (img->seg_vaddr +
-                      (mod->info.module_start & 0x3FFFFFFF & ~1u)) | 1u;
+    /* Preserve the module_start metadata address while using the normalized
+     * Thumb dispatch key that discovery seeded for symbols and calls. */
+    if (mod->have_info && mod->info.module_start != 0xFFFFFFFFu) {
+        uint32_t raw = img->seg_vaddr +
+                       (mod->info.module_start & 0x3FFFFFFFu);
+        uint32_t key = vita_module_start_dispatch_key(raw);
+        char addr_sym[128], start_sym[128], fn_sym[96];
+        st->entry_present = 1;
+        st->entry_raw_address = raw;
+        st->entry_dispatch_key = key;
+        st->entry_resolved = fs_has(&fs, key) && !vm_find_stub(mod, key);
+        module_symbol(addr_sym, sizeof(addr_sym),
+                      "vita_module_start_addr", module_id);
+        module_symbol(start_sym, sizeof(start_sym), "vita_module_start",
+                      module_id);
         fprintf(f, "\n/* module_start */\n");
-        fprintf(f, "const uint32_t vita_module_start_addr = 0x%08Xu;\n", ms);
-        fprintf(f, "void vita_module_start(void) { vita_call(vita_func_%08X); }\n", ms);
+        fprintf(f, "const uint32_t %s = 0x%08Xu;\n", addr_sym, raw);
+        if (st->entry_resolved) {
+            function_symbol(fn_sym, sizeof(fn_sym), module_id, key);
+            fprintf(f, "void %s(void) { vita_call(%s); }\n",
+                    start_sym, fn_sym);
+        }
     }
 
     /* The thread-local image: where it is, how much of it is initialised,
@@ -2503,21 +3100,63 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
      * does. Always written, zeros when the module has none, so a host links
      * without reading .sce_module_info. */
     {
-        uint32_t taddr = 0, tfile = 0, tmem = 0;
+        uint32_t taddr = 0, tfile = 0, tmem = 0, talign = 0;
         if (mod->have_info && mod->info.tls_memsz) {
-            uint32_t seg = mod->info.tls_start >> 30, off = mod->info.tls_start & 0x3FFFFFFF;
-            uint32_t tls_base = 0;
-            if (seg == 0)                           tls_base = img->seg_vaddr;
-            else if (seg - 1 < img->data_seg_count) tls_base = img->data_segs[seg - 1].vaddr;
-            if (tls_base) { taddr = tls_base + off; tfile = mod->info.tls_filesz; tmem = mod->info.tls_memsz; }
+            uint32_t seg = mod->info.tls_start >> 30;
+            uint32_t off = mod->info.tls_start & 0x3FFFFFFF;
+            uint32_t tls_base = 0, tls_len = 0, tls_align = 0;
+            st->tls_present = 1;
+            if (seg == 0) {
+                tls_base = img->seg_vaddr;
+                tls_len = img->seg_len;
+                tls_align = img->seg_align;
+            } else if (seg - 1 < img->data_seg_count) {
+                tls_base = img->data_segs[seg - 1].vaddr;
+                tls_len = img->data_segs[seg - 1].len;
+                tls_align = img->data_segs[seg - 1].align;
+            }
+            if (tls_base && off <= tls_len &&
+                mod->info.tls_filesz <= tls_len - off &&
+                mod->info.tls_filesz <= mod->info.tls_memsz &&
+                tls_align && (tls_align & (tls_align - 1u)) == 0 &&
+                tls_base <= UINT32_MAX - off) {
+                taddr = tls_base + off;
+                tfile = mod->info.tls_filesz;
+                tmem = mod->info.tls_memsz;
+                talign = tls_align;
+                st->tls_resolved = 1;
+            }
         }
+        st->tls_address = taddr;
+        st->tls_filesz = tfile;
+        st->tls_memsz = tmem;
+        st->tls_alignment = talign;
+        char tls_addr_sym[128], tls_file_sym[128], tls_mem_sym[128];
+        module_symbol(tls_addr_sym, sizeof(tls_addr_sym),
+                      "vita_module_tls_addr", module_id);
+        module_symbol(tls_file_sym, sizeof(tls_file_sym),
+                      "vita_module_tls_filesz", module_id);
+        module_symbol(tls_mem_sym, sizeof(tls_mem_sym),
+                      "vita_module_tls_memsz", module_id);
         fprintf(f, "\n/* thread-local image */\n");
-        fprintf(f, "const uint32_t vita_module_tls_addr = 0x%08Xu;\n", taddr);
-        fprintf(f, "const uint32_t vita_module_tls_filesz = %uu;\n", tfile);
-        fprintf(f, "const uint32_t vita_module_tls_memsz = %uu;\n", tmem);
+        fprintf(f, "const uint32_t %s = 0x%08Xu;\n",
+                tls_addr_sym, taddr);
+        fprintf(f, "const uint32_t %s = %uu;\n",
+                tls_file_sym, tfile);
+        fprintf(f, "const uint32_t %s = %uu;\n",
+                tls_mem_sym, tmem);
     }
 
-    int report_error = write_reports(outpath, st);
+    if (ferror(f)) generation_error = 1;
+    finalize_stats(mod, module_id, st);
+    if (generation_error) st->structural_ready = 0;
+    write_generated_descriptor(f, mod, module_id, st);
+
+    if (write_reports(outpath, mod, module_id, st))
+        generation_error = 1;
+    if (write_module_sidecar(outpath, img, mod, db, &fs, module_id, st))
+        generation_error = 1;
+    if (ferror(f)) generation_error = 1;
 
     free(fs.v);
     free(list);
@@ -2525,5 +3164,12 @@ int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
     free(g_vsites);
     g_vsites = NULL;
     g_nvsites = 0;
-    return report_error;
+    return generation_error;
+}
+
+int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
+            const vf_result *disc, FILE *f, const char *outpath,
+            const char *impdir, uint32_t limit, emit_stats *st) {
+    return em_emit_module(img, mod, db, disc, f, outpath, impdir, NULL,
+                          limit, st);
 }

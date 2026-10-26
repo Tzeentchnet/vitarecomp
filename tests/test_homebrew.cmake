@@ -49,9 +49,10 @@ foreach(sample IN ITEMS fbdemo hello threads)
         "${sample} emit"
         "${ARMRECOMP}" emit "${elf}" "${generated}/module.c"
     )
-    if(NOT EXISTS "${generated}/module.report.json" OR
+    if(NOT EXISTS "${generated}/module.module.json" OR
+       NOT EXISTS "${generated}/module.report.json" OR
        NOT EXISTS "${generated}/module.report.txt")
-        message(FATAL_ERROR "${sample}: deterministic generation reports missing")
+        message(FATAL_ERROR "${sample}: deterministic generation metadata missing")
     endif()
 
     snapshot_tree("${generated}" first_snapshot)

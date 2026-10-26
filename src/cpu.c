@@ -1,8 +1,10 @@
 /* cpu.c — the machine state the generated C operates on. */
 
 #include "vitarecomp/recomp_rt.h"
+#include "sched.h"
 
 #include <stdio.h>
+#include <string.h>
 
 VITA_TLS uint32_t r0, r1, r2, r3, r4, r5, r6, r7;
 VITA_TLS uint32_t r8, r9, r10, r11, r12;
@@ -24,6 +26,52 @@ static vita_tls_hook g_tls_hook;
 void vita_sched_slice_end_impl(void);
 void vita_sched_spin_wait_impl(uint32_t addr);
 uint32_t vita_thread_tls_base_impl(void);
+
+void vita_cpu_reset(void) {
+    r0 = r1 = r2 = r3 = r4 = r5 = r6 = r7 = 0;
+    r8 = r9 = r10 = r11 = r12 = sp = lr = 0;
+    flag_n = flag_z = flag_c = flag_v = flag_ge = 0;
+    memset(vfp_s, 0, sizeof(vfp_s));
+    vfp_set_fpscr(0);
+    vita_last_pc = 0;
+    vita_trace_insns = 0;
+    vita_trace_lo = 0;
+    vita_trace_hi = 0;
+    vita_slice = VITA_SLICE;
+    vita_clrex();
+}
+
+vita_result vita_cpu_prepare_module_start(
+    const vita_module_start_state *state) {
+    if (!state) return VITA_ERROR_INVALID_ARGUMENT;
+    if (!vita_runtime_is_initialized())
+        return VITA_ERROR_NOT_INITIALIZED;
+    if ((state->stack_pointer & 15u) != 0)
+        return VITA_ERROR_INVALID_ARGUMENT;
+    if (state->argument_size) {
+        void *arguments = NULL;
+        const uint64_t end =
+            (uint64_t)state->argument_pointer + state->argument_size;
+        if (end > UINT64_C(0x100000000))
+            return VITA_ERROR_OVERFLOW;
+        if (vita_mem_range(state->argument_pointer, state->argument_size,
+                           &arguments) != VITA_OK)
+            return VITA_ERROR_OUT_OF_BOUNDS;
+        (void)arguments;
+    }
+    vita_result result =
+        vita_sched_validate_main_stack_pointer(state->stack_pointer);
+    if (result != VITA_OK) return result;
+    result = vita_sched_prepare_main_execution();
+    if (result != VITA_OK) return result;
+
+    vita_cpu_reset();
+    r0 = state->argument_size;
+    r1 = state->argument_pointer;
+    sp = state->stack_pointer;
+    lr = state->return_address;
+    return VITA_OK;
+}
 
 void vita_runtime_set_hooks(vita_slice_hook slice_hook,
                             vita_spin_hook spin_hook,

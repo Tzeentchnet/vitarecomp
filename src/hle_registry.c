@@ -152,6 +152,36 @@ void vita_hle_registry_reset(void) {
     mtx_unlock(&g_lock);
 }
 
+int vita_hle_resolve_registered(uint32_t library_nid, uint32_t function_nid,
+                                const char *library_name,
+                                const char *function_name,
+                                vita_hle_fn *function) {
+    if (!function) return VITA_ERROR_INVALID_ARGUMENT;
+    *function = NULL;
+    const int by_nid = library_nid != 0u && function_nid != 0u;
+    const int by_name = library_nid == 0u && function_nid == 0u &&
+                        library_name && *library_name &&
+                        function_name && *function_name;
+    if (!by_nid && !by_name) return VITA_ERROR_INVALID_ARGUMENT;
+
+    call_once(&g_once, registry_once);
+    mtx_lock(&g_lock);
+    for (size_t i = 0; i < g_count; i++) {
+        const registered_import *entry = &g_imports[i];
+        int match = by_nid
+            ? entry->library_nid == library_nid &&
+              entry->function_nid == function_nid
+            : entry->library_name && entry->function_name &&
+              strcmp(entry->library_name, library_name) == 0 &&
+              strcmp(entry->function_name, function_name) == 0;
+        if (!match) continue;
+        *function = entry->function;
+        break;
+    }
+    mtx_unlock(&g_lock);
+    return *function ? VITA_OK : VITA_ERROR_NOT_FOUND;
+}
+
 int vita_hle_unimplemented(uint32_t stub_address, uint32_t library_nid,
                            uint32_t function_nid,
                            const char *library_name,

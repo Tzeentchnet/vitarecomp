@@ -25,6 +25,8 @@
 #ifndef VITARECOMP_SCHED_H
 #define VITARECOMP_SCHED_H
 
+#include "vitarecomp/runtime.h"
+
 #include <stdint.h>
 #include <stdio.h>
 
@@ -55,6 +57,13 @@ void     vita_thread_exit(int status); /* workers do not return; main requests e
  * TLS block (written by the thread manager on first use). */
 uint32_t *vita_thread_tls_slot(uint32_t uid);
 
+/* Entry/TLS preparation is only legal while the main guest thread is the
+ * sole live thread. These internal checks keep public preparation APIs from
+ * racing scheduler-owned state. */
+vita_result vita_sched_validate_main_stack_pointer(uint32_t stack_pointer);
+vita_result vita_sched_prepare_main_execution(void);
+vita_result vita_sched_restart_tls(void);
+
 /* For sceKernelGetThreadInfo. Returns 0 when the uid is a thread. */
 int vita_thread_info(uint32_t uid, char *name, uint32_t cap, uint32_t *entry,
                      uint32_t *stack, uint32_t *stack_size, uint32_t *prio);
@@ -84,6 +93,13 @@ void vita_sched_yield(void);
 void vita_sched_delay(uint32_t us);
 void vita_sched_slice_end_impl(void);
 void vita_sched_spin_wait_impl(uint32_t addr);
+
+/* Runtime teardown first quiesces the scheduler: reject new guest work, wake
+ * every baton waiter, cooperatively cancel workers, and join every host thread.
+ * Destructive cleanup is a separate idempotent step so no worker can observe
+ * cleared records or destroyed synchronization. */
+int vita_sched_is_shutting_down(void);
+void vita_sched_quiesce(void);
 void vita_sched_shutdown(void);
 
 /* Release a thread-affine host resource before the baton changes owners.

@@ -20,10 +20,21 @@ resolved 519 of 524 imported functions (99.0%)
 
 The runtime is a title-neutral library. It owns guest memory, CPU/TLS state,
 the guest scheduler, synchronization objects, import dispatch, allocators,
-clock state, and the VFS. A future native host owns process setup, the window,
-devices, presentation, and policy. The only host-facing hooks in this layer are
-the diagnostic and exit callbacks in `runtime.h`, the minimal `host.h`
-contract, and mounts explicitly supplied through `vfs.h`.
+clock state, and the VFS. A consuming native host owns process setup, the
+window, devices, presentation, and policy. The only host-facing hooks in this
+layer are the diagnostic and exit callbacks in `runtime.h`, the minimal
+`host.h` contract, and mounts explicitly supplied through `vfs.h`.
+
+The checked stack, deterministic CPU-entry reset, and ordered TLS-template
+contract is specified in [ENTRY_STATE.md](ENTRY_STATE.md). That contract
+deliberately stops short of claiming unimplemented Vita loader semantics.
+
+After a host completes strict loading/binding and those entry-state checks,
+`vita_guest_call` provides the same-thread boundary. It distinguishes clean
+completion, an explicit runtime exit request, and the first classified named
+strict failure. The failure stops immediately; diagnostic trace continuation
+is not a production entry policy. Invalid, nested, or same-thread reentrant
+calls fail without starting another guest call.
 
 `app0:` is always read-only, even when a host accidentally requests a writable
 mount. Other mounts opt into write access. Guest paths are normalized beneath
@@ -41,7 +52,8 @@ The implemented, synthetic-test-covered categories are:
   lifecycle, mutexes, semaphores, conditions, event flags, message pipes, and
   callbacks;
 - reusable/coalescing libc heap, mspace, sysmem blocks, runtime stacks, and
-  per-thread kernel TLS storage;
+  a dedicated checked/coalescing guest TLS arena for per-thread runtime slots
+  and composed module TLS images;
 - NID/library and name/library HLE registration with structured diagnostics;
   a missing import returns `VITA_ERROR_UNIMPLEMENTED`, sets the guest error
   result, and never reports success;

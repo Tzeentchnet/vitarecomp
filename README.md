@@ -63,7 +63,8 @@ The Vita is a better target than its reputation suggests:
 ## Architecture
 
 ```
-include/vitarecomp/   runtime API — cpu, mem, dispatch, vfp, loader
+include/vitarecomp/   runtime API — cpu, mem, dispatch, generated ABI,
+                      strict loader/binding, entry state
 src/                  runtime — CPU state, memory, semantic helpers, traps
 tools/armrecomp/      the toolkit:
                         container.c  SELF / ELF / velf parsing
@@ -73,6 +74,7 @@ tools/armrecomp/      the toolkit:
                         analyze.c    function discovery
                         nids.c       NID → name against vita-headers
                         emit.c       ARM → C
+                        compose.c    deterministic generated image sets
 tests/                ctest — synthetic, no game data
 docs/                 the detail
 ```
@@ -93,7 +95,7 @@ docs/                 the detail
               │  armrecomp         │   (following the module's export table and
               │  (tools/)          │   SCE_RELA relocations), translate to C:
               └────────────────────┘   vita_func_<addr>
-                      │  generated/recomp_funcs.c
+                      │  generated modules + composed registry
                       ▼
               ┌────────────────────┐   the runtime the generated C links against:
               │  vitarecomp (lib)  │   CPU state · memory · semantic helpers ·
@@ -128,6 +130,9 @@ three-image retail set it covers **96.371%** of 11,308,620 executable bytes and
 translates **99.8972%** of 3,666,858 emitted instruction instances. All three
 generated modules compile as MSVC objects; repeat generation is byte-identical.
 Unsupported operations remain named aborting traps, never silent output.
+Generated-module ABI v1, strict module-set loading/binding, checked
+stack/TLS/CPU preparation, and the bounded guest-call outcome API are public
+title-neutral contracts; they do not claim that any particular title boots.
 Method, trade-offs, and provenance are documented in
 [docs/CPU_BASELINE.md](docs/CPU_BASELINE.md).
 
@@ -145,6 +150,7 @@ Method, trade-offs, and provenance are documented in
 | **[Corpus](docs/CORPUS.md)** | The 15 measured modules, the plaintext finding, the `ET_SCE_EXEC` → `ET_SCE_RELEXEC` era split and why it makes the launch window the hard case |
 | **[Decryption](docs/DECRYPT.md)** | The SELF container, what is encrypted and what is not, and why the QA corpus needs no keys |
 | **[HLE](docs/HLE.md)** | The firmware surface, measured, and the order of work |
+| **[Entry state](docs/ENTRY_STATE.md)** | Checked main stack, deterministic module-start CPU state, TLS templates, and the strict guest-call boundary |
 | **[GPU contract](docs/GPU.md)** | Renderer-neutral ownership, production DX12/Vulkan behavior, shader contract, and combined validation |
 | **[DX12](docs/DX12.md)** | Native Direct3D 12 behavior, validation requirements, WARP, and conformance |
 | **[Lessons](docs/LESSONS.md)** | Corrections and bugs found by running rather than reasoning: `MOVT`, the wrong dominant-instruction-set metric, the SIMD undercount, the PS3-layout SELF header |
@@ -174,12 +180,74 @@ armrecomp extract  <self> <out.elf>             SELF in, plain ELF32 out
 armrecomp cover    <elf>                        coverage, class histogram, instruction set
 armrecomp funcs    <elf> [nid-db]               the HLE work list, from the import table
 armrecomp discover <elf>                        function discovery
-armrecomp emit     <elf> <out.c> <n> [nid-db]   translate to C
+armrecomp emit     [--module-id <id>] <elf> <out.c> [n] [nid-db]
+                                                translate to C
+armrecomp compose --entry-module <id> --output <registry.c>
+                   <module/report JSON>...       compose generated modules
 ```
 
 `emit` also writes deterministic `<out>.report.json` and
-`<out>.report.txt` files with the strict unsupported/trap census and partition
-inventory. These reports contain no input path or content hash.
+`<out>.report.txt` files with the strict unsupported/trap census, structural
+readiness, entry resolution, instrumentation state, and partition inventory.
+The deterministic `<out>.module.json` sidecar carries load/executable ranges,
+complete ARM/Thumb dispatch keys, entry/TLS records, and complete
+import/export/variable metadata. None contains an input path or content hash.
+
+`--module-id` accepts a 1-63 character ASCII identifier beginning with a letter
+and continuing with letters, digits, or underscores. Supplying one namespaces
+every module-owned generated symbol while leaving shared `vita_hle_*` symbols
+shared. Generated C exports the versioned, title-neutral descriptor declared by
+`vitarecomp/generated_module.h`. Omitting the option retains the legacy
+single-module symbol names and emission behavior.
+
+The current public versions are generated-module ABI v4, module-sidecar schema
+v4, module-report schema v4, and compose-report schema v4. Descriptor
+`abi_version` and `struct_size` are first so a consumer rejects an incompatible
+record before reading later fields. Each function-import record carries its
+NIDs, local dispatch key, import-table target site, public name, strict policy,
+and writable direct-call target slot. TLS-bearing descriptors carry explicit
+power-of-two alignment; composition records deterministic descriptor
+index/order, expected offset, and aggregate size/alignment.
+
+`compose` consumes an unordered collection containing exactly one
+`.module.json` and one `.report.json` for every module. It accepts only the
+current complete schemas, sorts modules by load address and ID, and rejects
+range overlap, duplicate full ARM/Thumb dispatch keys, ambiguous IDs/exports,
+metadata disagreement, and an entry key that does not resolve exactly once.
+It writes a generated registry C/header pair plus aggregate `.report.json` and
+`.report.txt` files. The registry references the module-ID-qualified
+descriptors, exports the validated aggregate TLS layout, and installs one
+key-sorted dispatch table.
+
+After strict loading and module-table validation, hosts bind the set with
+`vita_binding_install_module_set` from `vitarecomp/binding.h`. The binder
+combines strict-loader post-link metadata with the generated descriptors,
+rejects duplicate NID exports and exact ARM/Thumb-key disagreements, resolves
+function imports only to generated exports, exactly registered HLE functions,
+or named strict traps, and resolves variables only to module exports or
+explicit runtime providers. It verifies loaded target/ABS32 words before one
+transactional commit, updates every generated direct-call slot, and installs
+the same resolved functions in one private merged dispatch table through the
+checked dispatch API. A failed commit restores guest patches and target slots.
+Errors contain module/record indices, not input paths or hashes. The old
+`vita_dispatch_init` and generated
+`vita_generated_image_init` void functions remain compatibility wrappers.
+
+Aggregate `structuralReady`/`entryEligible` require complete metadata, resolved
+entry/TLS records, PC instrumentation, and zero body cuts, unreported
+partitions, or unclassified traps. Fully classified named traps remain
+entry-eligible. `productionReady` is a separate zero-gap result and is false
+while any classified trap remains. In strict execution, those traps are
+allowed only as the first named stop: `vita_guest_call` returns the first
+failure and never continues past it. Composed artifacts contain neither input
+paths nor content hashes.
+
+The strict loader consumes caller-owned immutable bytes and never opens a path.
+A host preflights and transactionally loads the complete module set, validates
+post-link tables/relocations, installs binding and exact-mode dispatch,
+prepares stack/TLS/CPU state, and only then calls through `vita_guest_call`.
+Clean return, explicit exit request, and first strict failure are distinct
+results; nested or invalid calls fail before entry.
 
 `info` accepts a SELF (`eboot.bin`, `*.suprx`) or a plain ELF/velf. The optional
 NID database is a path to

@@ -18,15 +18,38 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef void (*vita_fn)(void);
 
 typedef struct {
-    uint32_t addr;      /* guest address with ARM/Thumb bit retained */
-    vita_fn  fn;
+    uint32_t addr; /* guest address with ARM/Thumb bit retained */
+    vita_fn fn;
 } vita_dispatch_entry;
 
-/* The table must be sorted by addr; the generated one is. */
+typedef enum vita_dispatch_status {
+    VITA_DISPATCH_OK = 0,
+    VITA_DISPATCH_ERROR_NULL_COUNT = -1,
+    VITA_DISPATCH_ERROR_NULL_FUNCTION = -2,
+    VITA_DISPATCH_ERROR_UNSORTED = -3,
+    VITA_DISPATCH_ERROR_DUPLICATE = -4,
+    VITA_DISPATCH_ERROR_NO_MEMORY = -5
+} vita_dispatch_status;
+
+/* Install a private copy of a strictly key-sorted table. NULL is valid only
+ * with count zero. Equal adjacent keys are reported separately from descending
+ * keys because either condition would make binary-search results ambiguous. */
+vita_dispatch_status
+vita_dispatch_init_checked(const vita_dispatch_entry *table, uint32_t count);
+
+/* Compatibility entry point retained for generated ABI-v1 code. Invalid
+ * tables are refused and leave an empty dispatcher; new code should use the
+ * checked form so initialization failure cannot be mistaken for success. */
 void vita_dispatch_init(const vita_dispatch_entry *table, uint32_t count);
+void vita_dispatch_reset(void);
+const char *vita_dispatch_status_string(vita_dispatch_status status);
 
 /* Call a statically resolved generated function through the runtime boundary.
  * Keeping this out of the generated translation unit prevents the host
@@ -53,5 +76,9 @@ uint32_t vita_dispatch_floor(uint32_t addr);
 
 uint32_t vita_dispatch_hits(void);
 uint32_t vita_dispatch_misses(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* VITARECOMP_DISPATCH_H */

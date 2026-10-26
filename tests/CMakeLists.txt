@@ -48,9 +48,11 @@ add_executable(test_reloc
     test_reloc.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/container.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/reloc.c
+    ${CMAKE_SOURCE_DIR}/src/reloc.c
 )
 target_include_directories(test_reloc PRIVATE
     ${CMAKE_SOURCE_DIR}/tools/armrecomp
+    ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_options(test_reloc PRIVATE -UNDEBUG)
 add_test(NAME reloc COMMAND test_reloc)
@@ -61,15 +63,18 @@ add_executable(test_discover
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/decode.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/module.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/reloc.c
+    ${CMAKE_SOURCE_DIR}/src/reloc.c
 )
 target_include_directories(test_discover PRIVATE
     ${CMAKE_SOURCE_DIR}/tools/armrecomp
+    ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_options(test_discover PRIVATE -UNDEBUG)
 add_test(NAME discover COMMAND test_discover)
 
 add_executable(test_emit
     test_emit.c
+    ${CMAKE_SOURCE_DIR}/tools/armrecomp/compose.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/emit.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/decode.c
     ${CMAKE_SOURCE_DIR}/tools/armrecomp/module.c
@@ -81,6 +86,20 @@ target_include_directories(test_emit PRIVATE
 )
 target_compile_options(test_emit PRIVATE -UNDEBUG)
 add_test(NAME emit COMMAND test_emit)
+
+add_executable(test_compose
+    test_compose.c
+    ${CMAKE_SOURCE_DIR}/tools/armrecomp/compose.c
+)
+target_include_directories(test_compose PRIVATE
+    ${CMAKE_SOURCE_DIR}/tools/armrecomp
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_compile_options(test_compose PRIVATE -UNDEBUG)
+add_test(NAME compose-generated-image-set COMMAND test_compose)
+set_tests_properties(compose-generated-image-set PROPERTIES
+    LABELS "armrecomp;composition;prior-aot;negative"
+)
 
 add_test(
     NAME homebrew-e2e
@@ -101,6 +120,108 @@ add_executable(test_runtime test_runtime.c)
 target_link_libraries(test_runtime PRIVATE vitarecomp)
 target_compile_options(test_runtime PRIVATE -UNDEBUG)
 add_test(NAME runtime COMMAND test_runtime)
+
+add_executable(test_entry_state test_entry_state.c)
+target_link_libraries(test_entry_state PRIVATE vitarecomp)
+add_test(NAME entry-state COMMAND test_entry_state)
+set_tests_properties(entry-state PROPERTIES
+    LABELS "runtime;entry-state;tls;negative"
+)
+
+add_executable(test_loader test_loader.c)
+target_link_libraries(test_loader PRIVATE vitarecomp)
+if(MSVC)
+    target_compile_options(test_loader PRIVATE /UNDEBUG)
+else()
+    target_compile_options(test_loader PRIVATE -UNDEBUG)
+endif()
+add_test(NAME loader-strict COMMAND test_loader)
+set_tests_properties(loader-strict PROPERTIES
+    LABELS "runtime;loader;negative"
+)
+
+add_executable(test_binding test_binding.c)
+target_link_libraries(test_binding PRIVATE vitarecomp)
+if(MSVC)
+    target_compile_options(test_binding PRIVATE /UNDEBUG)
+else()
+    target_compile_options(test_binding PRIVATE -UNDEBUG)
+endif()
+add_test(NAME module-set-binding COMMAND test_binding)
+set_tests_properties(module-set-binding PROPERTIES
+    LABELS "runtime;binding;dispatch;imports;negative"
+)
+
+add_executable(generate_binding_e2e
+    generate_binding_e2e.c
+    ${CMAKE_SOURCE_DIR}/tools/armrecomp/emit.c
+    ${CMAKE_SOURCE_DIR}/tools/armrecomp/decode.c
+    ${CMAKE_SOURCE_DIR}/tools/armrecomp/module.c
+    ${CMAKE_SOURCE_DIR}/tools/armrecomp/nids.c
+)
+target_include_directories(generate_binding_e2e PRIVATE
+    ${CMAKE_SOURCE_DIR}/tools/armrecomp
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+set(_emitted_binding_dir "${CMAKE_CURRENT_BINARY_DIR}/emitted-binding")
+set(_emitted_binding_sources
+    "${_emitted_binding_dir}/binding_a.c"
+    "${_emitted_binding_dir}/binding_b.c"
+)
+set(_emitted_binding_headers
+    "${_emitted_binding_dir}/binding_a.h"
+    "${_emitted_binding_dir}/binding_b.h"
+)
+set(_emitted_binding_defaults
+    "${_emitted_binding_dir}/vita_hle_crossModule.c"
+    "${_emitted_binding_dir}/vita_hle_hleOverride.c"
+    "${_emitted_binding_dir}/vita_hle_namedUnsupported.c"
+)
+add_custom_command(
+    OUTPUT
+        ${_emitted_binding_sources}
+        ${_emitted_binding_headers}
+        ${_emitted_binding_defaults}
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_emitted_binding_dir}"
+    COMMAND $<TARGET_FILE:generate_binding_e2e> "${_emitted_binding_dir}"
+    DEPENDS generate_binding_e2e
+    VERBATIM
+)
+set_source_files_properties(
+    ${_emitted_binding_sources}
+    ${_emitted_binding_defaults}
+    PROPERTIES GENERATED TRUE
+)
+add_library(test_emitted_binding_defaults STATIC ${_emitted_binding_defaults})
+target_include_directories(test_emitted_binding_defaults PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    "${_emitted_binding_dir}"
+)
+add_executable(test_emitted_binding
+    test_emitted_binding.c
+    ${_emitted_binding_sources}
+    ${_emitted_binding_headers}
+)
+target_include_directories(test_emitted_binding PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    "${_emitted_binding_dir}"
+)
+target_link_libraries(test_emitted_binding PRIVATE
+    vitarecomp
+    test_emitted_binding_defaults
+)
+if(MSVC)
+    target_compile_options(test_emitted_binding PRIVATE /UNDEBUG)
+    target_compile_options(test_emitted_binding_defaults PRIVATE /UNDEBUG)
+else()
+    target_compile_options(test_emitted_binding PRIVATE -UNDEBUG)
+    target_compile_options(test_emitted_binding_defaults PRIVATE -UNDEBUG)
+endif()
+add_test(NAME emitted-module-set-binding COMMAND test_emitted_binding)
+set_tests_properties(emitted-module-set-binding PROPERTIES
+    LABELS "armrecomp;runtime;binding;dispatch;imports;negative"
+)
 
 add_executable(test_foundation test_foundation.c)
 target_link_libraries(test_foundation PRIVATE vitarecomp)

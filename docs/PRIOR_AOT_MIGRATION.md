@@ -34,25 +34,36 @@ remains the canonical aborting trap.
 Machine-readable source and expected-state cases are in
 `tests/fixtures/prior-aot/migration-vectors.json`.
 
-## Deferred integration points
+`compose-generated-image-set` promotes the retained multi-image vectors through
+the public `armrecomp compose` surface. It proves byte-identical output under
+input reordering, address-sorted module/dispatch registries, distinct ARM and
+Thumb keys at one aligned address, and explicit rejection of overlaps,
+same-mode duplicates, malformed reports, and unresolved entry records. It also
+proves that body cuts, unreported partitions, unclassified traps, and missing
+PC instrumentation make aggregate entry ineligible, while classified named
+traps remain eligible only as a strict first stop.
 
-These cases are precise but cannot honestly execute against a canonical
-production seam that does not yet exist:
+## Promoted integration points
 
-| Contract | Exact future integration point | Why deferred |
+The formerly deferred canonical seams now execute in public tests:
+
+| Contract | Canonical integration | Public evidence |
 |---|---|---|
-| Deterministic multi-image ordering and overlap rejection | Add image-set/report composition beside `tools/armrecomp/main.c`; reuse `vm_image` from `tools/armrecomp/module.h`; add canonical tests under `tests/` | `armrecomp` currently accepts one image and has no report-merger API. |
-| ARM/Thumb block-key collision at one aligned address | Replace address-only function marking in `tools/armrecomp/analyze.c`; carry mode through `funcset`, symbol naming, and table generation in `tools/armrecomp/emit.c`; make `include/vitarecomp/dispatch.h` and `src/dispatch.c` search the same key | The pending canonical CPU/mode-selection design must choose the generated-C ABI. Changing only dispatch would leave discovery and symbols aliased. |
-| Conditional A32 exit fallthrough and `BLX LR` aliasing | `emit_insn` in `tools/armrecomp/emit.c`, with synthetic decode/emission tests under `tests/` | The C emitter has no generated-code execution harness and its call/PC-state ABI is part of the CPU-selection work. |
-| Thumb aligned-PC `TBB`/`TBH` | Decoder/discovery support in `tools/armrecomp/decode.c` and `analyze.c`, followed by emission in `emit.c` | Canonical table-branch recovery is not implemented. |
-| `VST1` lane rejection | Future NEON operand validation in `decode.c`/`emit.c` | Canonical NEON emission is not implemented. |
-| FPSCR flush-to-zero comparison | Extend the FPSCR representation in `include/vitarecomp/vfp.h` and comparison helpers in `src/vfp.c` | The current runtime stores comparison flags but no FPSCR mode/control word. |
-| Exclusive monitor and ordinary-write invalidation | Introduce the shared monitor at the eventual thread/CPU owner, then route `src/mem.c` writes and LDREX/STREX helpers through the same lock | There is no canonical per-thread CPU or exclusive-monitor API yet. |
-| Full oracle state including PC/CPSR/FPSCR mode bits and 64 extended words | Optional oracle adapter after canonical CPU selection | The current generated-C ABI deliberately has no PC variable and represents a smaller state surface. |
+| ARM/Thumb block-key collision at one aligned address | Mode-bearing discovery, names, sidecars, composition, and exact-key dispatch | Discovery, emitter, compose, and dispatch tests |
+| Conditional A32 exit fallthrough and `BLX LR` aliasing | Canonical analyzer/emitter source capture and generated control flow | Emitter prior-vector regressions |
+| Thumb aligned-PC `TBB`/`TBH` | Decoder, discovery, and emission use the architectural aligned PC | Discovery/emitter regressions |
+| `VST1` lane rejection | Decoder/emitter validate the supported lane shape | CPU/emitter regressions |
+| FPSCR flush-to-zero comparison | Raw FPSCR control/state and comparison helpers | Runtime/prior-AOT vectors |
+| Exclusive monitor and ordinary-write invalidation | Shared synchronized monitor used by checked writes and LDREX/STREX | Cross-thread runtime tests |
 
-These deferrals are not claims of test execution. When each seam lands, promote
-the corresponding fixture to a canonical unit/differential test before changing
-production semantics.
+The optional full external-oracle adapter remains deferred. Generated-module
+ABI v4 deliberately exposes the title-neutral state required by generated C
+and entry preparation, including explicit deterministic TLS layout, rather
+than a complete emulator-oracle snapshot. Its site-keyed function-import
+binding behavior is unchanged from ABI v3.
+
+The optional oracle deferral is not a test-execution claim and is not required
+for the production loader, binder, or entry boundary.
 
 ## Required semantics retained by the fixtures
 
