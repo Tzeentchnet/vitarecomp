@@ -84,9 +84,11 @@ implements the synchronization/storage subset, not its fiber scheduler.
 
 The production DX12/Vulkan renderer contract is available to a native host.
 Shader-patcher registration retains a validated GXP span. Vertex shader
-creation parses that span and censuses the currently justified VMOV and PHAS
-family encodings. An unknown instruction stops at the named strict boundary;
-even an entirely recognized census stops at the static
+creation parses that span and classifies all 35 active top-level USSE families.
+This complete top-level classification is not semantic translation, and the
+SPEC fallback is not proof that its subopcode is valid. Explicit illegal
+families and unclassified words stop at separate named strict boundaries; an
+otherwise classified census still stops at the static
 translation-not-implemented boundary. It never calls the patcher allocator or
 writes the output because no GXP/USSE-to-HLSL translation exists, and it does
 not return a success-shaped placeholder. The remaining deferred HLE categories

@@ -47,6 +47,7 @@
 #define TLS_BASE    UINT32_C(0x10E00000)
 #define TLS_SIZE    UINT32_C(0x00200000)
 #define MAIN_STACK  UINT32_C(0x106F0000)
+#define SHADER_DIAGNOSTIC_LIMIT 16u
 
 void vita_hle_memcpy(void);
 void vita_hle_strlen(void);
@@ -172,9 +173,12 @@ typedef struct diagnostics {
     uint32_t total;
     uint32_t import_errors;
     uint32_t shader_censuses;
+    uint32_t shader_family_lines;
+    uint32_t shader_event_count;
     char library[64];
     char function[64];
-    char shader_message[256];
+    char shader_message[384];
+    char shader_events[SHADER_DIAGNOSTIC_LIMIT][384];
 } diagnostics;
 
 static diagnostics g_diagnostics;
@@ -222,11 +226,25 @@ static void diagnostic(const vita_diagnostic *event, void *userdata) {
         snprintf(state->function, sizeof(state->function), "%s",
                  event->function_name ? event->function_name : "");
     }
-    if (event->code == VITA_DIAG_RUNTIME && event->message &&
-        strstr(event->message, "USSE census")) {
-        state->shader_censuses++;
-        snprintf(state->shader_message, sizeof(state->shader_message), "%s",
-                 event->message);
+    if (event->code == VITA_DIAG_RUNTIME && event->message) {
+        const int is_census = strstr(event->message, "USSE census") != NULL;
+        const int is_family = strstr(event->message, "USSE family") != NULL;
+        if (is_census) {
+            state->shader_censuses++;
+            snprintf(
+                state->shader_message, sizeof(state->shader_message), "%s",
+                event->message);
+        }
+        if (is_family)
+            state->shader_family_lines++;
+        if ((is_census || is_family) &&
+            state->shader_event_count < SHADER_DIAGNOSTIC_LIMIT) {
+            snprintf(
+                state->shader_events[state->shader_event_count],
+                sizeof(state->shader_events[state->shader_event_count]), "%s",
+                event->message);
+            state->shader_event_count++;
+        }
     }
 }
 
@@ -1078,14 +1096,58 @@ static void test_gxm(void) {
     vita_write32(program + 8u, UINT32_C(0x100));
 
     const uint32_t instruction = program + UINT32_C(0xF0);
-    vita_write32(program + 60u, 1u);
+    vita_write32(program + 60u, 2u);
     vita_write32(program + 64u, UINT32_C(0xB0));
     vita_write32(program + 68u, 0u);
     vita_write32(program + 72u, 0u);
     vita_write32(instruction, 0u);
-    vita_write32(instruction + 4u, UINT32_C(0x08000000));
+    vita_write32(instruction + 4u, UINT32_C(0xA8008000));
+    vita_write32(instruction + 8u, 0u);
+    vita_write32(instruction + 12u, UINT32_C(0xB0000000));
     vita_guest_call_result shader_result;
+    const uint32_t census_before_illegal = g_diagnostics.shader_censuses;
+    const uint32_t families_before_illegal =
+        g_diagnostics.shader_family_lines;
+    const uint32_t events_before_illegal = g_diagnostics.shader_event_count;
+    set_create_vertex_program_args(
+        patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
+        vertex_program_out);
+    assert(vita_guest_call(create_vertex_program_entry, &shader_result) ==
+           VITA_OK);
+    assert(shader_result.outcome == VITA_GUEST_CALL_STRICT_FAILURE);
+    assert(shader_result.failure.kind ==
+           VITA_STRICT_FAILURE_UNTRANSLATED_INSTRUCTION);
+    assert(shader_result.failure.source_address == 0u);
+    assert(shader_result.failure.raw_instruction == 0u);
+    assert(strcmp(
+               shader_result.failure.name,
+               "SceGxm::USSE_ILLEGAL instruction rejected") == 0);
+    assert(g_diagnostics.shader_censuses == census_before_illegal + 1u);
+    assert(g_diagnostics.shader_family_lines ==
+           families_before_illegal + 2u);
+    assert(g_diagnostics.shader_event_count == events_before_illegal + 3u);
+    assert(strcmp(
+               g_diagnostics.shader_events[events_before_illegal],
+               "sceGxmShaderPatcherCreateVertexProgram USSE census: "
+               "total=2 classified=1 unclassified=1 illegal=1 "
+               "first_unclassified=PRIMARY/0/UNKNOWN "
+               "first_illegal=PRIMARY/1/ILLEGAL22") == 0);
+    assert(strcmp(
+               g_diagnostics.shader_events[events_before_illegal + 1u],
+               "sceGxmShaderPatcherCreateVertexProgram USSE family: "
+               "family=UNKNOWN count=1") == 0);
+    assert(strcmp(
+               g_diagnostics.shader_events[events_before_illegal + 2u],
+               "sceGxmShaderPatcherCreateVertexProgram USSE family: "
+               "family=ILLEGAL22 count=1") == 0);
+    assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
+    assert(g_patcher_alloc_calls == 3u);
+
+    vita_write32(program + 60u, 1u);
     const uint32_t census_before_unknown = g_diagnostics.shader_censuses;
+    const uint32_t families_before_unknown =
+        g_diagnostics.shader_family_lines;
+    const uint32_t events_before_unknown = g_diagnostics.shader_event_count;
     set_create_vertex_program_args(
         patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
         vertex_program_out);
@@ -1100,13 +1162,19 @@ static void test_gxm(void) {
                shader_result.failure.name,
                "SceGxm::USSE_UNKNOWN instruction unsupported") == 0);
     assert(g_diagnostics.shader_censuses == census_before_unknown + 1u);
-    assert(strstr(
-               g_diagnostics.shader_message,
-               "total=1 decoded=0 unsupported=1") != NULL);
-    assert(strstr(
-               g_diagnostics.shader_message,
-               "first=PRIMARY/0/UNKNOWN") != NULL);
-    assert(strstr(g_diagnostics.shader_message, "0x") == NULL);
+    assert(g_diagnostics.shader_family_lines ==
+           families_before_unknown + 1u);
+    assert(g_diagnostics.shader_event_count == events_before_unknown + 2u);
+    assert(strcmp(
+               g_diagnostics.shader_events[events_before_unknown],
+               "sceGxmShaderPatcherCreateVertexProgram USSE census: "
+               "total=1 classified=0 unclassified=1 illegal=0 "
+               "first_unclassified=PRIMARY/0/UNKNOWN "
+               "first_illegal=NONE/0/NONE") == 0);
+    assert(strcmp(
+               g_diagnostics.shader_events[events_before_unknown + 1u],
+               "sceGxmShaderPatcherCreateVertexProgram USSE family: "
+               "family=UNKNOWN count=1") == 0);
     assert(vita_read32(vertex_program_out) == UINT32_C(0xA5A5A5A5));
     assert(g_patcher_alloc_calls == 3u);
 
@@ -1114,6 +1182,10 @@ static void test_gxm(void) {
     vita_write32(instruction + 4u, UINT32_C(0x38000000));
     const uint32_t census_before_translation =
         g_diagnostics.shader_censuses;
+    const uint32_t families_before_translation =
+        g_diagnostics.shader_family_lines;
+    const uint32_t events_before_translation =
+        g_diagnostics.shader_event_count;
     set_create_vertex_program_args(
         patcher, registration, vertex_attributes, 1u, vertex_streams, 1u,
         vertex_program_out);
@@ -1128,12 +1200,20 @@ static void test_gxm(void) {
            0);
     assert(g_diagnostics.shader_censuses ==
            census_before_translation + 1u);
-    assert(strstr(
-               g_diagnostics.shader_message,
-               "total=1 decoded=1 unsupported=0") != NULL);
-    assert(strstr(
-               g_diagnostics.shader_message,
-               "first=NONE/0/NONE") != NULL);
+    assert(g_diagnostics.shader_family_lines ==
+           families_before_translation + 1u);
+    assert(g_diagnostics.shader_event_count ==
+           events_before_translation + 2u);
+    assert(strcmp(
+               g_diagnostics.shader_events[events_before_translation],
+               "sceGxmShaderPatcherCreateVertexProgram USSE census: "
+               "total=1 classified=1 unclassified=0 illegal=0 "
+               "first_unclassified=NONE/0/NONE "
+               "first_illegal=NONE/0/NONE") == 0);
+    assert(strcmp(
+               g_diagnostics.shader_events[events_before_translation + 1u],
+               "sceGxmShaderPatcherCreateVertexProgram USSE family: "
+               "family=VMOV count=1") == 0);
     assert(vita_read32(vertex_program_out) == UINT32_C(0x5A5A5A5A));
     assert(g_patcher_alloc_calls == 3u);
 

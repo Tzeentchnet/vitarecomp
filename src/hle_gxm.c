@@ -968,29 +968,55 @@ void vita_hle_sceGxmShaderPatcherCreateVertexProgram(void) {
         return;
     }
 
-    const char *first_phase = census.unsupported != 0u
-        ? vita_usse_phase_name(census.first_unsupported_phase)
+    const char *first_unclassified_phase = census.unclassified != 0u
+        ? vita_usse_phase_name(census.first_unclassified_phase)
         : "NONE";
-    const char *first_family = census.unsupported != 0u
-        ? vita_usse_opcode_family_name(census.first_unsupported_family)
+    const char *first_unclassified_family = census.unclassified != 0u
+        ? vita_usse_opcode_family_name(census.first_unclassified_family)
         : "NONE";
-    const uint32_t first_index = census.unsupported != 0u
-        ? census.first_unsupported_index
+    const uint32_t first_unclassified_index = census.unclassified != 0u
+        ? census.first_unclassified_index
+        : 0u;
+    const char *first_illegal_phase = census.illegal != 0u
+        ? vita_usse_phase_name(census.first_illegal_phase)
+        : "NONE";
+    const char *first_illegal_family = census.illegal != 0u
+        ? vita_usse_opcode_family_name(census.first_illegal_family)
+        : "NONE";
+    const uint32_t first_illegal_index = census.illegal != 0u
+        ? census.first_illegal_index
         : 0u;
     vita_hle_trace(
         "sceGxmShaderPatcherCreateVertexProgram USSE census: "
-        "total=%llu decoded=%llu unsupported=%llu "
-        "UNKNOWN=%llu VMOV=%llu PHAS=%llu first=%s/%u/%s",
+        "total=%llu classified=%llu unclassified=%llu illegal=%llu "
+        "first_unclassified=%s/%u/%s first_illegal=%s/%u/%s",
         (unsigned long long)census.total,
-        (unsigned long long)census.decoded,
-        (unsigned long long)census.unsupported,
-        (unsigned long long)census.family_counts[VITA_USSE_OPCODE_UNKNOWN],
-        (unsigned long long)census.family_counts[VITA_USSE_OPCODE_VMOV],
-        (unsigned long long)census.family_counts[VITA_USSE_OPCODE_PHAS],
-        first_phase, first_index, first_family);
+        (unsigned long long)census.classified,
+        (unsigned long long)census.unclassified,
+        (unsigned long long)census.illegal,
+        first_unclassified_phase, first_unclassified_index,
+        first_unclassified_family, first_illegal_phase, first_illegal_index,
+        first_illegal_family);
+    for (size_t family_index = 0;
+         family_index < (size_t)VITA_USSE_OPCODE_FAMILY_COUNT;
+         family_index++) {
+        if (census.family_counts[family_index] == 0u)
+            continue;
+        vita_hle_trace(
+            "sceGxmShaderPatcherCreateVertexProgram USSE family: "
+            "family=%s count=%llu",
+            vita_usse_opcode_family_name(
+                (vita_usse_opcode_family)family_index),
+            (unsigned long long)census.family_counts[family_index]);
+    }
 
     r0 = SCE_GXM_ERROR_INVALID_VALUE;
-    if (census.unsupported != 0u) {
+    if (census.illegal != 0u) {
+        vita_trap_unimpl(
+            0u, 0u, "SceGxm::USSE_ILLEGAL instruction rejected");
+        return;
+    }
+    if (census.unclassified != 0u) {
         vita_trap_unimpl(
             0u, 0u, "SceGxm::USSE_UNKNOWN instruction unsupported");
         return;
