@@ -619,19 +619,28 @@ vita_reloc_status vita_reloc_parse_elf(
     return status;
 }
 
-vita_reloc_status vita_reloc_validate_elf_identity(
+static vita_reloc_status inspect_elf_identity(
     const uint8_t *bytes,
     size_t size,
+    int require_identity,
     vita_reloc_table *out,
     vita_reloc_identity *identity,
-    vita_reloc_error *error) {
+    vita_reloc_error *error,
+    vita_reloc_program_header **out_headers,
+    vita_reloc_module *out_module) {
     vita_reloc_program_header *headers;
     vita_reloc_module module;
     vita_reloc_status status;
     uint32_t index;
-    if (!out || !identity) return VITA_RELOC_ERROR_INVALID_ARGUMENT;
+    if (!out || !identity || !out_headers || !out_module)
+        return fail(error, VITA_RELOC_ERROR_INVALID_ARGUMENT,
+                    VITA_RELOC_INDEX_NONE, VITA_RELOC_INDEX_NONE,
+                    VITA_RELOC_INDEX_NONE,
+                    "invalid identity relocation argument");
     memset(out, 0, sizeof(*out));
     memset(identity, 0, sizeof(*identity));
+    *out_headers = NULL;
+    memset(out_module, 0, sizeof(*out_module));
     clear_error(error);
     status = extract_elf_module(bytes, size, &headers, &module, error);
     if (status != VITA_RELOC_OK) return status;
@@ -664,29 +673,92 @@ vita_reloc_status vita_reloc_validate_elf_identity(
     }
     status = vita_reloc_verify_identity(
         bytes, size, &module, out, identity);
-    free(headers);
     if (status != VITA_RELOC_OK)
-        return fail(error, status, VITA_RELOC_INDEX_NONE,
-                    VITA_RELOC_INDEX_NONE, VITA_RELOC_INDEX_NONE,
-                    "identity relocation verification failed");
-    if (identity->unsupported)
-        return fail(error, VITA_RELOC_ERROR_UNSUPPORTED_CODE,
+        status = fail(error, status, VITA_RELOC_INDEX_NONE,
+                      VITA_RELOC_INDEX_NONE, VITA_RELOC_INDEX_NONE,
+                      "identity relocation verification failed");
+    else if (identity->unsupported)
+        status = fail(error, VITA_RELOC_ERROR_UNSUPPORTED_CODE,
                     VITA_RELOC_INDEX_NONE, identity->first_unsupported,
                     VITA_RELOC_INDEX_NONE,
                     "unsupported relocation code at record %u",
                     identity->first_unsupported);
-    if (identity->outside)
-        return fail(error, VITA_RELOC_ERROR_PATCH_OUTSIDE_FILE,
+    else if (identity->outside)
+        status = fail(error, VITA_RELOC_ERROR_PATCH_OUTSIDE_FILE,
                     VITA_RELOC_INDEX_NONE, identity->first_outside,
                     VITA_RELOC_INDEX_NONE,
                     "relocation patch is outside declared file bytes at record %u",
                     identity->first_outside);
-    if (identity->changed)
-        return fail(error, VITA_RELOC_ERROR_NOT_IDENTITY,
+    else if (require_identity && identity->changed)
+        status = fail(error, VITA_RELOC_ERROR_NOT_IDENTITY,
                     VITA_RELOC_INDEX_NONE, identity->first_changed,
                     VITA_RELOC_INDEX_NONE,
                     "post-link bytes are not identity-relocated at record %u",
                     identity->first_changed);
+    if (status != VITA_RELOC_OK) {
+        free(headers);
+        return status;
+    }
+    *out_headers = headers;
+    *out_module = module;
+    return VITA_RELOC_OK;
+}
+
+vita_reloc_status vita_reloc_validate_elf_identity(
+    const uint8_t *bytes,
+    size_t size,
+    vita_reloc_table *out,
+    vita_reloc_identity *identity,
+    vita_reloc_error *error) {
+    vita_reloc_program_header *headers;
+    vita_reloc_module module;
+    vita_reloc_status status = inspect_elf_identity(
+        bytes, size, 1, out, identity, error, &headers, &module);
+    free(headers);
+    return status;
+}
+
+vita_reloc_status vita_reloc_normalize_elf_identity(
+    uint8_t *bytes,
+    size_t size,
+    vita_reloc_table *out,
+    vita_reloc_identity *identity,
+    vita_reloc_error *error) {
+    vita_reloc_program_header *headers;
+    vita_reloc_module module;
+    vita_reloc_identity before;
+    vita_reloc_identity after;
+    vita_reloc_status status = inspect_elf_identity(
+        bytes, size, 0, out, &before, error, &headers, &module);
+    if (status != VITA_RELOC_OK) return status;
+    status = vita_reloc_apply(bytes, size, &module, out, &after);
+    if (status == VITA_RELOC_OK)
+        status = vita_reloc_verify_identity(
+            bytes, size, &module, out, &after);
+    free(headers);
+    if (status != VITA_RELOC_OK)
+        return fail(error, status, VITA_RELOC_INDEX_NONE,
+                    VITA_RELOC_INDEX_NONE, VITA_RELOC_INDEX_NONE,
+                    "identity relocation normalization failed");
+    if (after.unsupported)
+        return fail(error, VITA_RELOC_ERROR_UNSUPPORTED_CODE,
+                    VITA_RELOC_INDEX_NONE, after.first_unsupported,
+                    VITA_RELOC_INDEX_NONE,
+                    "normalization left unsupported relocation code at record %u",
+                    after.first_unsupported);
+    if (after.outside)
+        return fail(error, VITA_RELOC_ERROR_PATCH_OUTSIDE_FILE,
+                    VITA_RELOC_INDEX_NONE, after.first_outside,
+                    VITA_RELOC_INDEX_NONE,
+                    "normalization left an out-of-file patch at record %u",
+                    after.first_outside);
+    if (after.changed)
+        return fail(error, VITA_RELOC_ERROR_NOT_IDENTITY,
+                    VITA_RELOC_INDEX_NONE, after.first_changed,
+                    VITA_RELOC_INDEX_NONE,
+                    "normalization did not materialize record %u",
+                    after.first_changed);
+    *identity = before;
     return VITA_RELOC_OK;
 }
 

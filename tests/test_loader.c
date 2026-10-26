@@ -31,6 +31,13 @@ static void wr32(uint8_t *bytes, size_t offset, uint32_t value) {
     bytes[offset + 3] = (uint8_t)(value >> 24);
 }
 
+static uint32_t rd32(const uint8_t *bytes, size_t offset) {
+    return (uint32_t)bytes[offset + 0] |
+           ((uint32_t)bytes[offset + 1] << 8) |
+           ((uint32_t)bytes[offset + 2] << 16) |
+           ((uint32_t)bytes[offset + 3] << 24);
+}
+
 static size_t ph_offset(uint32_t index) {
     return PHOFF + (size_t)index * PH_SIZE;
 }
@@ -440,6 +447,77 @@ static void test_relocation_identity_validation(void) {
     puts("  strict relocation identity       ok");
 }
 
+static void test_relocation_identity_normalization(void) {
+    uint8_t image[IMAGE_SIZE];
+    uint8_t original[IMAGE_SIZE];
+    vita_reloc_table table;
+    vita_reloc_identity identity;
+    vita_reloc_error error;
+
+    make_relocation_elf(image, 12);
+    wr32(image, 0x180, (0xFu << 4) | (VITA_RELOC_ABS32 << 8));
+    wr32(image, 0x184, 0x88776655u);
+    wr32(image, 0x188, 0);
+    memcpy(original, image, sizeof(image));
+    assert(vita_reloc_normalize_elf_identity(
+               image, sizeof(image), &table, &identity, &error) ==
+           VITA_RELOC_OK);
+    assert(identity.changed == 1 && identity.unsupported == 0 &&
+           identity.outside == 0);
+    assert(rd32(image, 0x100) == 0x88776655u);
+    assert(memcmp(image, original, sizeof(image)) != 0);
+    vita_reloc_free(&table);
+
+    assert(vita_reloc_normalize_elf_identity(
+               image, sizeof(image), &table, &identity, &error) ==
+           VITA_RELOC_OK);
+    assert(identity.changed == 0 && identity.unsupported == 0 &&
+           identity.outside == 0);
+    vita_reloc_free(&table);
+
+    make_relocation_elf(image, 12);
+    wr32(image, 0x180, (0xFu << 4) | (0x7Eu << 8));
+    wr32(image, 0x184, 0);
+    wr32(image, 0x188, 0);
+    memcpy(original, image, sizeof(image));
+    assert(vita_reloc_normalize_elf_identity(
+               image, sizeof(image), &table, &identity, &error) ==
+           VITA_RELOC_ERROR_UNSUPPORTED_CODE);
+    assert(memcmp(image, original, sizeof(image)) == 0);
+    vita_reloc_free(&table);
+
+    make_relocation_elf(image, 12);
+    wr32(image, 0x180, (0xFu << 4) | (VITA_RELOC_ABS32 << 8));
+    wr32(image, 0x184, 0x88776655u);
+    wr32(image, 0x188, 8);
+    memcpy(original, image, sizeof(image));
+    assert(vita_reloc_normalize_elf_identity(
+               image, sizeof(image), &table, &identity, &error) ==
+           VITA_RELOC_ERROR_PATCH_OUTSIDE_FILE);
+    assert(memcmp(image, original, sizeof(image)) == 0);
+    vita_reloc_free(&table);
+
+    make_relocation_elf(image, 1);
+    image[0x180] = 0;
+    memcpy(original, image, sizeof(image));
+    assert(vita_reloc_normalize_elf_identity(
+               image, sizeof(image), &table, &identity, &error) ==
+           VITA_RELOC_ERROR_TRUNCATED_RECORD);
+    assert(memcmp(image, original, sizeof(image)) == 0);
+    vita_reloc_free(&table);
+
+    make_elf(image, 0);
+    wr16(image, 0x10, 0xFE00);
+    memcpy(original, image, sizeof(image));
+    assert(vita_reloc_normalize_elf_identity(
+               image, sizeof(image), &table, &identity, &error) ==
+           VITA_RELOC_OK);
+    assert(identity.changed == 0 && table.n == 0 && table.streams == 0);
+    assert(memcmp(image, original, sizeof(image)) == 0);
+    vita_reloc_free(&table);
+    puts("  relocation normalization        ok");
+}
+
 typedef struct extension_state {
     uint32_t calls;
     uint32_t requested;
@@ -521,6 +599,7 @@ int main(void) {
     test_malformed_headers_and_segments();
     test_module_set_transactionality();
     test_relocation_identity_validation();
+    test_relocation_identity_normalization();
     test_validation_extensions();
     vita_mem_free();
     {

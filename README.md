@@ -179,12 +179,18 @@ armrecomp info     <file>                       identify a module, report its st
 armrecomp extract  <self> <out.elf>             SELF in, plain ELF32 out
 armrecomp cover    <elf>                        coverage, class histogram, instruction set
 armrecomp funcs    <elf> [nid-db]               the HLE work list, from the import table
+armrecomp normalize <elf> <out.elf>              materialize identity-load relocations
 armrecomp discover <elf>                        function discovery
 armrecomp emit     [--module-id <id>] <elf> <out.c> [n] [nid-db]
                                                 translate to C
 armrecomp compose --entry-module <id> --output <registry.c>
                    <module/report JSON>...       compose generated modules
 ```
+
+`normalize` writes a separate ELF only after the complete PT_SCE_RELA stream
+decodes, every relocation is supported and targets declared file bytes, and a
+second identity check reports zero remaining changes. It refuses an existing
+output and never modifies the input.
 
 `emit` also writes deterministic `<out>.report.json` and
 `<out>.report.txt` files with the strict unsupported/trap census, structural

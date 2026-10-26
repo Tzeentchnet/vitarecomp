@@ -136,6 +136,16 @@ vita_reloc_status vita_reloc_validate_elf_identity(
     vita_reloc_identity *identity,
     vita_reloc_error *error);
 
+/* Materialize the identity-load result in a writable ELF32 image. Validation
+ * completes before bytes are changed. On success, identity reports the state
+ * before normalization, and a second call reports zero changed records. */
+vita_reloc_status vita_reloc_normalize_elf_identity(
+    uint8_t *bytes,
+    size_t size,
+    vita_reloc_table *out,
+    vita_reloc_identity *identity,
+    vita_reloc_error *error);
+
 /* Compare the declared post-link bytes with the identity-load result without
  * modifying them. Strict runtime preflight rejects every non-zero counter. */
 vita_reloc_status vita_reloc_verify_identity(

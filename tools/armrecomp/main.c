@@ -38,6 +38,7 @@ static const char *USAGE =
     "  armrecomp cover   <file.elf>      decode-coverage report\n"
     "  armrecomp funcs   <file.elf> [niddb]  module info and the HLE work list\n"
     "  armrecomp relocs  <file.elf>      the relocation stream, decoded and classified\n"
+    "  armrecomp normalize <file.elf> <out.elf>  materialize identity relocations\n"
     "  armrecomp discover <file.elf>     function discovery\n"
     "  armrecomp emit    [--module-id <id>] <file.elf> <out.c> [n] [niddb]\n"
     "                    translate to C + deterministic reports and module sidecar\n"
@@ -214,6 +215,93 @@ static int cmd_info(const char *path) {
  * independent numbers have to agree: the inflated size against `p_filesz`, the
  * Adler-32 against the segment bytes, and the total against `elf_filesize`.
  */
+
+static int file_exists(const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+    fclose(file);
+    return 1;
+}
+
+static int publish_binary(
+    const char *outpath,
+    const uint8_t *bytes,
+    size_t size) {
+    size_t path_length = strlen(outpath);
+    char *temporary;
+    FILE *file;
+    int failed = 0;
+    if (path_length > SIZE_MAX - 5u) return 1;
+    temporary = (char *)malloc(path_length + 5u);
+    if (!temporary) return 1;
+    memcpy(temporary, outpath, path_length);
+    memcpy(temporary + path_length, ".tmp", 5u);
+    file = fopen(temporary, "wbx");
+    if (!file) {
+        free(temporary);
+        return 1;
+    }
+    if (size && fwrite(bytes, 1, size, file) != size) failed = 1;
+    if (fflush(file) != 0) failed = 1;
+    if (fclose(file) != 0) failed = 1;
+    if (!failed && rename(temporary, outpath) != 0) failed = 1;
+    if (failed) (void)remove(temporary);
+    free(temporary);
+    return failed;
+}
+
+static int cmd_normalize(const char *path, const char *outpath) {
+    size_t size = 0;
+    uint8_t *bytes;
+    vita_reloc_table table;
+    vita_reloc_identity identity;
+    vita_reloc_error error;
+    vita_reloc_status status;
+    if (strcmp(path, outpath) == 0) {
+        fputs("armrecomp: normalize: input and output must differ\n", stderr);
+        return 1;
+    }
+    if (file_exists(outpath)) {
+        fputs("armrecomp: normalize: output already exists\n", stderr);
+        return 1;
+    }
+    bytes = slurp(path, &size);
+    if (!bytes) {
+        fputs("armrecomp: normalize: cannot read input\n", stderr);
+        return 1;
+    }
+    status = vita_reloc_normalize_elf_identity(
+        bytes, size, &table, &identity, &error);
+    if (status != VITA_RELOC_OK) {
+        fprintf(stderr, "armrecomp: normalize: %s",
+                error.message[0] ? error.message
+                                 : "relocation normalization failed");
+        if (error.program_header_index != VITA_RELOC_INDEX_NONE)
+            fprintf(stderr, " (program header %u)",
+                    error.program_header_index);
+        if (error.record_index != VITA_RELOC_INDEX_NONE)
+            fprintf(stderr, " (record %u)", error.record_index);
+        fputc('\n', stderr);
+        vita_reloc_free(&table);
+        free(bytes);
+        return 1;
+    }
+    if (publish_binary(outpath, bytes, size)) {
+        fputs("armrecomp: normalize: cannot publish output\n", stderr);
+        vita_reloc_free(&table);
+        free(bytes);
+        return 1;
+    }
+    printf("normalized %u relocation%s across %u stream%s\n",
+           table.n, table.n == 1u ? "" : "s",
+           table.streams, table.streams == 1u ? "" : "s");
+    printf("  changed       %u\n", identity.changed);
+    printf("  unsupported   %u\n", identity.unsupported);
+    printf("  outside file  %u\n", identity.outside);
+    vita_reloc_free(&table);
+    free(bytes);
+    return 0;
+}
 
 static int cmd_extract(const char *path, const char *outpath) {
     size_t size = 0;
@@ -1140,6 +1228,9 @@ int main(int argc, char **argv) {
 
     if (strcmp(argv[1], "relocs") == 0 && argc >= 3)
         return cmd_relocs(argv[2]);
+
+    if (strcmp(argv[1], "normalize") == 0 && argc == 4)
+        return cmd_normalize(argv[2], argv[3]);
 
     if (strcmp(argv[1], "emit") == 0)
         return cmd_emit_args(argc, argv);
