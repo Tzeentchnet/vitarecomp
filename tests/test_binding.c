@@ -349,6 +349,27 @@ static void test_success_and_cross_module_resolution(void) {
     vita_binding_view_destroy(&view);
 }
 
+static void test_zero_site_variable_resolution(void) {
+    binding_fixture fixture;
+    vita_binding_view view = {0};
+    vita_binding_error error;
+    make_fixture(&fixture);
+    fixture.generated_variables[1].abs_sites = NULL;
+    fixture.generated_variables[1].abs_count = 0;
+    fixture.metadata_variables[1].target_address = 0;
+    fixture.metadata_variables[1].abs_sites = NULL;
+    fixture.metadata_variables[1].abs_count = 0;
+    fixture.provided_value = UINT32_C(0xDEADBEEF);
+    vita_write32(B_PATCH_1, UINT32_C(0xCAFEBABE));
+
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 1,
+               &view, &error) == VITA_BINDING_OK);
+    assert(fixture.provided_value == PROVIDER_ADDRESS);
+    assert(vita_read32(B_PATCH_1) == UINT32_C(0xCAFEBABE));
+    vita_binding_view_destroy(&view);
+}
+
 static void test_duplicates_and_mode_mismatch(void) {
     binding_fixture fixture;
     vita_binding_view view = {0};
@@ -456,6 +477,13 @@ static void test_bad_patch_sites_and_addends(void) {
     assert_error(&error, VITA_BINDING_ERROR_FUNCTION_METADATA, 1, 0);
 
     make_fixture(&fixture);
+    fixture.metadata_variables[0].target_address = 0;
+    assert(vita_binding_install_module_set(
+               fixture.modules, 2, fixture.providers, 1,
+               &view, &error) == VITA_BINDING_ERROR_VARIABLE_METADATA);
+    assert_error(&error, VITA_BINDING_ERROR_VARIABLE_METADATA, 1, 0);
+
+    make_fixture(&fixture);
     fixture.generated_sites[0].addr = MODULE_B + MODULE_SIZE;
     fixture.metadata_sites[0].addr = MODULE_B + MODULE_SIZE;
     assert(vita_binding_install_module_set(
@@ -559,6 +587,7 @@ int main(void) {
     register_hle();
     test_checked_dispatch_api();
     test_success_and_cross_module_resolution();
+    test_zero_site_variable_resolution();
     test_duplicates_and_mode_mismatch();
     test_unresolved_imports();
     test_bad_patch_sites_and_addends();

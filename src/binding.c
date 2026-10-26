@@ -905,7 +905,8 @@ vita_binding_status vita_binding_install_module_set(
             if (matches != 1u || !variable->value || !metadata ||
                 !exact_pointer_count(metadata->abs_sites,
                                      metadata->abs_count) ||
-                metadata->abs_count != variable->abs_count) {
+                metadata->abs_count != variable->abs_count ||
+                (!metadata->target_address && metadata->abs_count)) {
                 status = binding_fail(
                     error, VITA_BINDING_ERROR_VARIABLE_METADATA,
                     VITA_BINDING_RECORD_VARIABLE_IMPORT, (uint32_t)i, g,
@@ -961,7 +962,8 @@ vita_binding_status vita_binding_install_module_set(
                     metadata_index, VITA_BINDING_INDEX_NONE);
                 goto fail;
             }
-            if (metadata->target_address != address) {
+            if (metadata->target_address &&
+                metadata->target_address != address) {
                 status = binding_fail(
                     error, VITA_BINDING_ERROR_VARIABLE_TARGET_MISMATCH,
                     VITA_BINDING_RECORD_VARIABLE_IMPORT, (uint32_t)i,

@@ -336,6 +336,9 @@ A post-link function target is accepted only when its NID selects a generated
 function export, an exact dynamic HLE registration exists, or the import names
 an explicit generated strict-unsupported target. The loaded target word must
 equal the validated post-link record. There is no unresolved-success path.
+When the NID database has no display name, the emitter records the deterministic
+`nid_<library>::nid_<function>` identity so the default remains a named strict
+trap rather than an unresolved or silent fallback.
 Import-stub dispatch entries are rebound to the selected generated or HLE
 function before the single merged table is installed.
 
@@ -343,7 +346,10 @@ Variable imports resolve from exactly one variable/TLS-variable export or
 explicit runtime provider. Generated value storage and strict-loader ABS32
 records must agree one-for-one. Every site must be aligned, inside its importing
 module, free of address/addend overflow, and already contain the validated
-post-link value. The binder preflights every function target, variable source,
+post-link value. An imported variable with a zero-site relocation block carries
+a zero target marker: its generated storage still resolves from the unique
+provider, but there is no guest target word to compare or patch. The binder
+preflights every function target, variable source,
 storage pointer, and guest word before changing any generated storage or guest
 memory; failure therefore leaves both memory and the previous dispatcher
 untouched. Structured failures identify module, record, and site indices only.

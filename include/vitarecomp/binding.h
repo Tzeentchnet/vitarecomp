@@ -56,7 +56,9 @@ typedef struct vita_binding_function_import_metadata {
 } vita_binding_function_import_metadata;
 
 /* Only guest ABS32 sites are represented here. MOVW/MOVT imports use the
- * generated value storage and are validated by the strict relocation parser. */
+ * generated value storage and are validated by the strict relocation parser.
+ * A zero-site relocation block has no loaded target to inspect, so
+ * target_address is zero while the generated storage still resolves normally. */
 typedef struct vita_binding_variable_import_metadata {
     uint32_t library_nid;
     uint32_t variable_nid;

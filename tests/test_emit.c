@@ -375,6 +375,8 @@ int main(void) {
     assert(strstr(module_text,
                   "const vita_fn_import "
                   "vita_fn_imports_synthetic_mod[]"));
+    assert(strstr(module_text,
+                  "\"nid_10203040::nid_AABBCCDD\", 1u"));
     assert(!strstr(module_text, "vita_hle_synthetic_mod"));
     assert(strstr(module_text,
                   "const vita_generated_module_descriptor "
@@ -419,7 +421,9 @@ int main(void) {
                   "\"targetSlot\": "
                   "\"vita_import_target_synthetic_mod_000010A4\""));
     assert(strstr(versioned_sidecar,
-                  "\"strictUnsupported\": false"));
+                  "\"name\": \"nid_10203040::nid_AABBCCDD\""));
+    assert(strstr(versioned_sidecar,
+                  "\"strictUnsupported\": true"));
     assert(count_text(versioned_sidecar, "\"kind\": ") ==
            module_stats.dispatch_entries);
     assert(strstr(versioned_sidecar,

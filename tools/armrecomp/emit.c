@@ -587,6 +587,17 @@ static void hle_symbol(char *dst, size_t cap, const nid_db *db,
     else   snprintf(dst, cap, "vita_hle_nid_%08X", s->func_nid);
 }
 
+static void import_display_name(char *dst, size_t cap, const nid_db *db,
+                                const vm_stub *s) {
+    const char *lib = nid_lib_name(db, s->lib_nid);
+    const char *name = nid_func_name(db, s->lib_nid, s->func_nid);
+    if (name)
+        snprintf(dst, cap, "%s::%s", lib ? lib : "?", name);
+    else
+        snprintf(dst, cap, "nid_%08X::nid_%08X",
+                 s->lib_nid, s->func_nid);
+}
+
 static void import_target_symbol(char *dst, size_t cap,
                                  const vm_stub *s,
                                  const char *module_id) {
@@ -2484,10 +2495,9 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
             mod->stub_count);
     for (uint32_t i = 0; i < mod->stub_count; i++) {
         const vm_stub *s = &mod->stubs[i];
-        const char *lib = nid_lib_name(db, s->lib_nid);
-        const char *name = nid_func_name(db, s->lib_nid, s->func_nid);
         char sym[96], target[128], full_name[192];
         hle_symbol(sym, sizeof(sym), db, s);
+        import_display_name(full_name, sizeof(full_name), db, s);
         import_target_symbol(target, sizeof(target), s, module_id);
         fprintf(j, "    {\"key\": \"0x%08X\", \"stubAddress\": "
                    "\"0x%08X\", \"targetSite\": \"0x%08X\", "
@@ -2495,19 +2505,12 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
                    "\"functionNid\": \"0x%08X\", \"name\": ",
                 s->addr | 1u, s->addr, s->target_site,
                 s->lib_nid, s->func_nid);
-        if (name) {
-            snprintf(full_name, sizeof(full_name), "%s::%s",
-                     lib ? lib : "?", name);
-            json_string(j, full_name);
-        } else {
-            fputs("null", j);
-        }
+        json_string(j, full_name);
         fputs(", \"symbol\": ", j);
         json_string(j, sym);
         fputs(", \"targetSlot\": ", j);
         json_string(j, target);
-        fprintf(j, ", \"strictUnsupported\": %s}%s\n",
-                name ? "true" : "false",
+        fprintf(j, ", \"strictUnsupported\": true}%s\n",
                 i + 1 == mod->stub_count ? "" : ",");
     }
     fputs("  ]},\n", j);
@@ -2889,10 +2892,11 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
     if (impdir) {
         for (uint32_t i = 0; i < mod->stub_count; i++) {
             const vm_stub *s = &mod->stubs[i];
-            char sym[96];
+            char sym[96], full_name[192];
             hle_symbol(sym, sizeof(sym), db, s);
             const char *lib = nid_lib_name(db, s->lib_nid);
             const char *fn  = nid_func_name(db, s->lib_nid, s->func_nid);
+            import_display_name(full_name, sizeof(full_name), db, s);
 
             char path[1200];
             snprintf(path, sizeof(path), "%s/%s.c", impdir, sym);
@@ -2913,17 +2917,11 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
             fprintf(one, " * library, so the linker stops extracting it. Nothing to delete.\n");
             fprintf(one, " */\n\n");
             fprintf(one, "#include \"vitarecomp/recomp_rt.h\"\n\n");
-            /* The name goes into the trap, not just the comment: at run time
-             * the NID alone is a hash, and the whole reason imports are bound
-             * is so a gap says which firmware function the game wanted. */
-            if (fn)
-                fprintf(one,
-                        "void %s(void) { vita_trap_import(0x%08X, 0x%08X, \"%s::%s\"); }\n",
-                        sym, s->addr, s->func_nid, lib ? lib : "?", fn);
-            else
-                fprintf(one,
-                        "void %s(void) { vita_trap_import(0x%08X, 0x%08X, 0); }\n",
-                        sym, s->addr, s->func_nid);
+            fprintf(one,
+                    "void %s(void) { vita_trap_import(0x%08X, 0x%08X, ",
+                    sym, s->addr, s->func_nid);
+            c_string(one, full_name);
+            fputs("); }\n", one);
             if (fclose(one) != 0) generation_error = 1;
             st->imports_used++;
         }
@@ -3006,22 +3004,15 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
         fprintf(f, "const vita_fn_import %s[] = {\n", imports_sym);
         for (uint32_t i = 0; i < mod->stub_count; i++) {
             const vm_stub *s = &mod->stubs[i];
-            const char *lib = nid_lib_name(db, s->lib_nid);
-            const char *fn = nid_func_name(db, s->lib_nid, s->func_nid);
             char target[128], full_name[192];
+            import_display_name(full_name, sizeof(full_name), db, s);
             import_target_symbol(target, sizeof(target), s, module_id);
             fprintf(f,
                     "    { 0x%08Xu, 0x%08Xu, 0x%08Xu, 0x%08Xu, ",
                     s->lib_nid, s->func_nid, s->addr | 1u,
                     s->target_site);
-            if (fn) {
-                snprintf(full_name, sizeof(full_name), "%s::%s",
-                         lib ? lib : "?", fn);
-                c_string(f, full_name);
-            } else {
-                fputs("0", f);
-            }
-            fprintf(f, ", %uu, &%s },\n", fn ? 1u : 0u, target);
+            c_string(f, full_name);
+            fprintf(f, ", 1u, &%s },\n", target);
         }
         if (!mod->stub_count)
             fprintf(f, "    { 0u, 0u, 0u, 0u, 0, 0u, 0 }\n");
