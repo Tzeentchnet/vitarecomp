@@ -39,11 +39,11 @@ enum {
 };
 
 /* Why an address was seeded, as a set: a function can be named by several
- * of these, and the emitter cares which. The first six are ROOTS, places
- * control can arrive from outside the module's own direct calls: the entry
- * point, an exported symbol, or a pointer the program stores or builds. The
- * other three are reached from code already being followed, so they matter
- * only if what reaches them is itself kept. */
+ * of these, and the emitter cares which. Entry, export, relocation, shape,
+ * and built-pointer evidence are roots where control can arrive from outside
+ * the module's own direct calls. Call, tail, and interwork targets matter only
+ * if code that reaches them is itself kept. Unwind-only entries are retained
+ * when their complete body passes the emitter's clean-body proof. */
 enum {
     VF_R_ENTRY = 1,       /* module_start                                 */
     VF_R_EXPORT = 2,      /* the export table                              */
@@ -61,8 +61,7 @@ enum {
     VF_R_UNWIND = 512, /* an EHABI PREL31 .ARM.exidx function reference */
 };
 #define VF_R_ROOTS                                                             \
-    (VF_R_ENTRY | VF_R_EXPORT | VF_R_UNWIND | VF_R_RELOC | VF_R_SHAPE |        \
-     VF_R_POINTER)
+    (VF_R_ENTRY | VF_R_EXPORT | VF_R_RELOC | VF_R_SHAPE | VF_R_POINTER)
 
 typedef struct {
     uint32_t addr; /* virtual address                      */

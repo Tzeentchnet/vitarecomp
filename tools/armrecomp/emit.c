@@ -1938,7 +1938,7 @@ static uint32_t body_refs(const vm_image *img, const vm_module *mod, const vf_fu
     memset(&b, 0, sizeof(b));
     collect(img, fn, &b);
     uint32_t n = 0;
-    int ok = b.n > 0;
+    int ok = b.n > 0 && b.cut_at == 0;
     for (uint32_t k = 0; k < b.n; k++) {
         const arm_insn *in = &b.v[k];
         if (in->cls == A_UNKNOWN || in->cls == A_UNDEF) ok = 0;
@@ -2004,6 +2004,8 @@ static uint32_t reachable(const vm_image *img, const vm_module *mod, const vf_re
     }
     for (uint32_t i = 0; i < n; i++) {
         int root = (disc->funcs[i].reasons & VF_R_ROOTS) != 0;
+        if (!root && (disc->funcs[i].reasons & VF_R_UNWIND) && clean[i])
+            root = 1;
         if (!root && (disc->funcs[i].reasons & VF_R_WEAK_PTR) && clean[i]) { root = 1; (*promoted)++; }
         if (root) { keep[i] = 1; queue[tail++] = i; }
     }

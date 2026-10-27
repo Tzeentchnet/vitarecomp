@@ -218,7 +218,7 @@ static void test_variable_relocation_segments(void) {
 
 int main(void) {
     static uint8_t code[0x100];
-    static vf_func funcs[12];
+    static vf_func funcs[14];
     vm_image img;
     vm_module mod;
     vf_result disc;
@@ -271,7 +271,14 @@ int main(void) {
     put32(code, 0xB4, 0xE12FFF1Eu);
     put32(code, 0xC0, 0xE1000000u); /* Status-register system form. */
     put32(code, 0xC4, 0xE12FFF1Eu);
+    put32(code, 0xD0, 0xE12FFF1Eu); /* Complete unwind-only function. */
+    for (uint32_t offset = 0xE0; offset < sizeof(code); offset += 4)
+        put32(code, offset, 0xE1A00000u); /* Unwind-only body with no return. */
 
+    add_func(&disc, BASE + 0xE0, ARM_A32);
+    funcs[disc.count - 1].reasons = VF_R_UNWIND;
+    add_func(&disc, BASE + 0xD0, ARM_A32);
+    funcs[disc.count - 1].reasons = VF_R_UNWIND;
     add_func(&disc, BASE + 0xC0, ARM_A32);
     add_func(&disc, BASE + 0xB0, ARM_A32);
     add_func(&disc, BASE + 0x80, ARM_A32);
@@ -308,6 +315,8 @@ int main(void) {
         "vita_dispatch(0x00001020, vita_blx_target); }"));
     assert(strstr(text, "vita_dispatch(0x00001040, r3); return;"));
     assert(strstr(text, "vita_trap_unimpl(0x00001050, 0x1F000007"));
+    assert(strstr(text, "void vita_func_000010D0(void)"));
+    assert(!strstr(text, "void vita_func_000010E0(void)"));
     assert(strstr(text,
         "vita_write8(r0 + 0, (uint8_t)vita_neon_lane(vita_d_get(0), 0, 8));"));
     assert(!strstr(text, "vita_write16(r0 + 0"));
@@ -327,8 +336,10 @@ int main(void) {
     assert(classified_traps == stats.trapped);
     assert(system_trap_kinds == 1);
     assert(system_trap_count == 2);
+    assert(stats.bodies_cut == 0);
+    assert(stats.funcs_dropped == 1);
     assert(stats.part_inventory_count == 1);
-    assert(stats.part_inventory[0].funcs == disc.count);
+    assert(stats.part_inventory[0].funcs == disc.count - stats.funcs_dropped);
     assert(stats.part_inventory[0].first_key <=
            stats.part_inventory[0].last_key);
 
@@ -424,7 +435,7 @@ int main(void) {
     assert(module_stats.pc_instrumented == 1);
     assert(module_stats.structural_ready == 1);
     assert(module_stats.production_ready == 0);
-    assert(module_stats.dispatch_entries == disc.count + 1);
+    assert(module_stats.dispatch_entries == disc.count);
 
     char *module_text = read_all(module_path);
     char *module_header = read_all("test_emit_module.h");
