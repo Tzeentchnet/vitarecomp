@@ -25,17 +25,15 @@
 #define MAX_INSNS_PER_FUNC 65536
 
 int em_module_id_valid(const char *module_id) {
-    if (!module_id || !module_id[0])
-        return 0;
+    if (!module_id || !module_id[0]) return 0;
     size_t n = strlen(module_id);
-    if (n > EM_MODULE_ID_MAX)
-        return 0;
+    if (n > EM_MODULE_ID_MAX) return 0;
     unsigned char c = (unsigned char)module_id[0];
-    if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')))
-        return 0;
+    if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'))) return 0;
     for (size_t i = 1; i < n; i++) {
         c = (unsigned char)module_id[i];
-        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+        if (!((c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z') ||
               (c >= '0' && c <= '9') || c == '_'))
             return 0;
     }
@@ -59,9 +57,10 @@ static void module_symbol(char *dst, size_t cap, const char *base,
 }
 
 static const char *reg_name(int r) {
-    static const char *n[16] = {"r0",  "r1", "r2", "r3", "r4",  "r5",
-                                "r6",  "r7", "r8", "r9", "r10", "r11",
-                                "r12", "sp", "lr", "pc"};
+    static const char *n[16] = {
+        "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
+        "r8", "r9", "r10", "r11", "r12", "sp", "lr", "pc"
+    };
     return (r >= 0 && r < 16) ? n[r] : "?";
 }
 
@@ -85,15 +84,14 @@ static uint32_t link_value(const arm_insn *in) {
     return in->mode == ARM_T32 ? link | 1u : link;
 }
 
-/* --- collecting one function's instructions --------------------------------
- */
+/* --- collecting one function's instructions -------------------------------- */
 
 typedef struct {
     arm_insn *v;
-    uint32_t n, cap;
+    uint32_t  n, cap;
     uint32_t *labels;
-    uint32_t nlabels, lcap;
-    uint32_t cut_at; /* non-zero: the walk stopped here short of a return */
+    uint32_t  nlabels, lcap;
+    uint32_t  cut_at;     /* non-zero: the walk stopped here short of a return */
 } fbody;
 
 static void fb_push(fbody *b, const arm_insn *in) {
@@ -106,8 +104,7 @@ static void fb_push(fbody *b, const arm_insn *in) {
 
 static void fb_label(fbody *b, uint32_t addr) {
     for (uint32_t i = 0; i < b->nlabels; i++)
-        if (b->labels[i] == addr)
-            return;
+        if (b->labels[i] == addr) return;
     if (b->nlabels == b->lcap) {
         b->lcap = b->lcap ? b->lcap * 2 : 64;
         b->labels = (uint32_t *)realloc(b->labels, b->lcap * sizeof(uint32_t));
@@ -117,8 +114,7 @@ static void fb_label(fbody *b, uint32_t addr) {
 
 static int fb_has_label(const fbody *b, uint32_t addr) {
     for (uint32_t i = 0; i < b->nlabels; i++)
-        if (b->labels[i] == addr)
-            return 1;
+        if (b->labels[i] == addr) return 1;
     return 0;
 }
 
@@ -135,54 +131,37 @@ static int reg_settled(uint32_t written, uint32_t done, int8_t r) {
 }
 
 static int fb_wait_loop(const fbody *b, const arm_insn *br) {
-    if (br->cls != A_BRANCH || br->cond == ARM_COND_AL || !br->has_target ||
-        br->target >= br->addr)
+    if (br->cls != A_BRANCH || br->cond == ARM_COND_AL || !br->has_target || br->target >= br->addr)
         return 0;
     uint32_t k = (uint32_t)(br - b->v), s = k;
     while (s > 0 && k - s < 8 && b->v[s - 1].addr >= br->target &&
            b->v[s - 1].addr + b->v[s - 1].width == b->v[s].addr)
         s--;
-    if (s == k || b->v[s].addr != br->target)
-        return 0;
+    if (s == k || b->v[s].addr != br->target) return 0;
 
     uint32_t written = 0, done = 0;
     int loads = 0, compares = 0;
     for (uint32_t i = s; i < k; i++) {
         const arm_insn *p = &b->v[i];
-        if (p->cond != ARM_COND_AL)
-            return 0;
-        if (p->op == OP_NOP)
-            continue;
-        if (p->op == OP_CMP || p->op == OP_TST) {
-            compares++;
-            continue;
-        }
+        if (p->cond != ARM_COND_AL) return 0;
+        if (p->op == OP_NOP) continue;
+        if (p->op == OP_CMP || p->op == OP_TST) { compares++; continue; }
         if (p->op != OP_LDR && p->op != OP_LDRB && p->op != OP_LDRH &&
-            p->op != OP_LDRSB && p->op != OP_LDRSH)
-            return 0;
-        if (p->cls != A_LOAD || p->writeback || p->mem_post || p->rt < 0 ||
-            p->rt > 12)
-            return 0;
+            p->op != OP_LDRSB && p->op != OP_LDRSH) return 0;
+        if (p->cls != A_LOAD || p->writeback || p->mem_post || p->rt < 0 || p->rt > 12) return 0;
         written |= 1u << p->rt;
         loads++;
     }
-    if (!loads || !compares)
-        return 0;
+    if (!loads || !compares) return 0;
     for (uint32_t i = s; i < k; i++) {
         const arm_insn *p = &b->v[i];
-        if (p->op == OP_NOP)
-            continue;
+        if (p->op == OP_NOP) continue;
         if (p->op == OP_CMP || p->op == OP_TST) {
-            if (!reg_settled(written, done,
-                             p->rn != ARM_NO_REG ? p->rn : p->rd))
-                return 0;
-            if (!p->has_imm && !reg_settled(written, done, p->rm))
-                return 0;
+            if (!reg_settled(written, done, p->rn != ARM_NO_REG ? p->rn : p->rd)) return 0;
+            if (!p->has_imm && !reg_settled(written, done, p->rm)) return 0;
             continue;
         }
-        if (!reg_settled(written, done, p->rn) ||
-            !reg_settled(written, done, p->rm))
-            return 0;
+        if (!reg_settled(written, done, p->rn) || !reg_settled(written, done, p->rm)) return 0;
         done |= 1u << p->rt;
     }
     return 1;
@@ -204,22 +183,16 @@ static int fb_wait_loop(const fbody *b, const arm_insn *br) {
 
 #define VISIT_SLOTS 8192
 
-typedef struct {
-    uint32_t k[VISIT_SLOTS];
-} visited;
+typedef struct { uint32_t k[VISIT_SLOTS]; } visited;
 
 static int visit_mark(visited *v, uint32_t addr) {
     uint32_t h = (addr * 2654435761u) & (VISIT_SLOTS - 1);
     for (uint32_t i = 0; i < VISIT_SLOTS; i++) {
         uint32_t s = (h + i) & (VISIT_SLOTS - 1);
-        if (v->k[s] == addr)
-            return 0; /* already seen */
-        if (v->k[s] == 0) {
-            v->k[s] = addr;
-            return 1;
-        }
+        if (v->k[s] == addr) return 0;          /* already seen */
+        if (v->k[s] == 0)    { v->k[s] = addr; return 1; }
     }
-    return 0; /* table full: stop expanding */
+    return 0;                                    /* table full: stop expanding */
 }
 
 static int cmp_addr(const void *a, const void *b) {
@@ -227,8 +200,7 @@ static int cmp_addr(const void *a, const void *b) {
     return x < y ? -1 : x > y ? 1 : 0;
 }
 
-/* --- the set of addresses that are actually functions -----------------------
- */
+/* --- the set of addresses that are actually functions ----------------------- */
 /*
  * The emitter must never name a symbol it does not define. A call target only
  * becomes `vita_func_<addr>()` if discovery registered it; anything else is a
@@ -242,10 +214,7 @@ static int cmp_addr(const void *a, const void *b) {
  * them produced C that compiled and then failed to link.
  */
 
-typedef struct {
-    uint32_t *v;
-    uint32_t n;
-} funcset;
+typedef struct { uint32_t *v; uint32_t n; } funcset;
 
 static int fs_cmp(const void *a, const void *b) {
     uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
@@ -256,12 +225,8 @@ static int fs_has(const funcset *s, uint32_t key) {
     uint32_t lo = 0, hi = s->n;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2;
-        if (s->v[mid] == key)
-            return 1;
-        if (s->v[mid] < key)
-            lo = mid + 1;
-        else
-            hi = mid;
+        if (s->v[mid] == key) return 1;
+        if (s->v[mid] <  key) lo = mid + 1; else hi = mid;
     }
     return 0;
 }
@@ -292,11 +257,7 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
     stack[sp_++] = fn->addr;
 
     /* Guards that branch to their table, as in discovery's walk. */
-    struct {
-        uint32_t addr;
-        int8_t reg;
-        uint32_t max;
-    } guard[256];
+    struct { uint32_t addr; int8_t reg; uint32_t max; } guard[256];
     uint32_t nguard = 0;
 
     while (sp_ > 0 && b->n < MAX_INSNS_PER_FUNC) {
@@ -309,11 +270,7 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
         arm_insn seed = {0};
         int seeded = 0;
         for (uint32_t g = 0; g < nguard; g++)
-            if (guard[g].addr == a) {
-                arm_table_seed(&seed, guard[g].reg, guard[g].max);
-                seeded = 1;
-                break;
-            }
+            if (guard[g].addr == a) { arm_table_seed(&seed, guard[g].reg, guard[g].max); seeded = 1; break; }
 
         /* IT state. The decoder is stateless, so the block structure is
          * applied here, where instructions are seen in order: after an IT,
@@ -325,23 +282,13 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
         int it_left = 0, it_k = 0;
 
         for (;;) {
-            if (a < base || a >= bound) {
-                b->cut_at = a;
-                break;
-            }
-            if (!visit_mark(&seen, a))
-                break; /* already emitted */
-            if (b->n >= MAX_INSNS_PER_FUNC) {
-                b->cut_at = a;
-                break;
-            }
+            if (a < base || a >= bound) { b->cut_at = a; break; }
+            if (!visit_mark(&seen, a)) break;        /* already emitted */
+            if (b->n >= MAX_INSNS_PER_FUNC) { b->cut_at = a; break; }
 
             arm_insn in;
             int n = arm_decode(text, base, img->seg_len, a, fn->mode, &in);
-            if (n == 0) {
-                b->cut_at = a;
-                break;
-            }
+            if (n == 0) { b->cut_at = a; break; }
 
             int in_it = 0;
             if (it_left > 0) {
@@ -354,8 +301,7 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
                  * `ite ls; movls r1, #0; movhi r1, #1` set r1 to 1 on both
                  * paths, and malloc report out of memory on every call. */
                 uint32_t c = it_first;
-                if (it_k > 1 &&
-                    (((it_mask >> (5 - it_k)) & 1) != (it_first & 1)))
+                if (it_k > 1 && (((it_mask >> (5 - it_k)) & 1) != (it_first & 1)))
                     c = it_first ^ 1;
                 in.cond = (uint8_t)c;
                 if (in.cls == A_BRANCH || in.cls == A_CALL ||
@@ -365,20 +311,16 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
                  * set the flags, whatever their S bit would say outside one;
                  * only the compares do. A `movls` that wrote NZ would wreck
                  * the condition the next instruction of the block tests. */
-                if (in.width == 2 && in.op != OP_CMP && in.op != OP_CMN &&
-                    in.op != OP_TST)
+                if (in.width == 2 && in.op != OP_CMP && in.op != OP_CMN && in.op != OP_TST)
                     in.sets_flags = 0;
                 it_left--;
                 in_it = 1;
             }
             if (in.op == OP_IT) {
                 it_first = in.cond;
-                it_mask = in.it_mask;
-                it_left = (it_mask & 1)   ? 4
-                          : (it_mask & 2) ? 3
-                          : (it_mask & 4) ? 2
-                                          : 1;
-                it_k = 0;
+                it_mask  = in.it_mask;
+                it_left  = (it_mask & 1) ? 4 : (it_mask & 2) ? 3 : (it_mask & 4) ? 2 : 1;
+                it_k     = 0;
             }
 
             /* A jump table: the count comes from the compare just before it,
@@ -388,22 +330,17 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
             if (in.cls == A_INDIRECT && (in.op == OP_TBB || in.op == OP_TBH)) {
                 arm_insn win[17];
                 uint32_t have = b->n - walk0 < 16 ? b->n - walk0 : 16, nw = 0;
-                if (seeded)
-                    win[nw++] = seed;
+                if (seeded) win[nw++] = seed;
                 memcpy(win + nw, b->v + (b->n - have), have * sizeof(arm_insn));
                 nw += have;
                 uint32_t count = arm_table_count(win, nw, &in);
                 uint32_t tg[256];
-                uint32_t nt = count
-                                  ? arm_table_targets(text, base, img->seg_len,
-                                                      &in, count, tg, 256)
-                                  : 0;
+                uint32_t nt = count ? arm_table_targets(text, base, img->seg_len, &in, count, tg, 256) : 0;
                 in.imm = nt ? count : 0;
                 in.has_imm = nt != 0;
                 fb_push(b, &in);
                 for (uint32_t i = 0; i < nt; i++) {
-                    if (tg[i] < fn->addr || tg[i] >= bound)
-                        continue;
+                    if (tg[i] < fn->addr || tg[i] >= bound) continue;
                     fb_label(b, tg[i]);
                     if (sp_ < (int)(sizeof(stack) / sizeof(stack[0])))
                         stack[sp_++] = tg[i];
@@ -412,15 +349,12 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
             }
             fb_push(b, &in);
 
-            /* an ARM instruction under a condition, a return included, is
-             * followed by the rest */
+            /* an ARM instruction under a condition, a return included, is followed by the rest */
             int may_pass = in_it || (in.mode == ARM_A32 && in.conditional);
-            if (in.cls == A_RETURN && !may_pass)
-                break;
+            if (in.cls == A_RETURN && !may_pass) break;
             /* A computed transfer ends the block; what follows it is reached
              * by a label if at all, and may be data. */
-            if (in.cls == A_INDIRECT && !(in.mode == ARM_A32 && in.conditional))
-                break;
+            if (in.cls == A_INDIRECT && !(in.mode == ARM_A32 && in.conditional)) break;
 
             /* `bound`, not `fn->end`.
              *
@@ -447,25 +381,19 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
                      * which is already pushed. */
                     uint32_t np = b->n - 1 - walk0;
                     const arm_insn *pv = b->v + walk0;
-                    if (np > 16) {
-                        pv += np - 16;
-                        np = 16;
-                    }
-                    int8_t greg;
-                    uint32_t gmax;
-                    if (in.conditional
-                            ? arm_table_guard(pv, np, &in, &greg, &gmax)
-                            : arm_table_guard_jump(pv, np, &in, &greg, &gmax)) {
+                    if (np > 16) { pv += np - 16; np = 16; }
+                    int8_t greg; uint32_t gmax;
+                    if (in.conditional ? arm_table_guard(pv, np, &in, &greg, &gmax)
+                                       : arm_table_guard_jump(pv, np, &in, &greg, &gmax)) {
                         guard[nguard].addr = in.target;
-                        guard[nguard].reg = greg;
-                        guard[nguard].max = gmax;
+                        guard[nguard].reg  = greg;
+                        guard[nguard].max  = gmax;
                         nguard++;
                     }
                 }
-                if (!in.conditional)
-                    break; /* flow ends here */
+                if (!in.conditional) break;          /* flow ends here */
             } else if (in.cls == A_BRANCH && !in.conditional) {
-                break; /* tail call */
+                break;                               /* tail call */
             }
 
             a += (uint32_t)n;
@@ -474,8 +402,7 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
 
     /* Blocks were discovered out of order; emit in address order so the output
      * reads alongside a disassembly. */
-    if (b->n > 1)
-        qsort(b->v, b->n, sizeof(arm_insn), cmp_addr);
+    if (b->n > 1) qsort(b->v, b->n, sizeof(arm_insn), cmp_addr);
 
     /* Drop labels for blocks that were never collected.
      *
@@ -498,25 +425,17 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
     for (uint32_t i = 0; i < b->nlabels; i++) {
         int placed = 0;
         uint32_t lo = 0, hi = b->n;
-        while (lo < hi) { /* body is sorted by address */
+        while (lo < hi) {                      /* body is sorted by address */
             uint32_t mid = lo + (hi - lo) / 2;
-            if (b->v[mid].addr == b->labels[i]) {
-                placed = 1;
-                break;
-            }
-            if (b->v[mid].addr < b->labels[i])
-                lo = mid + 1;
-            else
-                hi = mid;
+            if (b->v[mid].addr == b->labels[i]) { placed = 1; break; }
+            if (b->v[mid].addr <  b->labels[i]) lo = mid + 1; else hi = mid;
         }
-        if (placed)
-            b->labels[kept++] = b->labels[i];
+        if (placed) b->labels[kept++] = b->labels[i];
     }
     b->nlabels = kept;
 }
 
-/* --- operand rendering ------------------------------------------------------
- */
+/* --- operand rendering ------------------------------------------------------ */
 
 /* A register operand, with r15 resolved.
  *
@@ -528,15 +447,11 @@ static void collect(const vm_image *img, const vf_func *fn, fbody *b) {
  * computation) that leaving them to a trap would cost real coverage.
  *
  * Plus 4 in Thumb, plus 8 in ARM: two instructions on, in either. */
-static uint32_t pc_of(const arm_insn *in) {
-    return in->addr + (in->mode == ARM_A32 ? 8u : 4u);
-}
+static uint32_t pc_of(const arm_insn *in) { return in->addr + (in->mode == ARM_A32 ? 8u : 4u); }
 
 static void reg_operand(char *dst, size_t cap, int r, const arm_insn *in) {
-    if (r == 15)
-        snprintf(dst, cap, "0x%08Xu", pc_of(in));
-    else
-        snprintf(dst, cap, "%s", reg_name(r));
+    if (r == 15) snprintf(dst, cap, "0x%08Xu", pc_of(in));
+    else         snprintf(dst, cap, "%s", reg_name(r));
 }
 
 /* A SOURCE register as a C expression, for the many places that want one
@@ -554,8 +469,7 @@ static void reg_operand(char *dst, size_t cap, int r, const arm_insn *in) {
 static const char *src_name(const arm_insn *in, int r) {
     static char buf[4][32];
     static unsigned next;
-    if (r != 15)
-        return reg_name(r);
+    if (r != 15) return reg_name(r);
     char *b = buf[next++ & 3];
     snprintf(b, sizeof(buf[0]), "0x%08Xu", pc_of(in));
     return b;
@@ -568,19 +482,13 @@ static void operand2(char *dst, size_t cap, const arm_insn *in) {
         snprintf(dst, cap, "0x%Xu", in->imm);
         return;
     }
-    if (in->rm == ARM_NO_REG) {
-        snprintf(dst, cap, "/*?*/0");
-        return;
-    }
+    if (in->rm == ARM_NO_REG) { snprintf(dst, cap, "/*?*/0"); return; }
     if (in->shift_amt == 0 && in->shift_type == SH_LSL) {
         reg_operand(dst, cap, in->rm, in);
         return;
     }
-    if (in->rm == 15) {
-        reg_operand(dst, cap, 15, in);
-        return;
-    }
-    static const char *fn[4] = {"vita_lsl", "vita_lsr", "vita_asr", "vita_ror"};
+    if (in->rm == 15) { reg_operand(dst, cap, 15, in); return; }
+    static const char *fn[4] = { "vita_lsl", "vita_lsr", "vita_asr", "vita_ror" };
     snprintf(dst, cap, "%s(%s, %u)", fn[in->shift_type & 3],
              src_name(in, in->rm), in->shift_amt);
 }
@@ -589,18 +497,15 @@ static void operand2(char *dst, size_t cap, const arm_insn *in) {
  * Pre-indexed ([rn, #imm]!) and post-indexed ([rn], #imm) differ only in
  * which address the access itself used; the register ends up the same. */
 static void writeback(FILE *f, const arm_insn *in) {
-    if (!in->writeback || !in->has_imm)
-        return;
-    if (in->rn == ARM_NO_REG || in->rn == 15)
-        return;
+    if (!in->writeback || !in->has_imm) return;
+    if (in->rn == ARM_NO_REG || in->rn == 15) return;
     fprintf(f, "    %s = %s %c 0x%Xu;\n", reg_name(in->rn), reg_name(in->rn),
             in->mem_add ? '+' : '-', in->imm);
 }
 
 /* The address expression for a load or store. */
 static int address(char *dst, size_t cap, const arm_insn *in) {
-    if (in->rn == ARM_NO_REG)
-        return 0;
+    if (in->rn == ARM_NO_REG) return 0;
 
     /* Post-indexed: the access uses the base as it stands. */
     if (in->mem_post && in->rn != 15) {
@@ -620,11 +525,9 @@ static int address(char *dst, size_t cap, const arm_insn *in) {
          * `pc` that exists and holds something plausible. */
         uint32_t pc = pc_of(in) & ~3u;
         if (in->rm != ARM_NO_REG && !in->has_imm)
-            snprintf(dst, cap, "0x%08X + (%s << %u)", pc, src_name(in, in->rm),
-                     in->shift_amt);
+            snprintf(dst, cap, "0x%08X + (%s << %u)", pc, src_name(in, in->rm), in->shift_amt);
         else
-            snprintf(dst, cap, "0x%08X",
-                     in->mem_add ? pc + in->imm : pc - in->imm);
+            snprintf(dst, cap, "0x%08X", in->mem_add ? pc + in->imm : pc - in->imm);
         return 1;
     }
     /* The U bit is not decoration: the T32 8-bit form encodes [rN, #-imm]
@@ -640,21 +543,18 @@ static int address(char *dst, size_t cap, const arm_insn *in) {
         snprintf(dst, cap, "%s + (%s << %u)", src_name(in, in->rn),
                  src_name(in, in->rm), in->shift_amt);
     else if (in->rm != ARM_NO_REG)
-        snprintf(dst, cap, "%s + %s", src_name(in, in->rn),
-                 src_name(in, in->rm));
+        snprintf(dst, cap, "%s + %s", src_name(in, in->rn), src_name(in, in->rm));
     else
         snprintf(dst, cap, "%s", src_name(in, in->rn));
     return 1;
 }
 
-/* --- one instruction ---------------------------------------------------------
- */
+/* --- one instruction --------------------------------------------------------- */
 
 /* Mnemonics are static strings, but identical literals from distinct decoder
  * sites need not share an address in debug builds. */
 static void note_trap(emit_stats *st, const char *what) {
-    if (!what)
-        what = "?";
+    if (!what) what = "?";
     for (uint32_t i = 0; i < st->trap_kinds; i++) {
         if (strcmp(st->traps[i].what, what) == 0) {
             st->traps[i].count++;
@@ -662,7 +562,7 @@ static void note_trap(emit_stats *st, const char *what) {
         }
     }
     if (st->trap_kinds < EM_MAX_TRAP_KINDS) {
-        st->traps[st->trap_kinds].what = what;
+        st->traps[st->trap_kinds].what  = what;
         st->traps[st->trap_kinds].count = 1;
         st->trap_kinds++;
         return;
@@ -671,8 +571,8 @@ static void note_trap(emit_stats *st, const char *what) {
 }
 
 static void trap(FILE *f, const arm_insn *in, const char *why) {
-    fprintf(f, "    vita_trap_unimpl(0x%08X, 0x%08X, \"%s\");\n", in->addr,
-            in->raw, why);
+    fprintf(f, "    vita_trap_unimpl(0x%08X, 0x%08X, \"%s\");\n",
+            in->addr, in->raw, why);
 }
 
 /* Returns 1 if real C was emitted, 0 if a trap was. */
@@ -686,10 +586,8 @@ static void trap(FILE *f, const arm_insn *in, const char *why) {
 static void hle_symbol(char *dst, size_t cap, const nid_db *db,
                        const vm_stub *s) {
     const char *n = nid_func_name(db, s->lib_nid, s->func_nid);
-    if (n)
-        snprintf(dst, cap, "vita_hle_%s", n);
-    else
-        snprintf(dst, cap, "vita_hle_nid_%08X", s->func_nid);
+    if (n) snprintf(dst, cap, "vita_hle_%s", n);
+    else   snprintf(dst, cap, "vita_hle_nid_%08X", s->func_nid);
 }
 
 static void import_display_name(char *dst, size_t cap, const nid_db *db,
@@ -699,10 +597,12 @@ static void import_display_name(char *dst, size_t cap, const nid_db *db,
     if (name)
         snprintf(dst, cap, "%s::%s", lib ? lib : "?", name);
     else
-        snprintf(dst, cap, "nid_%08X::nid_%08X", s->lib_nid, s->func_nid);
+        snprintf(dst, cap, "nid_%08X::nid_%08X",
+                 s->lib_nid, s->func_nid);
 }
 
-static void import_target_symbol(char *dst, size_t cap, const vm_stub *s,
+static void import_target_symbol(char *dst, size_t cap,
+                                 const vm_stub *s,
                                  const char *module_id) {
     if (module_id)
         snprintf(dst, cap, "vita_import_target_%s_%08X", module_id,
@@ -713,30 +613,24 @@ static void import_target_symbol(char *dst, size_t cap, const vm_stub *s,
 
 /* The C symbol for an imported variable: a host global holding the guest
  * address the loader bound it to. */
-static void var_symbol(char *dst, size_t cap, const nid_db *db, const vm_var *v,
-                       const char *module_id) {
+static void var_symbol(char *dst, size_t cap, const nid_db *db,
+                       const vm_var *v, const char *module_id) {
     if (module_id) {
-        snprintf(dst, cap, "vita_var_%s_%08X_%08X", module_id, v->lib_nid,
-                 v->var_nid);
+        snprintf(dst, cap, "vita_var_%s_%08X_%08X", module_id,
+                 v->lib_nid, v->var_nid);
         return;
     }
     const char *n = nid_var_name(db, v->lib_nid, v->var_nid);
-    if (n)
-        snprintf(dst, cap, "vita_var_%s", n);
-    else
-        snprintf(dst, cap, "vita_var_nid_%08X", v->var_nid);
+    if (n) snprintf(dst, cap, "vita_var_%s", n);
+    else   snprintf(dst, cap, "vita_var_nid_%08X", v->var_nid);
 }
 
 /* Every site in the code that an imported variable's address goes into,
  * indexed by address. A MOVW/MOVT pair at one builds that address, so the
  * emitter reads the symbol instead of folding the placeholder the image
  * holds; a literal word at one is read the same way. */
-typedef struct {
-    uint32_t addr;
-    uint32_t var;
-    uint8_t code;
-} vsite;
-static vsite *g_vsites;
+typedef struct { uint32_t addr; uint32_t var; uint8_t code; } vsite;
+static vsite   *g_vsites;
 static uint32_t g_nvsites;
 
 static int vsite_cmp(const void *a, const void *b) {
@@ -745,16 +639,14 @@ static int vsite_cmp(const void *a, const void *b) {
 }
 static int vsites_build(const vm_module *mod) {
     uint32_t n = 0;
-    for (uint32_t i = 0; i < mod->var_count; i++)
-        n += mod->vars[i].site_count;
+    for (uint32_t i = 0; i < mod->var_count; i++) n += mod->vars[i].site_count;
     g_vsites = n ? (vsite *)calloc(n, sizeof(vsite)) : NULL;
     g_nvsites = 0;
-    if (n && !g_vsites)
-        return 1;
+    if (n && !g_vsites) return 1;
     for (uint32_t i = 0; i < mod->var_count; i++)
         for (uint32_t s = 0; s < mod->vars[i].site_count; s++) {
             g_vsites[g_nvsites].addr = mod->vars[i].sites[s].addr;
-            g_vsites[g_nvsites].var = i;
+            g_vsites[g_nvsites].var  = i;
             g_vsites[g_nvsites].code = mod->vars[i].sites[s].code;
             g_nvsites++;
         }
@@ -765,18 +657,14 @@ static const vsite *vsite_find(uint32_t addr) {
     uint32_t lo = 0, hi = g_nvsites;
     while (lo < hi) {
         uint32_t mid = lo + (hi - lo) / 2;
-        if (g_vsites[mid].addr == addr)
-            return &g_vsites[mid];
-        if (g_vsites[mid].addr < addr)
-            lo = mid + 1;
-        else
-            hi = mid;
+        if (g_vsites[mid].addr == addr) return &g_vsites[mid];
+        if (g_vsites[mid].addr < addr) lo = mid + 1; else hi = mid;
     }
     return NULL;
 }
 
-static int emit_insn(const vm_image *img, const vm_module *mod,
-                     const nid_db *db, const funcset *fs, const fbody *b,
+static int emit_insn(const vm_image *img, const vm_module *mod, const nid_db *db,
+                     const funcset *fs, const fbody *b,
                      const arm_insn *in, FILE *f, emit_stats *st,
                      const char *module_id) {
     char o2[64], addr[64], rn_s[32];
@@ -784,7 +672,8 @@ static int emit_insn(const vm_image *img, const vm_module *mod,
     /* The first operand, with r15 resolved. Computed once because several
      * paths below need it and the ternary for "rn defaults to rd" is easy to
      * get inconsistently wrong when repeated. */
-    reg_operand(rn_s, sizeof(rn_s), in->rn == ARM_NO_REG ? in->rd : in->rn, in);
+    reg_operand(rn_s, sizeof(rn_s),
+                in->rn == ARM_NO_REG ? in->rd : in->rn, in);
 
     /* A call whose target is an import stub is a firmware call, and must be
      * bound before anything else looks at it. Otherwise it decodes as an
@@ -800,12 +689,8 @@ static int emit_insn(const vm_image *img, const vm_module *mod,
             char guard[40] = "";
             if (in->cond != ARM_COND_AL)
                 snprintf(guard, sizeof(guard), "if (vita_cond(%u)) ", in->cond);
-            if (in->cls == A_CALL)
-                fprintf(f, "    %s{ lr = 0x%08Xu; vita_call(%s); }\n", guard,
-                        link_value(in), sym);
-            else
-                fprintf(f, "    %s{ vita_call(%s); return; }\n", guard,
-                        sym); /* tail call */
+            if (in->cls == A_CALL) fprintf(f, "    %s{ lr = 0x%08Xu; vita_call(%s); }\n", guard, link_value(in), sym);
+            else                   fprintf(f, "    %s{ vita_call(%s); return; }\n", guard, sym);  /* tail call */
             st->import_calls++;
             return 1;
         }
@@ -834,9 +719,9 @@ static int emit_insn(const vm_image *img, const vm_module *mod,
      * working instructions. And an instruction the decoder already left as
      * OP_NONE is going to trap anyway with a more specific name than this one,
      * so it is left alone rather than relabelled. */
-    int writes_pc =
-        (in->rd == 15) || ((in->cls == A_LOAD || in->cls == A_STORE) &&
-                           (in->rt == 15 || in->rt2 == 15));
+    int writes_pc = (in->rd == 15)
+                 || ((in->cls == A_LOAD || in->cls == A_STORE)
+                     && (in->rt == 15 || in->rt2 == 15));
     if (in->op != OP_NONE && writes_pc) {
         trap(f, in, "writes pc");
         note_trap(st, "writes pc");
@@ -855,1745 +740,1119 @@ static int emit_insn(const vm_image *img, const vm_module *mod,
     int ok = 1;
     int explicit_trap = 0;
     switch (in->op) {
-    case OP_MOV: {
-        /* A MOVW at a variable import's site builds the low half of an
-         * address the loader supplies; the immediate in the image is a
-         * placeholder. The symbol is read instead. */
-        const vsite *vs = in->has_imm ? vsite_find(in->addr) : NULL;
-        if (vs && vs->code == 0x2F) {
-            char vsym[96];
-            var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var], module_id);
-            uint32_t add =
-                mod->vars[vs->var].sites[0].addend; /* the site's own, below */
-            for (uint32_t s = 0; s < mod->vars[vs->var].site_count; s++)
-                if (mod->vars[vs->var].sites[s].addr == in->addr)
-                    add = mod->vars[vs->var].sites[s].addend;
-            if (add)
-                fprintf(f,
-                        "    %s = (%s + 0x%Xu) & 0x0000FFFFu;  /* imported "
-                        "variable */\n",
-                        reg_name(in->rd), vsym, add);
-            else
-                fprintf(f,
-                        "    %s = %s & 0x0000FFFFu;  /* imported variable */\n",
-                        reg_name(in->rd), vsym);
-            st->var_refs++;
-            break;
-        }
-        operand2(o2, sizeof(o2), in);
-        fprintf(f, "    %s = %s;\n", reg_name(in->rd), o2);
-        if (in->sets_flags)
-            fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
-        break;
-    }
-
-    case OP_MOVT: {
-        const vsite *vs = vsite_find(in->addr);
-        if (vs && vs->code == 0x30) {
-            char vsym[96];
-            var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var], module_id);
-            uint32_t add = 0;
-            for (uint32_t s = 0; s < mod->vars[vs->var].site_count; s++)
-                if (mod->vars[vs->var].sites[s].addr == in->addr)
-                    add = mod->vars[vs->var].sites[s].addend;
-            if (add)
-                fprintf(f,
-                        "    %s = (%s & 0x0000FFFFu) | ((%s + 0x%Xu) & "
-                        "0xFFFF0000u);  /* imported variable */\n",
-                        reg_name(in->rd), reg_name(in->rd), vsym, add);
-            else
-                fprintf(f,
-                        "    %s = (%s & 0x0000FFFFu) | (%s & 0xFFFF0000u);  /* "
-                        "imported variable */\n",
-                        reg_name(in->rd), reg_name(in->rd), vsym);
-            st->var_refs++;
-            break;
-        }
-        /* Top half written, bottom half preserved. One line, and the
-         * difference between a program that builds correct pointers and one
-         * whose every constructed address is missing its high 16 bits. */
-        fprintf(f, "    %s = (%s & 0x0000FFFFu) | 0x%08Xu;\n", reg_name(in->rd),
-                reg_name(in->rd), in->imm << 16);
-        break;
-    }
-
-    case OP_MVN:
-        operand2(o2, sizeof(o2), in);
-        fprintf(f, "    %s = ~(%s);\n", reg_name(in->rd), o2);
-        if (in->sets_flags)
-            fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
-        break;
-
-    case OP_ADD:
-    case OP_SUB: {
-        operand2(o2, sizeof(o2), in);
-        const char *rn = rn_s;
-        if (in->sets_flags) {
-            /* The operands have to be captured before the destination is
-             * written, because rd and rn are frequently the same register
-             * and the flag computation needs the ORIGINAL values. */
-            fprintf(f, "    { uint32_t _a = %s, _b = %s;\n", rn, o2);
-            fprintf(f, "      %s = _a %c _b;\n", reg_name(in->rd),
-                    in->op == OP_ADD ? '+' : '-');
-            fprintf(f, "      vita_flags_%s(_a, _b, %s); }\n",
-                    in->op == OP_ADD ? "add" : "sub", reg_name(in->rd));
-        } else {
-            fprintf(f, "    %s = %s %c %s;\n", reg_name(in->rd), rn,
-                    in->op == OP_ADD ? '+' : '-', o2);
-        }
-        break;
-    }
-
-    case OP_ADC:
-    case OP_SBC: {
-        const char *rn = rn_s;
-        operand2(o2, sizeof(o2), in);
-        fprintf(f, "    { uint32_t _a = %s, _b = %s, _c = (uint32_t)flag_c;\n",
-                rn, o2);
-        if (in->op == OP_ADC) {
-            fprintf(f, "      %s = _a + _b + _c;\n", reg_name(in->rd));
-            if (in->sets_flags)
-                fprintf(f, "      vita_flags_adc(_a, _b, _c, %s);\n",
-                        reg_name(in->rd));
-        } else {
-            fprintf(f, "      %s = _a - _b - (1u - _c);\n", reg_name(in->rd));
-            if (in->sets_flags)
-                fprintf(f, "      vita_flags_sub(_a, _b + (1u - _c), %s);\n",
-                        reg_name(in->rd));
-        }
-        fprintf(f, "    }\n");
-        break;
-    }
-
-    case OP_RSB:
-        /* rd = operand2 - rn. The 16-bit form is the negate, which the
-         * decoder presents as operand2 == #0; the 32-bit form carries a
-         * real operand2 (immediate or shifted register), and reading it as
-         * the negate turned `rsb r7, r5, r5, lsl #4` into `0 - r5`. */
-        operand2(o2, sizeof(o2), in);
-        fprintf(f, "    { uint32_t _a = %s, _b = %s;\n", o2,
-                src_name(in, in->rn));
-        fprintf(f, "      %s = _a - _b;\n", reg_name(in->rd));
-        if (in->sets_flags)
-            fprintf(f, "      vita_flags_sub(_a, _b, %s);\n", reg_name(in->rd));
-        fprintf(f, "    }\n");
-        break;
-
-    case OP_AND:
-    case OP_ORR:
-    case OP_EOR:
-    case OP_BIC: {
-        operand2(o2, sizeof(o2), in);
-        const char *rn = rn_s;
-        const char *ops = in->op == OP_AND ? "&" : in->op == OP_ORR ? "|" : "^";
-        if (in->op == OP_BIC)
-            fprintf(f, "    %s = %s & ~(%s);\n", reg_name(in->rd), rn, o2);
-        else
-            fprintf(f, "    %s = %s %s %s;\n", reg_name(in->rd), rn, ops, o2);
-        if (in->sets_flags)
-            fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
-        break;
-    }
-
-    case OP_LSL:
-    case OP_LSR:
-    case OP_ASR:
-    case OP_ROR: {
-        static const char *fn2[4] = {"vita_lsl", "vita_lsr", "vita_asr",
-                                     "vita_ror"};
-        int which = in->op == OP_LSL   ? 0
-                    : in->op == OP_LSR ? 1
-                    : in->op == OP_ASR ? 2
-                                       : 3;
-        const char *src = src_name(in, in->rm == ARM_NO_REG ? in->rd : in->rm);
-        if (in->has_imm)
-            fprintf(f, "    %s = %s(%s, %u);\n", reg_name(in->rd), fn2[which],
-                    src, in->imm);
-        else
-            /* Shift by register: the 16-bit form shifts rd by rm; the
-             * 32-bit form names a separate rn. Reading rd for both turned
-             * `asr.w r3, r9, ip` into a shift of r3, and a font's bit
-             * test into noise. */
-            fprintf(f, "    %s = %s(%s, %s & 0xFF);\n", reg_name(in->rd),
-                    fn2[which],
-                    reg_name(in->rn != ARM_NO_REG ? in->rn : in->rd),
-                    src_name(in, in->rm));
-        if (in->sets_flags)
-            fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
-        break;
-    }
-
-    case OP_MUL:
-        /* The 16-bit form is rd = rd * rm; the 32-bit form names rn. */
-        fprintf(f, "    %s = %s * %s;\n", reg_name(in->rd),
-                reg_name(in->rn != ARM_NO_REG ? in->rn : in->rd),
-                src_name(in, in->rm));
-        if (in->sets_flags)
-            fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
-        break;
-
-    case OP_MLA:
-        fprintf(f, "    %s = %s + %s * %s;\n", reg_name(in->rd),
-                reg_name(in->ra), reg_name(in->rn), reg_name(in->rm));
-        break;
-
-    case OP_MLS:
-        fprintf(f, "    %s = %s - %s * %s;\n", reg_name(in->rd),
-                reg_name(in->ra), reg_name(in->rn), reg_name(in->rm));
-        break;
-
-    /* The 64-bit product goes into a temporary first: RdLo may be one of
-     * the operands, and the accumulating forms read both halves before
-     * either is written. */
-    case OP_UMULL:
-        fprintf(f, "    { uint64_t _p = (uint64_t)%s * %s;\n", reg_name(in->rn),
-                reg_name(in->rm));
-        fprintf(f, "      %s = (uint32_t)_p; %s = (uint32_t)(_p >> 32); }\n",
-                reg_name(in->rd), reg_name(in->rdhi));
-        break;
-
-    case OP_SMULL:
-        fprintf(f, "    { int64_t _p = (int64_t)(int32_t)%s * (int32_t)%s;\n",
-                reg_name(in->rn), reg_name(in->rm));
-        fprintf(
-            f,
-            "      %s = (uint32_t)_p; %s = (uint32_t)((uint64_t)_p >> 32); }\n",
-            reg_name(in->rd), reg_name(in->rdhi));
-        break;
-
-    case OP_UMLAL:
-        fprintf(f,
-                "    { uint64_t _p = (((uint64_t)%s << 32) | %s) + "
-                "(uint64_t)%s * %s;\n",
-                reg_name(in->rdhi), reg_name(in->rd), reg_name(in->rn),
-                reg_name(in->rm));
-        fprintf(f, "      %s = (uint32_t)_p; %s = (uint32_t)(_p >> 32); }\n",
-                reg_name(in->rd), reg_name(in->rdhi));
-        break;
-
-    case OP_SMLAL:
-        fprintf(f,
-                "    { int64_t _p = (int64_t)(((uint64_t)%s << 32) | %s) + "
-                "(int64_t)(int32_t)%s * (int32_t)%s;\n",
-                reg_name(in->rdhi), reg_name(in->rd), reg_name(in->rn),
-                reg_name(in->rm));
-        fprintf(
-            f,
-            "      %s = (uint32_t)_p; %s = (uint32_t)((uint64_t)_p >> 32); }\n",
-            reg_name(in->rd), reg_name(in->rdhi));
-        break;
-
-    case OP_REV16:
-    case OP_REVSH:
-    case OP_RBIT:
-    case OP_CLZ: {
-        const char *fn1 = in->op == OP_REV16   ? "vita_rev16"
-                          : in->op == OP_REVSH ? "vita_revsh"
-                          : in->op == OP_RBIT  ? "vita_rbit"
-                                               : "vita_clz";
-        fprintf(f, "    %s = %s(%s);\n", reg_name(in->rd), fn1,
-                reg_name(in->rm));
-        break;
-    }
-
-    case OP_UADD8:
-    case OP_USUB8:
-    case OP_SEL: {
-        const char *fn1 = in->op == OP_UADD8   ? "vita_uadd8"
-                          : in->op == OP_USUB8 ? "vita_usub8"
-                                               : "vita_sel";
-        fprintf(f, "    %s = %s(%s, %s);\n", reg_name(in->rd), fn1,
-                reg_name(in->rn), reg_name(in->rm));
-        break;
-    }
-
-    /* --- Advanced SIMD, lane-wise on D registers ----------------------
-     *
-     * A Q form is its two D halves one after the other; no lane crosses
-     * the middle in any of these. */
-    case OP_NEON_MOV_IMM:
-    case OP_NEON_ORR_IMM:
-    case OP_NEON_BIC_IMM:
-        for (int q = 0; q <= in->neon_q; q++) {
-            int d = in->vd + q;
-            if (in->op == OP_NEON_MOV_IMM)
-                fprintf(f, "    vita_d_set(%d, 0x%016llXull);\n", d,
-                        (unsigned long long)in->imm64);
-            else if (in->op == OP_NEON_ORR_IMM)
-                fprintf(f,
-                        "    vita_d_set(%d, vita_d_get(%d) | 0x%016llXull);\n",
-                        d, d, (unsigned long long)in->imm64);
-            else
-                fprintf(f,
-                        "    vita_d_set(%d, vita_d_get(%d) & ~0x%016llXull);\n",
-                        d, d, (unsigned long long)in->imm64);
-        }
-        break;
-
-    case OP_NEON_AND:
-    case OP_NEON_BIC:
-    case OP_NEON_ORR:
-    case OP_NEON_ORN:
-    case OP_NEON_EOR:
-    case OP_NEON_BSL:
-    case OP_NEON_BIT:
-    case OP_NEON_BIF:
-        for (int q = 0; q <= in->neon_q; q++) {
-            int d = in->vd + q, n = in->vn + q, m = in->vm + q;
-            switch (in->op) {
-            case OP_NEON_AND:
-                fprintf(
-                    f, "    vita_d_set(%d, vita_d_get(%d) & vita_d_get(%d));\n",
-                    d, n, m);
-                break;
-            case OP_NEON_BIC:
-                fprintf(
-                    f,
-                    "    vita_d_set(%d, vita_d_get(%d) & ~vita_d_get(%d));\n",
-                    d, n, m);
-                break;
-            case OP_NEON_ORR:
-                fprintf(
-                    f, "    vita_d_set(%d, vita_d_get(%d) | vita_d_get(%d));\n",
-                    d, n, m);
-                break;
-            case OP_NEON_ORN:
-                fprintf(
-                    f,
-                    "    vita_d_set(%d, vita_d_get(%d) | ~vita_d_get(%d));\n",
-                    d, n, m);
-                break;
-            case OP_NEON_EOR:
-                fprintf(
-                    f, "    vita_d_set(%d, vita_d_get(%d) ^ vita_d_get(%d));\n",
-                    d, n, m);
-                break;
-            case OP_NEON_BSL:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_bsl(vita_d_get(%d), "
-                        "vita_d_get(%d), vita_d_get(%d)));\n",
-                        d, d, n, m);
-                break;
-            case OP_NEON_BIT:
-                fprintf(f,
-                        "    vita_d_set(%d, (vita_d_get(%d) & ~vita_d_get(%d)) "
-                        "| (vita_d_get(%d) & vita_d_get(%d)));\n",
-                        d, d, m, n, m);
-                break;
-            default:
-                fprintf(f,
-                        "    vita_d_set(%d, (vita_d_get(%d) & vita_d_get(%d)) "
-                        "| (vita_d_get(%d) & ~vita_d_get(%d)));\n",
-                        d, d, m, n, m);
-                break;
-            }
-        }
-        break;
-
-    case OP_NEON_ADD:
-    case OP_NEON_SUB:
-    case OP_NEON_CEQ:
-    case OP_NEON_TST:
-    case OP_NEON_PADD: {
-        const char *fn1 = in->op == OP_NEON_ADD   ? "vita_neon_add"
-                          : in->op == OP_NEON_SUB ? "vita_neon_sub"
-                          : in->op == OP_NEON_CEQ ? "vita_neon_ceq"
-                          : in->op == OP_NEON_TST ? "vita_neon_tst"
-                                                  : "vita_neon_padd";
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(
-                f,
-                "    vita_d_set(%d, %s(vita_d_get(%d), vita_d_get(%d), %u));\n",
-                in->vd + q, fn1, in->vn + q, in->vm + q, in->neon_size);
-        break;
-    }
-
-    case OP_NEON_DUP:
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f, "    vita_d_set(%d, vita_neon_dup(%s, %u));\n",
-                    in->vd + q, reg_name(in->rt), in->neon_size);
-        break;
-
-    case OP_NEON_SET32:
-        fprintf(
-            f, "    vita_d_set(%d, vita_neon_set32(vita_d_get(%d), %u, %s));\n",
-            in->vd, in->vd, in->imm, reg_name(in->rt));
-        break;
-
-    case OP_NEON_GET32:
-        fprintf(f, "    %s = vita_neon_get32(vita_d_get(%d), %u);\n",
-                reg_name(in->rt), in->vn, in->imm);
-        break;
-
-    case OP_NEON_LD1:
-    case OP_NEON_ST1: {
-        if (in->rn == 15) {
-            ok = 0;
-            trap(f, in, "vld1/vst1 pc base");
-            break;
-        }
-        const char *rn = reg_name(in->rn);
-        for (uint32_t k = 0; k < in->imm; k++) {
-            int d = in->vd + (int)k;
-            if (in->op == OP_NEON_LD1)
-                fprintf(f,
-                        "    vita_d_set(%d, (uint64_t)vita_read32(%s + %u) | "
-                        "((uint64_t)vita_read32(%s + %u) << 32));\n",
-                        d, rn, k * 8, rn, k * 8 + 4);
-            else {
-                fprintf(
-                    f, "    vita_write32(%s + %u, (uint32_t)vita_d_get(%d));\n",
-                    rn, k * 8, d);
-                fprintf(f,
-                        "    vita_write32(%s + %u, (uint32_t)(vita_d_get(%d) "
-                        ">> 32));\n",
-                        rn, k * 8 + 4, d);
-            }
-        }
-        /* Rm = 13: advance by the bytes moved; another register: by it. */
-        if (in->rm == 13)
-            fprintf(f, "    %s += %u;\n", rn, in->imm * 8);
-        else if (in->rm != 15)
-            fprintf(f, "    %s += %s;\n", rn, reg_name(in->rm));
-        break;
-    }
-
-    case OP_NEON_LD_ALL:
-    case OP_NEON_LD_LANE:
-    case OP_NEON_ST_LANE: {
-        if (in->rn == 15) {
-            ok = 0;
-            trap(f, in, "vld/vst lane pc base");
-            break;
-        }
-        const char *rn = reg_name(in->rn);
-        const char *rd = in->neon_size == 8    ? "vita_read8"
-                         : in->neon_size == 16 ? "vita_read16"
-                                               : "vita_read32";
-        const char *wr = in->neon_size == 8    ? "vita_write8"
-                         : in->neon_size == 16 ? "vita_write16"
-                                               : "vita_write32";
-        uint32_t bytes = in->neon_size / 8;
-        if (in->op == OP_NEON_LD_ALL) {
-            /* n elements, one per register; VLD1 with T loads one element
-             * into two registers. */
-            for (uint32_t k = 0; k < in->bf_width; k++) {
-                uint32_t e = in->imm == 1 ? 0 : k;
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_dup(%s(%s + %u), %u));\n",
-                        in->vd + (int)(k * in->bf_lsb), rd, rn, e * bytes,
-                        in->neon_size);
-            }
-        } else {
-            for (uint32_t k = 0; k < in->imm; k++) {
-                int d = in->vd + (int)(k * in->bf_lsb);
-                if (in->op == OP_NEON_LD_LANE)
-                    fprintf(
-                        f,
-                        "    vita_d_set(%d, vita_neon_set_lane(vita_d_get(%d), "
-                        "%u, %s(%s + %u), %u));\n",
-                        d, d, (unsigned)in->imm64, rd, rn, k * bytes,
-                        in->neon_size);
-                else
-                    fprintf(
-                        f,
-                        "    %s(%s + %u, "
-                        "(uint%u_t)vita_neon_lane(vita_d_get(%d), %u, %u));\n",
-                        wr, rn, k * bytes, in->neon_size, d,
-                        (unsigned)in->imm64, in->neon_size);
-            }
-        }
-        if (in->rm == 13)
-            fprintf(f, "    %s += %u;\n", rn, in->imm * bytes);
-        else if (in->rm != 15)
-            fprintf(f, "    %s += %s;\n", rn, reg_name(in->rm));
-        break;
-    }
-
-    case OP_NEON_LDN:
-    case OP_NEON_STN: {
-        if (in->rn == 15) {
-            ok = 0;
-            trap(f, in, "vldn/vstn pc base");
-            break;
-        }
-        const char *rn = reg_name(in->rn);
-        fprintf(f, "    %s(%u, %d, %u, %u, %s, %u);\n",
-                in->op == OP_NEON_LDN ? "vita_neon_ldn" : "vita_neon_stn",
-                in->imm, in->vd, in->bf_lsb, in->bf_width, rn, in->neon_size);
-        if (in->rm == 13)
-            fprintf(f, "    %s += %u;\n", rn, in->imm * in->bf_width * 8);
-        else if (in->rm != 15)
-            fprintf(f, "    %s += %s;\n", rn, reg_name(in->rm));
-        break;
-    }
-
-    case OP_NEON_DUP_LANE:
-        /* The source lane is one D register whichever form this is; only
-         * the destination doubles up. */
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f,
-                    "    vita_d_set(%d, "
-                    "vita_neon_dup((uint32_t)vita_neon_lane(vita_d_get(%d), "
-                    "%u, %u), %u));\n",
-                    in->vd + q, in->vm, in->imm, in->neon_size, in->neon_size);
-        break;
-
-    case OP_NEON_EXT:
-        if (in->neon_q)
-            fprintf(f, "    vita_neon_ext_q(%d, %d, %d, %u);\n", in->vd, in->vn,
-                    in->vm, in->imm);
-        else
-            fprintf(f,
-                    "    vita_d_set(%d, vita_neon_ext(vita_d_get(%d), "
-                    "vita_d_get(%d), %u));\n",
-                    in->vd, in->vn, in->vm, in->imm);
-        break;
-
-    case OP_NEON_SWP:
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f,
-                    "    { uint64_t _t = vita_d_get(%d); vita_d_set(%d, "
-                    "vita_d_get(%d)); vita_d_set(%d, _t); }\n",
-                    in->vd + q, in->vd + q, in->vm + q, in->vm + q);
-        break;
-
-    case OP_NEON_TRN:
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f, "    vita_neon_trn(%d, %d, %u);\n", in->vd + q,
-                    in->vm + q, in->neon_size);
-        break;
-
-    case OP_NEON_TBL:
-    case OP_NEON_TBX:
-        fprintf(f,
-                "    vita_d_set(%d, vita_neon_tbl(vita_d_get(%d), %d, %u, "
-                "vita_d_get(%d), %d));\n",
-                in->vd, in->vd, in->vn, in->imm, in->vm, in->op == OP_NEON_TBX);
-        break;
-
-    case OP_NEON_HALVE:
-        fprintf(f,
-                "    vita_d_set(%d, vita_neon_halve(vita_d_get(%d), "
-                "vita_d_get(%d)));\n",
-                in->vd, in->vm, in->vm + 1);
-        break;
-
-    case OP_NEON_UNHALVE:
-        fprintf(f, "    vita_neon_unhalve(%d, vita_d_get(%d));\n", in->vd,
-                in->vm);
-        break;
-
-    case OP_NEON_PADDL:
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f,
-                    "    vita_d_set(%d, vita_neon_paddl(vita_d_get(%d), %u, "
-                    "%u));\n",
-                    in->vd + q, in->vm + q, in->neon_size, in->vfp_unsigned);
-        break;
-
-    case OP_NEON_MVN:
-    case OP_NEON_CLZ:
-    case OP_NEON_CNT:
-    case OP_NEON_REV:
-    case OP_NEON_NEG:
-    case OP_NEON_ABS:
-    case OP_NEON_CMP0:
-    case OP_NEON_FNEG:
-    case OP_NEON_FABS:
-    case OP_NEON_FRECPE:
-    case OP_NEON_FRSQRTE:
-    case OP_NEON_CVT:
-        for (int q = 0; q <= in->neon_q; q++) {
-            int d = in->vd + q, m = in->vm + q;
-            switch (in->op) {
-            case OP_NEON_MVN:
-                fprintf(f, "    vita_d_set(%d, ~vita_d_get(%d));\n", d, m);
-                break;
-            case OP_NEON_CLZ:
-                fprintf(
-                    f,
-                    "    vita_d_set(%d, vita_neon_clz(vita_d_get(%d), %u));\n",
-                    d, m, in->neon_size);
-                break;
-            case OP_NEON_CNT:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_cnt(vita_d_get(%d)));\n",
-                        d, m);
-                break;
-            case OP_NEON_REV:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_rev(vita_d_get(%d), %u, "
-                        "%u));\n",
-                        d, m, in->neon_size, in->imm);
-                break;
-            case OP_NEON_NEG:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_sub(0, vita_d_get(%d), "
-                        "%u));\n",
-                        d, m, in->neon_size);
-                break;
-            case OP_NEON_ABS:
-                fprintf(
-                    f,
-                    "    vita_d_set(%d, vita_neon_abs(vita_d_get(%d), %u));\n",
-                    d, m, in->neon_size);
-                break;
-            case OP_NEON_CMP0:
-                if (in->neon_f)
-                    fprintf(f,
-                            "    vita_d_set(%d, "
-                            "vita_neon_fcmp0(vita_d_get(%d), %u));\n",
-                            d, m, in->imm);
-                else
-                    fprintf(f,
-                            "    vita_d_set(%d, vita_neon_cmp0(vita_d_get(%d), "
-                            "%u, %u));\n",
-                            d, m, in->neon_size, in->imm);
-                break;
-            case OP_NEON_FNEG:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_d_get(%d) ^ "
-                        "0x8000000080000000ull);\n",
-                        d, m);
-                break;
-            case OP_NEON_FABS:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_d_get(%d) & "
-                        "0x7FFFFFFF7FFFFFFFull);\n",
-                        d, m);
-                break;
-            case OP_NEON_FRECPE:
-                fprintf(
-                    f,
-                    "    vita_d_set(%d, vita_neon_frecpe(vita_d_get(%d)));\n",
-                    d, m);
-                break;
-            case OP_NEON_FRSQRTE:
-                fprintf(
-                    f,
-                    "    vita_d_set(%d, vita_neon_frsqrte(vita_d_get(%d)));\n",
-                    d, m);
-                break;
-            default:
-                fprintf(
-                    f,
-                    "    vita_d_set(%d, vita_neon_cvt(vita_d_get(%d), %u));\n",
-                    d, m, in->imm);
-                break;
-            }
-        }
-        break;
-
-    case OP_NEON_MUL:
-    case OP_NEON_MLA:
-    case OP_NEON_MLS:
-        for (int q = 0; q <= in->neon_q; q++) {
-            int d = in->vd + q, n = in->vn + q, m = in->vm + q;
-            if (in->op == OP_NEON_MUL)
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_mul(vita_d_get(%d), "
-                        "vita_d_get(%d), %u));\n",
-                        d, n, m, in->neon_size);
-            else
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_%s(vita_d_get(%d), "
-                        "vita_d_get(%d), vita_d_get(%d), %u));\n",
-                        d, in->op == OP_NEON_MLA ? "mla" : "mls", d, n, m,
-                        in->neon_size);
-        }
-        break;
-
-    /* The value is Vm and the shift counts are Vn: the operands are
-     * written the other way round from every other three-register form. */
-    case OP_NEON_SHL_REG:
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f,
-                    "    vita_d_set(%d, vita_neon_shl_reg(vita_d_get(%d), "
-                    "vita_d_get(%d), %u, %d));\n",
-                    in->vd + q, in->vm + q, in->vn + q, in->neon_size,
-                    in->vfp_unsigned ? 1 : 0);
-        break;
-
-    case OP_NEON_MAX:
-    case OP_NEON_MIN:
-    case OP_NEON_CGT:
-    case OP_NEON_CGE: {
-        const char *fn3 = in->op == OP_NEON_MAX   ? "vita_neon_max"
-                          : in->op == OP_NEON_MIN ? "vita_neon_min"
-                          : in->op == OP_NEON_CGT ? "vita_neon_cgt"
-                                                  : "vita_neon_cge";
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f,
-                    "    vita_d_set(%d, %s(vita_d_get(%d), vita_d_get(%d), %u, "
-                    "%d));\n",
-                    in->vd + q, fn3, in->vn + q, in->vm + q, in->neon_size,
-                    in->vfp_unsigned ? 1 : 0);
-        break;
-    }
-
-    /* f32 lanes. A Q form is still two independent halves: none of these
-     * crosses the middle, and VPADD has no Q form at all. */
-    case OP_NEON_FADD:
-    case OP_NEON_FSUB:
-    case OP_NEON_FMUL:
-    case OP_NEON_FPADD:
-    case OP_NEON_FABD:
-    case OP_NEON_FMAX:
-    case OP_NEON_FMIN:
-    case OP_NEON_FCEQ:
-    case OP_NEON_FCGE:
-    case OP_NEON_FCGT:
-    case OP_NEON_FRECPS:
-    case OP_NEON_FRSQRTS: {
-        const char *fn2 = in->op == OP_NEON_FADD     ? "fadd"
-                          : in->op == OP_NEON_FSUB   ? "fsub"
-                          : in->op == OP_NEON_FMUL   ? "fmul"
-                          : in->op == OP_NEON_FPADD  ? "fpadd"
-                          : in->op == OP_NEON_FABD   ? "fabd"
-                          : in->op == OP_NEON_FMAX   ? "fmax"
-                          : in->op == OP_NEON_FMIN   ? "fmin"
-                          : in->op == OP_NEON_FCEQ   ? "fceq"
-                          : in->op == OP_NEON_FCGE   ? "fcge"
-                          : in->op == OP_NEON_FCGT   ? "fcgt"
-                          : in->op == OP_NEON_FRECPS ? "frecps"
-                                                     : "frsqrts";
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f,
-                    "    vita_d_set(%d, vita_neon_%s(vita_d_get(%d), "
-                    "vita_d_get(%d)));\n",
-                    in->vd + q, fn2, in->vn + q, in->vm + q);
-        break;
-    }
-
-    case OP_NEON_FMLA:
-    case OP_NEON_FMLS:
-        for (int q = 0; q <= in->neon_q; q++)
-            fprintf(f,
-                    "    vita_d_set(%d, vita_neon_%s(vita_d_get(%d), "
-                    "vita_d_get(%d), vita_d_get(%d)));\n",
-                    in->vd + q, in->op == OP_NEON_FMLA ? "fmla" : "fmls",
-                    in->vd + q, in->vn + q, in->vm + q);
-        break;
-
-    case OP_NEON_SHR:
-    case OP_NEON_SRA:
-    case OP_NEON_RSHR:
-    case OP_NEON_RSRA:
-    case OP_NEON_SHL:
-    case OP_NEON_SLI:
-    case OP_NEON_SRI:
-        for (int q = 0; q <= in->neon_q; q++) {
-            int d = in->vd + q, m = in->vm + q;
-            unsigned u = in->vfp_unsigned ? 1u : 0u;
-            switch (in->op) {
-            case OP_NEON_SHR:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_shr(vita_d_get(%d), %u, "
-                        "%u, %u));\n",
-                        d, m, in->neon_size, in->imm, u);
-                break;
-            case OP_NEON_RSHR:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_rshr(vita_d_get(%d), %u, "
-                        "%u, %u));\n",
-                        d, m, in->neon_size, in->imm, u);
-                break;
-            case OP_NEON_SRA:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_add(vita_d_get(%d), "
-                        "vita_neon_shr(vita_d_get(%d), %u, %u, %u), %u));\n",
-                        d, d, m, in->neon_size, in->imm, u, in->neon_size);
-                break;
-            case OP_NEON_RSRA:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_add(vita_d_get(%d), "
-                        "vita_neon_rshr(vita_d_get(%d), %u, %u, %u), %u));\n",
-                        d, d, m, in->neon_size, in->imm, u, in->neon_size);
-                break;
-            case OP_NEON_SHL:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_shl(vita_d_get(%d), %u, "
-                        "%u));\n",
-                        d, m, in->neon_size, in->imm);
-                break;
-            case OP_NEON_SLI:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_sli(vita_d_get(%d), "
-                        "vita_d_get(%d), %u, %u));\n",
-                        d, d, m, in->neon_size, in->imm);
-                break;
-            default:
-                fprintf(f,
-                        "    vita_d_set(%d, vita_neon_sri(vita_d_get(%d), "
-                        "vita_d_get(%d), %u, %u));\n",
-                        d, d, m, in->neon_size, in->imm);
-                break;
-            }
-        }
-        break;
-
-    case OP_NEON_MOVL:
-    case OP_NEON_SHLL:
-        /* The source is read once: the Q destination may contain it. */
-        fprintf(f, "    { uint64_t _m = vita_d_get(%d);\n", in->vm);
-        fprintf(
-            f,
-            "      vita_d_set(%d, vita_neon_shl(vita_neon_widen((uint32_t)_m, "
-            "%u, %u), %u, %u));\n",
-            in->vd, in->neon_size, in->vfp_unsigned ? 1u : 0u,
-            in->neon_size * 2, in->imm);
-        fprintf(
-            f,
-            "      vita_d_set(%d, vita_neon_shl(vita_neon_widen((uint32_t)(_m "
-            ">> 32), %u, %u), %u, %u)); }\n",
-            in->vd + 1, in->neon_size, in->vfp_unsigned ? 1u : 0u,
-            in->neon_size * 2, in->imm);
-        break;
-
-    case OP_NEON_MOVN:
-    case OP_NEON_SHRN:
-    case OP_NEON_RSHRN:
-        fprintf(f,
-                "    vita_d_set(%d, vita_neon_narrow(vita_d_get(%d), "
-                "vita_d_get(%d), %u, %u, %d));\n",
-                in->vd, in->vm, in->vm + 1, in->neon_size, in->imm,
-                in->op == OP_NEON_RSHRN ? 1 : 0);
-        break;
-
-    case OP_NEON_MUL_SCALAR:
-    case OP_NEON_MLA_SCALAR:
-    case OP_NEON_MLS_SCALAR:
-        /* The lane is broadcast once, then it is the vector operation. */
-        fprintf(f,
-                "    { uint64_t _s = "
-                "vita_neon_dup((uint32_t)vita_neon_lane(vita_d_get(%d), %u, "
-                "%u), %u);\n",
-                in->vm, in->imm, in->neon_size, in->neon_size);
-        for (int q = 0; q <= in->neon_q; q++) {
-            int d = in->vd + q, n = in->vn + q;
-            if (in->neon_f) {
-                if (in->op == OP_NEON_MUL_SCALAR)
-                    fprintf(f,
-                            "      vita_d_set(%d, "
-                            "vita_neon_fmul(vita_d_get(%d), _s));\n",
-                            d, n);
-                else
-                    fprintf(f,
-                            "      vita_d_set(%d, vita_neon_%s(vita_d_get(%d), "
-                            "vita_d_get(%d), _s));\n",
-                            d, in->op == OP_NEON_MLA_SCALAR ? "fmla" : "fmls",
-                            d, n);
-            } else {
-                if (in->op == OP_NEON_MUL_SCALAR)
-                    fprintf(f,
-                            "      vita_d_set(%d, "
-                            "vita_neon_mul(vita_d_get(%d), _s, %u));\n",
-                            d, n, in->neon_size);
-                else
-                    fprintf(f,
-                            "      vita_d_set(%d, vita_neon_%s(vita_d_get(%d), "
-                            "vita_d_get(%d), _s, %u));\n",
-                            d, in->op == OP_NEON_MLA_SCALAR ? "mla" : "mls", d,
-                            n, in->neon_size);
-            }
-        }
-        fprintf(f, "    }\n");
-        break;
-
-    case OP_MRC_TLS:
-        if (in->rt == ARM_NO_REG || in->rt == 15) {
-            ok = 0;
-            break;
-        }
-        fprintf(f, "    %s = vita_tls_base();\n", reg_name(in->rt));
-        break;
-
-    case OP_VNMLA:
-    case OP_VNMLS: {
-        if (in->vd == ARM_NO_REG || in->vn == ARM_NO_REG ||
-            in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        char c = (in->op == OP_VNMLS) ? '+' : '-';
-        if (in->vfp_dp)
-            fprintf(f,
-                    "    vfp_setd(%d, -vfp_getd(%d) %c (vfp_getd(%d) * "
-                    "vfp_getd(%d)));\n",
-                    in->vd, in->vd, c, in->vn, in->vm);
-        else
-            fprintf(f,
-                    "    vfp_setf(%d, -vfp_getf(%d) %c (vfp_getf(%d) * "
-                    "vfp_getf(%d)));\n",
-                    in->vd, in->vd, c, in->vn, in->vm);
-        break;
-    }
-
-    case OP_LDREX:
-    case OP_STREX: {
-        if (in->rn == ARM_NO_REG || in->rn == 15 || in->rt == ARM_NO_REG ||
-            in->rt == 15) {
-            ok = 0;
-            break;
-        }
-        const uint32_t size = in->mem_size / 8u;
-        if (in->op == OP_LDREX) {
-            fprintf(f, "    %s = (uint32_t)vita_ldrex(%s + %u, %u);\n",
-                    reg_name(in->rt), reg_name(in->rn), in->imm, size);
-        } else {
-            if (in->rd == ARM_NO_REG || in->rd == 15) {
-                ok = 0;
-                break;
-            }
-            fprintf(f, "    %s = vita_strex(%s + %u, %s, %u);\n",
-                    reg_name(in->rd), reg_name(in->rn), in->imm,
-                    reg_name(in->rt), size);
-        }
-        break;
-    }
-
-    case OP_CLREX:
-        fprintf(f, "    vita_clrex();\n");
-        break;
-
-    case OP_DMB:
-        fprintf(f, "    vita_barrier();\n");
-        break;
-
-    case OP_VMOV_IMM:
-        if (in->vd == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->vfp_dp)
-            fprintf(f, "    vita_d_set(%d, 0x%016llXull);\n", in->vd,
-                    (unsigned long long)in->imm64);
-        else
-            fprintf(f, "    vfp_setu(%d, 0x%08Xu);\n", in->vd, in->imm);
-        break;
-
-    case OP_VMOV_D_TO_C:
-    case OP_VMOV_C_TO_D: {
-        if (in->vm == ARM_NO_REG || in->rt == ARM_NO_REG ||
-            in->rt2 == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->rt == 15 || in->rt2 == 15) {
-            ok = 0;
-            break;
-        }
-        const char *lo = reg_name(in->rt), *hi = reg_name(in->rt2);
-        if (in->op == OP_VMOV_D_TO_C) {
-            if (in->vfp_dp)
-                fprintf(f,
-                        "    %s = (uint32_t)vita_d_get(%d); %s = "
-                        "(uint32_t)(vita_d_get(%d) >> 32);\n",
-                        lo, in->vm, hi, in->vm);
-            else
-                fprintf(f, "    %s = vfp_getu(%d); %s = vfp_getu(%d);\n", lo,
-                        in->vm, hi, in->vm + 1);
-        } else {
-            if (in->vfp_dp)
-                fprintf(f, "    vita_d_set(%d, ((uint64_t)%s << 32) | %s);\n",
-                        in->vm, hi, lo);
-            else
-                fprintf(f, "    vfp_setu(%d, %s); vfp_setu(%d, %s);\n", in->vm,
-                        lo, in->vm + 1, hi);
-        }
-        break;
-    }
-
-    case OP_VCVT_F16_F32:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        fprintf(f,
-                "    vfp_setf(%d, vita_f16_to_f32((uint16_t)(vfp_getu(%d) >> "
-                "%u)));\n",
-                in->vd, in->vm, in->imm ? 16u : 0u);
-        break;
-
-    case OP_VCVT_F32_F16:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->imm)
-            fprintf(f,
-                    "    vfp_setu(%d, (vfp_getu(%d) & 0x0000FFFFu) | "
-                    "((uint32_t)vita_f32_to_f16(vfp_getf(%d)) << 16));\n",
-                    in->vd, in->vd, in->vm);
-        else
-            fprintf(f,
-                    "    vfp_setu(%d, (vfp_getu(%d) & 0xFFFF0000u) | "
-                    "vita_f32_to_f16(vfp_getf(%d)));\n",
-                    in->vd, in->vd, in->vm);
-        break;
-
-    case OP_VCVT_FF:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->vfp_dp)
-            fprintf(f, "    vfp_setf(%d, (float)vfp_getd(%d));\n", in->vd,
-                    in->vm);
-        else
-            fprintf(f, "    vfp_setd(%d, (double)vfp_getf(%d));\n", in->vd,
-                    in->vm);
-        break;
-
-    case OP_CMP:
-    case OP_CMN:
-        operand2(o2, sizeof(o2), in);
-        fprintf(f, "    { uint32_t _a = %s, _b = %s;\n", rn_s, o2);
-        fprintf(f, "      vita_flags_%s(_a, _b, _a %c _b); }\n",
-                in->op == OP_CMP ? "sub" : "add", in->op == OP_CMP ? '-' : '+');
-        break;
-
-    case OP_TST:
-        operand2(o2, sizeof(o2), in);
-        fprintf(f, "    vita_flags_nz(%s & %s);\n", rn_s, o2);
-        break;
-
-    case OP_ADR:
-        fprintf(f, "    %s = 0x%08X;\n", reg_name(in->rd),
-                (pc_of(in) & ~3u) + in->imm);
-        break;
-
-    case OP_LDR:
-    case OP_LDRB:
-    case OP_LDRH:
-    case OP_LDRSB:
-    case OP_LDRSH: {
-        if (!address(addr, sizeof(addr), in)) {
-            ok = 0;
-            trap(f, in, "load addr");
-            break;
-        }
-        /* A literal-pool load has a fixed address, so the value is known at
-         * translation time and becomes a constant rather than a memory
-         * access. This is also what stops the pool from being mistaken for
-         * code later. */
-        if (in->rn == 15 && in->has_imm) {
-            uint32_t pc = pc_of(in) & ~3u;
-            /* The offset has a sign: the constant may sit before the
-             * code that uses it. */
-            uint32_t at = in->mem_add ? pc + in->imm : pc - in->imm;
-            /* A literal word the loader fills with an imported variable's
-             * address holds a placeholder in the image. */
-            const vsite *vs = in->op == OP_LDR ? vsite_find(at) : NULL;
-            if (vs && vs->code == 2) {
+        case OP_MOV: {
+            /* A MOVW at a variable import's site builds the low half of an
+             * address the loader supplies; the immediate in the image is a
+             * placeholder. The symbol is read instead. */
+            const vsite *vs = in->has_imm ? vsite_find(in->addr) : NULL;
+            if (vs && vs->code == 0x2F) {
                 char vsym[96];
                 var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var],
                            module_id);
-                fprintf(f, "    %s = %s;  /* imported variable */\n",
-                        reg_name(in->rt), vsym);
+                uint32_t add = mod->vars[vs->var].sites[0].addend;   /* the site's own, below */
+                for (uint32_t s = 0; s < mod->vars[vs->var].site_count; s++)
+                    if (mod->vars[vs->var].sites[s].addr == in->addr) add = mod->vars[vs->var].sites[s].addend;
+                if (add) fprintf(f, "    %s = (%s + 0x%Xu) & 0x0000FFFFu;  /* imported variable */\n", reg_name(in->rd), vsym, add);
+                else     fprintf(f, "    %s = %s & 0x0000FFFFu;  /* imported variable */\n", reg_name(in->rd), vsym);
                 st->var_refs++;
                 break;
             }
-            const uint8_t *p = vm_va(img, at, 4);
-            if (p) {
-                uint32_t v = (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
-                             ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-                fprintf(f, "    %s = 0x%08X;  /* literal */\n",
-                        reg_name(in->rt), v);
-                st->literals++;
+            operand2(o2, sizeof(o2), in);
+            fprintf(f, "    %s = %s;\n", reg_name(in->rd), o2);
+            if (in->sets_flags) fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
+            break;
+        }
+
+        case OP_MOVT: {
+            const vsite *vs = vsite_find(in->addr);
+            if (vs && vs->code == 0x30) {
+                char vsym[96];
+                var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var],
+                           module_id);
+                uint32_t add = 0;
+                for (uint32_t s = 0; s < mod->vars[vs->var].site_count; s++)
+                    if (mod->vars[vs->var].sites[s].addr == in->addr) add = mod->vars[vs->var].sites[s].addend;
+                if (add) fprintf(f, "    %s = (%s & 0x0000FFFFu) | ((%s + 0x%Xu) & 0xFFFF0000u);  /* imported variable */\n",
+                                 reg_name(in->rd), reg_name(in->rd), vsym, add);
+                else     fprintf(f, "    %s = (%s & 0x0000FFFFu) | (%s & 0xFFFF0000u);  /* imported variable */\n",
+                                 reg_name(in->rd), reg_name(in->rd), vsym);
+                st->var_refs++;
                 break;
             }
-        }
-        const char *rd = in->op == OP_LDR     ? "vita_read32(%s)"
-                         : in->op == OP_LDRB  ? "vita_read8(%s)"
-                         : in->op == OP_LDRH  ? "vita_read16(%s)"
-                         : in->op == OP_LDRSB ? "vita_sxtb(vita_read8(%s))"
-                                              : "vita_sxth(vita_read16(%s))";
-        fprintf(f, "    %s = ", reg_name(in->rt));
-        fprintf(f, rd, addr);
-        fprintf(f, ";\n");
-        writeback(f, in);
-        break;
-    }
-
-    case OP_LDRD:
-    case OP_STRD: {
-        if (in->rn == ARM_NO_REG || in->rt2 == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        /* rt/rt2 are named as variables, so neither may be the PC — there
-         * is no `pc` in cpu.h to load into or store from, deliberately. */
-        if (in->rt == 15 || in->rt2 == 15) {
-            ok = 0;
-            trap(f, in, "ldrd/strd pc");
-            break;
-        }
-        /* Two adjacent words. The offset is added or subtracted per the U
-         * bit, and the second register is always four bytes above the
-         * first regardless of direction.
-         *
-         * Through the shared address(), which is the only thing that knows
-         * how to resolve a PC-relative base. Building the string here is
-         * what put a bare `pc` in the output — the same mistake VLDR made,
-         * in the third place it could be made. */
-        char base[64];
-        if (!address(base, sizeof(base), in)) {
-            ok = 0;
-            trap(f, in, "ldrd/strd addr");
+            /* Top half written, bottom half preserved. One line, and the
+             * difference between a program that builds correct pointers and one
+             * whose every constructed address is missing its high 16 bits. */
+            fprintf(f, "    %s = (%s & 0x0000FFFFu) | 0x%08Xu;\n",
+                    reg_name(in->rd), reg_name(in->rd), in->imm << 16);
             break;
         }
 
-        if (in->op == OP_LDRD) {
-            fprintf(f, "    %s = vita_read32(%s);\n", reg_name(in->rt), base);
-            fprintf(f, "    %s = vita_read32((%s) + 4);\n", reg_name(in->rt2),
-                    base);
-        } else {
-            fprintf(f, "    vita_write32(%s, %s);\n", base, reg_name(in->rt));
-            fprintf(f, "    vita_write32((%s) + 4, %s);\n", base,
-                    reg_name(in->rt2));
-        }
-        writeback(f, in);
-        break;
-    }
-
-    case OP_STR:
-    case OP_STRB:
-    case OP_STRH: {
-        if (!address(addr, sizeof(addr), in)) {
-            ok = 0;
-            trap(f, in, "store addr");
+        case OP_MVN:
+            operand2(o2, sizeof(o2), in);
+            fprintf(f, "    %s = ~(%s);\n", reg_name(in->rd), o2);
+            if (in->sets_flags) fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
             break;
-        }
-        const char *w = in->op == OP_STR    ? "vita_write32"
-                        : in->op == OP_STRB ? "vita_write8"
-                                            : "vita_write16";
-        const char *cast = in->op == OP_STRB   ? "uint8_t"
-                           : in->op == OP_STRH ? "uint16_t"
-                                               : "uint32_t";
-        fprintf(f, "    %s(%s, (%s)%s);\n", w, addr, cast, reg_name(in->rt));
-        writeback(f, in);
-        break;
-    }
 
-    case OP_PUSH: {
-        /* ARM pushes in descending register order to descending addresses,
-         * so the lowest-numbered register ends up at the lowest address.
-         * Emitting the stores in ascending order with a pre-decremented sp
-         * gives the same layout without simulating the order. */
-        int count = 0;
-        for (int i = 0; i < 16; i++)
-            if (in->reglist & (1u << i))
-                count++;
-        fprintf(f, "    sp -= %d;\n", count * 4);
-        int slot = 0;
-        for (int i = 0; i < 16; i++) {
-            if (!(in->reglist & (1u << i)))
-                continue;
-            /* A register list can name the PC. Its stored value is this
-             * instruction's own address plus four, which is known here —
-             * the same rule as any other PC source, and the reason this
-             * goes through reg_operand rather than reg_name. */
-            {
-                char rv[64];
-                reg_operand(rv, sizeof(rv), i, in);
-                fprintf(f, "    vita_write32(sp + %d, %s);\n", slot * 4, rv);
-            }
-            slot++;
-        }
-        break;
-    }
-
-    /* General LDM/STM: n registers, ascending, at base (increment-after)
-     * or at base - 4n (decrement-before); write-back moves the base by
-     * 4n either way. A load that includes the PC is a jump, left as a
-     * trap so it is counted rather than mistranslated. */
-    case OP_LDM:
-    case OP_STM: {
-        if (in->rn == ARM_NO_REG || in->rn == 15) {
-            ok = 0;
-            break;
-        }
-        if (in->op == OP_LDM && (in->reglist & 0x8000)) {
-            ok = 0;
-            trap(f, in, "ldm with pc");
-            break;
-        }
-        int count = 0;
-        for (int i = 0; i < 16; i++)
-            if (in->reglist & (1u << i))
-                count++;
-        const char *rn = reg_name(in->rn);
-        /* The base is read once, before any register in the list is
-         * loaded over it, and the loads may include it. For the
-         * decrement-before forms the block starts 4n below the base. */
-        fprintf(f, "    { uint32_t _b = %s;\n", rn);
-        if (!in->mem_add)
-            fprintf(f, "      _b -= %d;\n", count * 4);
-        int slot = 0;
-        for (int i = 0; i < 16; i++) {
-            if (!(in->reglist & (1u << i)))
-                continue;
-            if (in->op == OP_LDM)
-                fprintf(f, "      %s = vita_read32(_b + %d);\n", reg_name(i),
-                        slot * 4);
-            else
-                fprintf(f, "      vita_write32(_b + %d, %s);\n", slot * 4,
-                        reg_name(i));
-            slot++;
-        }
-        /* Write-back lands the base after the block (IA) or at its
-         * start (DB), which is _b + 4n and _b respectively. */
-        if (in->writeback)
-            fprintf(f, "      %s = _b + %d; }\n", rn,
-                    in->mem_add ? count * 4 : 0);
-        else
-            fprintf(f, "    }\n");
-        break;
-    }
-
-    case OP_POP: {
-        int slot = 0;
-        for (int i = 0; i < 16; i++) {
-            if (!(in->reglist & (1u << i)))
-                continue;
-            if (i == 15) {
-                slot++;
-                continue;
-            } /* PC: this is the return */
-            fprintf(f, "    %s = vita_read32(sp + %d);\n", reg_name(i),
-                    slot * 4);
-            slot++;
-        }
-        fprintf(f, "    sp += %d;\n", slot * 4);
-        if (in->reglist & 0x8000)
-            fprintf(f, "    return;\n");
-        break;
-    }
-
-    case OP_SXTB:
-    case OP_SXTH:
-    case OP_UXTB:
-    case OP_UXTH:
-    case OP_SXTB16:
-    case OP_UXTB16: {
-        const char *fn3 = in->op == OP_SXTB     ? "vita_sxtb"
-                          : in->op == OP_SXTH   ? "vita_sxth"
-                          : in->op == OP_UXTB   ? "vita_uxtb"
-                          : in->op == OP_UXTH   ? "vita_uxth"
-                          : in->op == OP_SXTB16 ? "vita_sxtb16"
-                                                : "vita_uxtb16";
-        /* The source is rotated first, which is how a loop takes the
-         * second, third and fourth bytes of a word. */
-        char src[64];
-        if (in->shift_amt)
-            snprintf(src, sizeof(src), "vita_ror(%s, %u)", src_name(in, in->rm),
-                     in->shift_amt);
-        else
-            snprintf(src, sizeof(src), "%s", src_name(in, in->rm));
-        if (in->rn == ARM_NO_REG)
-            fprintf(f, "    %s = %s(%s);\n", reg_name(in->rd), fn3, src);
-        else if (in->op == OP_SXTB16 || in->op == OP_UXTB16)
-            fprintf(f, "    %s = vita_add16(%s, %s(%s));\n", reg_name(in->rd),
-                    src_name(in, in->rn), fn3, src);
-        else
-            fprintf(f, "    %s = %s + %s(%s);\n", reg_name(in->rd),
-                    src_name(in, in->rn), fn3, src);
-        break;
-    }
-
-    case OP_REV:
-        fprintf(f, "    %s = vita_rev(%s);\n", reg_name(in->rd),
-                src_name(in, in->rm));
-        break;
-
-    case OP_SBFX:
-    case OP_UBFX:
-        fprintf(f, "    %s = %s(%s, %u, %u);\n", reg_name(in->rd),
-                in->op == OP_SBFX ? "vita_sbfx" : "vita_ubfx",
-                src_name(in, in->rn), in->bf_lsb, in->bf_width);
-        break;
-
-    case OP_BFI:
-        fprintf(f, "    %s = vita_bfi(%s, %s, %u, %u);\n", reg_name(in->rd),
-                reg_name(in->rd), src_name(in, in->rn), in->bf_lsb,
-                in->bf_width);
-        break;
-
-    case OP_BFC:
-        fprintf(f, "    %s = vita_bfi(%s, 0, %u, %u);\n", reg_name(in->rd),
-                reg_name(in->rd), in->bf_lsb, in->bf_width);
-        break;
-
-    case OP_CBZ:
-    case OP_CBNZ:
-        if (fb_has_label(b, in->target))
-            fprintf(f, "    if (%s %s 0) goto L_%08X;\n", src_name(in, in->rn),
-                    in->op == OP_CBZ ? "==" : "!=", in->target);
-        else if (fs_has(fs, target_key(in))) {
-            char sym[96];
-            function_symbol(sym, sizeof(sym), module_id, target_key(in));
-            fprintf(f, "    if (%s %s 0) { vita_call(%s); return; }\n",
-                    src_name(in, in->rn), in->op == OP_CBZ ? "==" : "!=", sym);
-        } else {
-            fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n", in->addr,
-                    in->target);
-            ok = 0;
-        }
-        break;
-
-    case OP_B:
-        if (fb_has_label(b, in->target)) {
-            if (in->target > in->addr) {
-                if (in->cond == ARM_COND_AL)
-                    fprintf(f, "    goto L_%08X;\n", in->target);
-                else
-                    fprintf(f, "    if (vita_cond(%u)) goto L_%08X;\n",
-                            in->cond, in->target);
-            } else if (fb_wait_loop(b, in)) {
-                /* Only another thread can end this loop: let one run. */
-                fprintf(f,
-                        "    if (vita_cond(%u)) { vita_spin_wait(0x%08Xu); "
-                        "goto L_%08X; }\n",
-                        in->cond, in->addr, in->target);
-                st->back_edges++;
-                st->wait_loops++;
+        case OP_ADD: case OP_SUB: {
+            operand2(o2, sizeof(o2), in);
+            const char *rn = rn_s;
+            if (in->sets_flags) {
+                /* The operands have to be captured before the destination is
+                 * written, because rd and rn are frequently the same register
+                 * and the flag computation needs the ORIGINAL values. */
+                fprintf(f, "    { uint32_t _a = %s, _b = %s;\n", rn, o2);
+                fprintf(f, "      %s = _a %c _b;\n", reg_name(in->rd),
+                        in->op == OP_ADD ? '+' : '-');
+                fprintf(f, "      vita_flags_%s(_a, _b, %s); }\n",
+                        in->op == OP_ADD ? "add" : "sub", reg_name(in->rd));
             } else {
-                /* A backward branch is where a loop goes round, and where
-                 * the running thread's time slice is counted down. */
-                if (in->cond == ARM_COND_AL)
-                    fprintf(f, "    { vita_back_edge(); goto L_%08X; }\n",
-                            in->target);
-                else
-                    fprintf(f,
-                            "    if (vita_cond(%u)) { vita_back_edge(); goto "
-                            "L_%08X; }\n",
-                            in->cond, in->target);
-                st->back_edges++;
+                fprintf(f, "    %s = %s %c %s;\n", reg_name(in->rd), rn,
+                        in->op == OP_ADD ? '+' : '-', o2);
             }
-        } else if (in->target < img->seg_vaddr ||
-                   in->target >= img->seg_vaddr + img->seg_len) {
-            /* Outside the segment entirely. This is not a branch the
-             * program makes — it is a linear sweep decoding data as code,
-             * which happens wherever a literal pool or a table sits inside
-             * .text. Naming it separately keeps it out of the count of
-             * things worth implementing. */
-            if (in->cond == ARM_COND_AL)
-                fprintf(f,
-                        "    vita_trap_unimpl(0x%08X, 0x%08X, \"branch out of "
-                        "segment\");\n",
-                        in->addr, in->raw);
+            break;
+        }
+
+        case OP_ADC: case OP_SBC: {
+            const char *rn = rn_s;
+            operand2(o2, sizeof(o2), in);
+            fprintf(f, "    { uint32_t _a = %s, _b = %s, _c = (uint32_t)flag_c;\n", rn, o2);
+            if (in->op == OP_ADC) {
+                fprintf(f, "      %s = _a + _b + _c;\n", reg_name(in->rd));
+                if (in->sets_flags)
+                    fprintf(f, "      vita_flags_adc(_a, _b, _c, %s);\n", reg_name(in->rd));
+            } else {
+                fprintf(f, "      %s = _a - _b - (1u - _c);\n", reg_name(in->rd));
+                if (in->sets_flags)
+                    fprintf(f, "      vita_flags_sub(_a, _b + (1u - _c), %s);\n", reg_name(in->rd));
+            }
+            fprintf(f, "    }\n");
+            break;
+        }
+
+        case OP_RSB:
+            /* rd = operand2 - rn. The 16-bit form is the negate, which the
+             * decoder presents as operand2 == #0; the 32-bit form carries a
+             * real operand2 (immediate or shifted register), and reading it as
+             * the negate turned `rsb r7, r5, r5, lsl #4` into `0 - r5`. */
+            operand2(o2, sizeof(o2), in);
+            fprintf(f, "    { uint32_t _a = %s, _b = %s;\n", o2, src_name(in, in->rn));
+            fprintf(f, "      %s = _a - _b;\n", reg_name(in->rd));
+            if (in->sets_flags)
+                fprintf(f, "      vita_flags_sub(_a, _b, %s);\n", reg_name(in->rd));
+            fprintf(f, "    }\n");
+            break;
+
+        case OP_AND: case OP_ORR: case OP_EOR: case OP_BIC: {
+            operand2(o2, sizeof(o2), in);
+            const char *rn = rn_s;
+            const char *ops = in->op == OP_AND ? "&" : in->op == OP_ORR ? "|" : "^";
+            if (in->op == OP_BIC)
+                fprintf(f, "    %s = %s & ~(%s);\n", reg_name(in->rd), rn, o2);
             else
-                fprintf(f,
-                        "    if (vita_cond(%u)) vita_trap_unimpl(0x%08X, "
-                        "0x%08X, \"branch out of segment\");\n",
-                        in->cond, in->addr, in->raw);
-            note_trap(st, "branch: target off-segment");
-            explicit_trap = 1;
-            ok = 0;
-        } else {
-            /* A branch out of this function's extent is a tail call. */
-            if (fs_has(fs, target_key(in))) {
+                fprintf(f, "    %s = %s %s %s;\n", reg_name(in->rd), rn, ops, o2);
+            if (in->sets_flags) fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
+            break;
+        }
+
+        case OP_LSL: case OP_LSR: case OP_ASR: case OP_ROR: {
+            static const char *fn2[4] = { "vita_lsl", "vita_lsr", "vita_asr", "vita_ror" };
+            int which = in->op == OP_LSL ? 0 : in->op == OP_LSR ? 1
+                      : in->op == OP_ASR ? 2 : 3;
+            const char *src = src_name(in, in->rm == ARM_NO_REG ? in->rd : in->rm);
+            if (in->has_imm)
+                fprintf(f, "    %s = %s(%s, %u);\n", reg_name(in->rd),
+                        fn2[which], src, in->imm);
+            else
+                /* Shift by register: the 16-bit form shifts rd by rm; the
+                 * 32-bit form names a separate rn. Reading rd for both turned
+                 * `asr.w r3, r9, ip` into a shift of r3, and a font's bit
+                 * test into noise. */
+                fprintf(f, "    %s = %s(%s, %s & 0xFF);\n", reg_name(in->rd),
+                        fn2[which], reg_name(in->rn != ARM_NO_REG ? in->rn : in->rd),
+                        src_name(in, in->rm));
+            if (in->sets_flags) fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
+            break;
+        }
+
+        case OP_MUL:
+            /* The 16-bit form is rd = rd * rm; the 32-bit form names rn. */
+            fprintf(f, "    %s = %s * %s;\n", reg_name(in->rd),
+                    reg_name(in->rn != ARM_NO_REG ? in->rn : in->rd), src_name(in, in->rm));
+            if (in->sets_flags) fprintf(f, "    vita_flags_nz(%s);\n", reg_name(in->rd));
+            break;
+
+        case OP_MLA:
+            fprintf(f, "    %s = %s + %s * %s;\n", reg_name(in->rd), reg_name(in->ra),
+                    reg_name(in->rn), reg_name(in->rm));
+            break;
+
+        case OP_MLS:
+            fprintf(f, "    %s = %s - %s * %s;\n", reg_name(in->rd), reg_name(in->ra),
+                    reg_name(in->rn), reg_name(in->rm));
+            break;
+
+        /* The 64-bit product goes into a temporary first: RdLo may be one of
+         * the operands, and the accumulating forms read both halves before
+         * either is written. */
+        case OP_UMULL:
+            fprintf(f, "    { uint64_t _p = (uint64_t)%s * %s;\n", reg_name(in->rn), reg_name(in->rm));
+            fprintf(f, "      %s = (uint32_t)_p; %s = (uint32_t)(_p >> 32); }\n",
+                    reg_name(in->rd), reg_name(in->rdhi));
+            break;
+
+        case OP_SMULL:
+            fprintf(f, "    { int64_t _p = (int64_t)(int32_t)%s * (int32_t)%s;\n", reg_name(in->rn), reg_name(in->rm));
+            fprintf(f, "      %s = (uint32_t)_p; %s = (uint32_t)((uint64_t)_p >> 32); }\n",
+                    reg_name(in->rd), reg_name(in->rdhi));
+            break;
+
+        case OP_UMLAL:
+            fprintf(f, "    { uint64_t _p = (((uint64_t)%s << 32) | %s) + (uint64_t)%s * %s;\n",
+                    reg_name(in->rdhi), reg_name(in->rd), reg_name(in->rn), reg_name(in->rm));
+            fprintf(f, "      %s = (uint32_t)_p; %s = (uint32_t)(_p >> 32); }\n",
+                    reg_name(in->rd), reg_name(in->rdhi));
+            break;
+
+        case OP_SMLAL:
+            fprintf(f, "    { int64_t _p = (int64_t)(((uint64_t)%s << 32) | %s) + (int64_t)(int32_t)%s * (int32_t)%s;\n",
+                    reg_name(in->rdhi), reg_name(in->rd), reg_name(in->rn), reg_name(in->rm));
+            fprintf(f, "      %s = (uint32_t)_p; %s = (uint32_t)((uint64_t)_p >> 32); }\n",
+                    reg_name(in->rd), reg_name(in->rdhi));
+            break;
+
+        case OP_REV16: case OP_REVSH: case OP_RBIT: case OP_CLZ: {
+            const char *fn1 = in->op == OP_REV16 ? "vita_rev16" : in->op == OP_REVSH ? "vita_revsh"
+                            : in->op == OP_RBIT  ? "vita_rbit"  : "vita_clz";
+            fprintf(f, "    %s = %s(%s);\n", reg_name(in->rd), fn1, reg_name(in->rm));
+            break;
+        }
+
+        case OP_UADD8: case OP_USUB8: case OP_SEL: {
+            const char *fn1 = in->op == OP_UADD8 ? "vita_uadd8" : in->op == OP_USUB8 ? "vita_usub8" : "vita_sel";
+            fprintf(f, "    %s = %s(%s, %s);\n", reg_name(in->rd), fn1, reg_name(in->rn), reg_name(in->rm));
+            break;
+        }
+
+        /* --- Advanced SIMD, lane-wise on D registers ----------------------
+         *
+         * A Q form is its two D halves one after the other; no lane crosses
+         * the middle in any of these. */
+        case OP_NEON_MOV_IMM: case OP_NEON_ORR_IMM: case OP_NEON_BIC_IMM:
+            for (int q = 0; q <= in->neon_q; q++) {
+                int d = in->vd + q;
+                if (in->op == OP_NEON_MOV_IMM)
+                    fprintf(f, "    vita_d_set(%d, 0x%016llXull);\n", d, (unsigned long long)in->imm64);
+                else if (in->op == OP_NEON_ORR_IMM)
+                    fprintf(f, "    vita_d_set(%d, vita_d_get(%d) | 0x%016llXull);\n", d, d, (unsigned long long)in->imm64);
+                else
+                    fprintf(f, "    vita_d_set(%d, vita_d_get(%d) & ~0x%016llXull);\n", d, d, (unsigned long long)in->imm64);
+            }
+            break;
+
+        case OP_NEON_AND: case OP_NEON_BIC: case OP_NEON_ORR: case OP_NEON_ORN:
+        case OP_NEON_EOR: case OP_NEON_BSL: case OP_NEON_BIT: case OP_NEON_BIF:
+            for (int q = 0; q <= in->neon_q; q++) {
+                int d = in->vd + q, n = in->vn + q, m = in->vm + q;
+                switch (in->op) {
+                case OP_NEON_AND: fprintf(f, "    vita_d_set(%d, vita_d_get(%d) & vita_d_get(%d));\n", d, n, m); break;
+                case OP_NEON_BIC: fprintf(f, "    vita_d_set(%d, vita_d_get(%d) & ~vita_d_get(%d));\n", d, n, m); break;
+                case OP_NEON_ORR: fprintf(f, "    vita_d_set(%d, vita_d_get(%d) | vita_d_get(%d));\n", d, n, m); break;
+                case OP_NEON_ORN: fprintf(f, "    vita_d_set(%d, vita_d_get(%d) | ~vita_d_get(%d));\n", d, n, m); break;
+                case OP_NEON_EOR: fprintf(f, "    vita_d_set(%d, vita_d_get(%d) ^ vita_d_get(%d));\n", d, n, m); break;
+                case OP_NEON_BSL: fprintf(f, "    vita_d_set(%d, vita_neon_bsl(vita_d_get(%d), vita_d_get(%d), vita_d_get(%d)));\n", d, d, n, m); break;
+                case OP_NEON_BIT: fprintf(f, "    vita_d_set(%d, (vita_d_get(%d) & ~vita_d_get(%d)) | (vita_d_get(%d) & vita_d_get(%d)));\n", d, d, m, n, m); break;
+                default:          fprintf(f, "    vita_d_set(%d, (vita_d_get(%d) & vita_d_get(%d)) | (vita_d_get(%d) & ~vita_d_get(%d)));\n", d, d, m, n, m); break;
+                }
+            }
+            break;
+
+        case OP_NEON_ADD: case OP_NEON_SUB: case OP_NEON_CEQ: case OP_NEON_TST: case OP_NEON_PADD: {
+            const char *fn1 = in->op == OP_NEON_ADD ? "vita_neon_add" : in->op == OP_NEON_SUB ? "vita_neon_sub"
+                            : in->op == OP_NEON_CEQ ? "vita_neon_ceq" : in->op == OP_NEON_TST ? "vita_neon_tst"
+                            : "vita_neon_padd";
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_d_set(%d, %s(vita_d_get(%d), vita_d_get(%d), %u));\n",
+                        in->vd + q, fn1, in->vn + q, in->vm + q, in->neon_size);
+            break;
+        }
+
+        case OP_NEON_DUP:
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_d_set(%d, vita_neon_dup(%s, %u));\n", in->vd + q, reg_name(in->rt), in->neon_size);
+            break;
+
+        case OP_NEON_SET32:
+            fprintf(f, "    vita_d_set(%d, vita_neon_set32(vita_d_get(%d), %u, %s));\n",
+                    in->vd, in->vd, in->imm, reg_name(in->rt));
+            break;
+
+        case OP_NEON_GET32:
+            fprintf(f, "    %s = vita_neon_get32(vita_d_get(%d), %u);\n", reg_name(in->rt), in->vn, in->imm);
+            break;
+
+        case OP_NEON_LD1: case OP_NEON_ST1: {
+            if (in->rn == 15) { ok = 0; trap(f, in, "vld1/vst1 pc base"); break; }
+            const char *rn = reg_name(in->rn);
+            for (uint32_t k = 0; k < in->imm; k++) {
+                int d = in->vd + (int)k;
+                if (in->op == OP_NEON_LD1)
+                    fprintf(f, "    vita_d_set(%d, (uint64_t)vita_read32(%s + %u) | ((uint64_t)vita_read32(%s + %u) << 32));\n",
+                            d, rn, k * 8, rn, k * 8 + 4);
+                else {
+                    fprintf(f, "    vita_write32(%s + %u, (uint32_t)vita_d_get(%d));\n", rn, k * 8, d);
+                    fprintf(f, "    vita_write32(%s + %u, (uint32_t)(vita_d_get(%d) >> 32));\n", rn, k * 8 + 4, d);
+                }
+            }
+            /* Rm = 13: advance by the bytes moved; another register: by it. */
+            if (in->rm == 13)      fprintf(f, "    %s += %u;\n", rn, in->imm * 8);
+            else if (in->rm != 15) fprintf(f, "    %s += %s;\n", rn, reg_name(in->rm));
+            break;
+        }
+
+        case OP_NEON_LD_ALL: case OP_NEON_LD_LANE: case OP_NEON_ST_LANE: {
+            if (in->rn == 15) { ok = 0; trap(f, in, "vld/vst lane pc base"); break; }
+            const char *rn = reg_name(in->rn);
+            const char *rd = in->neon_size == 8 ? "vita_read8" : in->neon_size == 16 ? "vita_read16" : "vita_read32";
+            const char *wr = in->neon_size == 8 ? "vita_write8" : in->neon_size == 16 ? "vita_write16" : "vita_write32";
+            uint32_t bytes = in->neon_size / 8;
+            if (in->op == OP_NEON_LD_ALL) {
+                /* n elements, one per register; VLD1 with T loads one element
+                 * into two registers. */
+                for (uint32_t k = 0; k < in->bf_width; k++) {
+                    uint32_t e = in->imm == 1 ? 0 : k;
+                    fprintf(f, "    vita_d_set(%d, vita_neon_dup(%s(%s + %u), %u));\n",
+                            in->vd + (int)(k * in->bf_lsb), rd, rn, e * bytes, in->neon_size);
+                }
+            } else {
+                for (uint32_t k = 0; k < in->imm; k++) {
+                    int d = in->vd + (int)(k * in->bf_lsb);
+                    if (in->op == OP_NEON_LD_LANE)
+                        fprintf(f, "    vita_d_set(%d, vita_neon_set_lane(vita_d_get(%d), %u, %s(%s + %u), %u));\n",
+                                d, d, (unsigned)in->imm64, rd, rn, k * bytes, in->neon_size);
+                    else
+                        fprintf(f, "    %s(%s + %u, (uint%u_t)vita_neon_lane(vita_d_get(%d), %u, %u));\n",
+                                wr, rn, k * bytes, in->neon_size, d, (unsigned)in->imm64, in->neon_size);
+                }
+            }
+            if (in->rm == 13)      fprintf(f, "    %s += %u;\n", rn, in->imm * bytes);
+            else if (in->rm != 15) fprintf(f, "    %s += %s;\n", rn, reg_name(in->rm));
+            break;
+        }
+
+        case OP_NEON_LDN: case OP_NEON_STN: {
+            if (in->rn == 15) { ok = 0; trap(f, in, "vldn/vstn pc base"); break; }
+            const char *rn = reg_name(in->rn);
+            fprintf(f, "    %s(%u, %d, %u, %u, %s, %u);\n",
+                    in->op == OP_NEON_LDN ? "vita_neon_ldn" : "vita_neon_stn",
+                    in->imm, in->vd, in->bf_lsb, in->bf_width, rn, in->neon_size);
+            if (in->rm == 13)      fprintf(f, "    %s += %u;\n", rn, in->imm * in->bf_width * 8);
+            else if (in->rm != 15) fprintf(f, "    %s += %s;\n", rn, reg_name(in->rm));
+            break;
+        }
+
+        case OP_NEON_DUP_LANE:
+            /* The source lane is one D register whichever form this is; only
+             * the destination doubles up. */
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_d_set(%d, vita_neon_dup((uint32_t)vita_neon_lane(vita_d_get(%d), %u, %u), %u));\n",
+                        in->vd + q, in->vm, in->imm, in->neon_size, in->neon_size);
+            break;
+
+        case OP_NEON_EXT:
+            if (in->neon_q) fprintf(f, "    vita_neon_ext_q(%d, %d, %d, %u);\n", in->vd, in->vn, in->vm, in->imm);
+            else            fprintf(f, "    vita_d_set(%d, vita_neon_ext(vita_d_get(%d), vita_d_get(%d), %u));\n",
+                                    in->vd, in->vn, in->vm, in->imm);
+            break;
+
+        case OP_NEON_SWP:
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    { uint64_t _t = vita_d_get(%d); vita_d_set(%d, vita_d_get(%d)); vita_d_set(%d, _t); }\n",
+                        in->vd + q, in->vd + q, in->vm + q, in->vm + q);
+            break;
+
+        case OP_NEON_TRN:
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_neon_trn(%d, %d, %u);\n", in->vd + q, in->vm + q, in->neon_size);
+            break;
+
+        case OP_NEON_TBL: case OP_NEON_TBX:
+            fprintf(f, "    vita_d_set(%d, vita_neon_tbl(vita_d_get(%d), %d, %u, vita_d_get(%d), %d));\n",
+                    in->vd, in->vd, in->vn, in->imm, in->vm, in->op == OP_NEON_TBX);
+            break;
+
+        case OP_NEON_HALVE:
+            fprintf(f, "    vita_d_set(%d, vita_neon_halve(vita_d_get(%d), vita_d_get(%d)));\n", in->vd, in->vm, in->vm + 1);
+            break;
+
+        case OP_NEON_UNHALVE:
+            fprintf(f, "    vita_neon_unhalve(%d, vita_d_get(%d));\n", in->vd, in->vm);
+            break;
+
+        case OP_NEON_PADDL:
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_d_set(%d, vita_neon_paddl(vita_d_get(%d), %u, %u));\n",
+                        in->vd + q, in->vm + q, in->neon_size, in->vfp_unsigned);
+            break;
+
+        case OP_NEON_MVN: case OP_NEON_CLZ: case OP_NEON_CNT: case OP_NEON_REV:
+        case OP_NEON_NEG: case OP_NEON_ABS: case OP_NEON_CMP0:
+        case OP_NEON_FNEG: case OP_NEON_FABS: case OP_NEON_FRECPE: case OP_NEON_FRSQRTE:
+        case OP_NEON_CVT:
+            for (int q = 0; q <= in->neon_q; q++) {
+                int d = in->vd + q, m = in->vm + q;
+                switch (in->op) {
+                case OP_NEON_MVN:  fprintf(f, "    vita_d_set(%d, ~vita_d_get(%d));\n", d, m); break;
+                case OP_NEON_CLZ:  fprintf(f, "    vita_d_set(%d, vita_neon_clz(vita_d_get(%d), %u));\n", d, m, in->neon_size); break;
+                case OP_NEON_CNT:  fprintf(f, "    vita_d_set(%d, vita_neon_cnt(vita_d_get(%d)));\n", d, m); break;
+                case OP_NEON_REV:  fprintf(f, "    vita_d_set(%d, vita_neon_rev(vita_d_get(%d), %u, %u));\n", d, m, in->neon_size, in->imm); break;
+                case OP_NEON_NEG:  fprintf(f, "    vita_d_set(%d, vita_neon_sub(0, vita_d_get(%d), %u));\n", d, m, in->neon_size); break;
+                case OP_NEON_ABS:  fprintf(f, "    vita_d_set(%d, vita_neon_abs(vita_d_get(%d), %u));\n", d, m, in->neon_size); break;
+                case OP_NEON_CMP0:
+                    if (in->neon_f) fprintf(f, "    vita_d_set(%d, vita_neon_fcmp0(vita_d_get(%d), %u));\n", d, m, in->imm);
+                    else            fprintf(f, "    vita_d_set(%d, vita_neon_cmp0(vita_d_get(%d), %u, %u));\n", d, m, in->neon_size, in->imm);
+                    break;
+                case OP_NEON_FNEG:    fprintf(f, "    vita_d_set(%d, vita_d_get(%d) ^ 0x8000000080000000ull);\n", d, m); break;
+                case OP_NEON_FABS:    fprintf(f, "    vita_d_set(%d, vita_d_get(%d) & 0x7FFFFFFF7FFFFFFFull);\n", d, m); break;
+                case OP_NEON_FRECPE:  fprintf(f, "    vita_d_set(%d, vita_neon_frecpe(vita_d_get(%d)));\n", d, m); break;
+                case OP_NEON_FRSQRTE: fprintf(f, "    vita_d_set(%d, vita_neon_frsqrte(vita_d_get(%d)));\n", d, m); break;
+                default:              fprintf(f, "    vita_d_set(%d, vita_neon_cvt(vita_d_get(%d), %u));\n", d, m, in->imm); break;
+                }
+            }
+            break;
+
+        case OP_NEON_MUL: case OP_NEON_MLA: case OP_NEON_MLS:
+            for (int q = 0; q <= in->neon_q; q++) {
+                int d = in->vd + q, n = in->vn + q, m = in->vm + q;
+                if (in->op == OP_NEON_MUL)
+                    fprintf(f, "    vita_d_set(%d, vita_neon_mul(vita_d_get(%d), vita_d_get(%d), %u));\n", d, n, m, in->neon_size);
+                else
+                    fprintf(f, "    vita_d_set(%d, vita_neon_%s(vita_d_get(%d), vita_d_get(%d), vita_d_get(%d), %u));\n",
+                            d, in->op == OP_NEON_MLA ? "mla" : "mls", d, n, m, in->neon_size);
+            }
+            break;
+
+        /* The value is Vm and the shift counts are Vn: the operands are
+         * written the other way round from every other three-register form. */
+        case OP_NEON_SHL_REG:
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_d_set(%d, vita_neon_shl_reg(vita_d_get(%d), vita_d_get(%d), %u, %d));\n",
+                        in->vd + q, in->vm + q, in->vn + q, in->neon_size, in->vfp_unsigned ? 1 : 0);
+            break;
+
+        case OP_NEON_MAX: case OP_NEON_MIN: case OP_NEON_CGT: case OP_NEON_CGE: {
+            const char *fn3 = in->op == OP_NEON_MAX ? "vita_neon_max" : in->op == OP_NEON_MIN ? "vita_neon_min"
+                            : in->op == OP_NEON_CGT ? "vita_neon_cgt" : "vita_neon_cge";
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_d_set(%d, %s(vita_d_get(%d), vita_d_get(%d), %u, %d));\n",
+                        in->vd + q, fn3, in->vn + q, in->vm + q, in->neon_size, in->vfp_unsigned ? 1 : 0);
+            break;
+        }
+
+        /* f32 lanes. A Q form is still two independent halves: none of these
+         * crosses the middle, and VPADD has no Q form at all. */
+        case OP_NEON_FADD: case OP_NEON_FSUB: case OP_NEON_FMUL: case OP_NEON_FPADD: case OP_NEON_FABD:
+        case OP_NEON_FMAX: case OP_NEON_FMIN: case OP_NEON_FCEQ: case OP_NEON_FCGE: case OP_NEON_FCGT:
+        case OP_NEON_FRECPS: case OP_NEON_FRSQRTS: {
+            const char *fn2 = in->op == OP_NEON_FADD ? "fadd" : in->op == OP_NEON_FSUB ? "fsub"
+                            : in->op == OP_NEON_FMUL ? "fmul" : in->op == OP_NEON_FPADD ? "fpadd"
+                            : in->op == OP_NEON_FABD ? "fabd" : in->op == OP_NEON_FMAX ? "fmax"
+                            : in->op == OP_NEON_FMIN ? "fmin" : in->op == OP_NEON_FCEQ ? "fceq"
+                            : in->op == OP_NEON_FCGE ? "fcge" : in->op == OP_NEON_FCGT ? "fcgt"
+                            : in->op == OP_NEON_FRECPS ? "frecps" : "frsqrts";
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_d_set(%d, vita_neon_%s(vita_d_get(%d), vita_d_get(%d)));\n",
+                        in->vd + q, fn2, in->vn + q, in->vm + q);
+            break;
+        }
+
+        case OP_NEON_FMLA: case OP_NEON_FMLS:
+            for (int q = 0; q <= in->neon_q; q++)
+                fprintf(f, "    vita_d_set(%d, vita_neon_%s(vita_d_get(%d), vita_d_get(%d), vita_d_get(%d)));\n",
+                        in->vd + q, in->op == OP_NEON_FMLA ? "fmla" : "fmls", in->vd + q, in->vn + q, in->vm + q);
+            break;
+
+        case OP_NEON_SHR: case OP_NEON_SRA: case OP_NEON_RSHR: case OP_NEON_RSRA:
+        case OP_NEON_SHL: case OP_NEON_SLI: case OP_NEON_SRI:
+            for (int q = 0; q <= in->neon_q; q++) {
+                int d = in->vd + q, m = in->vm + q;
+                unsigned u = in->vfp_unsigned ? 1u : 0u;
+                switch (in->op) {
+                case OP_NEON_SHR:  fprintf(f, "    vita_d_set(%d, vita_neon_shr(vita_d_get(%d), %u, %u, %u));\n", d, m, in->neon_size, in->imm, u); break;
+                case OP_NEON_RSHR: fprintf(f, "    vita_d_set(%d, vita_neon_rshr(vita_d_get(%d), %u, %u, %u));\n", d, m, in->neon_size, in->imm, u); break;
+                case OP_NEON_SRA:  fprintf(f, "    vita_d_set(%d, vita_neon_add(vita_d_get(%d), vita_neon_shr(vita_d_get(%d), %u, %u, %u), %u));\n", d, d, m, in->neon_size, in->imm, u, in->neon_size); break;
+                case OP_NEON_RSRA: fprintf(f, "    vita_d_set(%d, vita_neon_add(vita_d_get(%d), vita_neon_rshr(vita_d_get(%d), %u, %u, %u), %u));\n", d, d, m, in->neon_size, in->imm, u, in->neon_size); break;
+                case OP_NEON_SHL:  fprintf(f, "    vita_d_set(%d, vita_neon_shl(vita_d_get(%d), %u, %u));\n", d, m, in->neon_size, in->imm); break;
+                case OP_NEON_SLI:  fprintf(f, "    vita_d_set(%d, vita_neon_sli(vita_d_get(%d), vita_d_get(%d), %u, %u));\n", d, d, m, in->neon_size, in->imm); break;
+                default:           fprintf(f, "    vita_d_set(%d, vita_neon_sri(vita_d_get(%d), vita_d_get(%d), %u, %u));\n", d, d, m, in->neon_size, in->imm); break;
+                }
+            }
+            break;
+
+        case OP_NEON_MOVL: case OP_NEON_SHLL:
+            /* The source is read once: the Q destination may contain it. */
+            fprintf(f, "    { uint64_t _m = vita_d_get(%d);\n", in->vm);
+            fprintf(f, "      vita_d_set(%d, vita_neon_shl(vita_neon_widen((uint32_t)_m, %u, %u), %u, %u));\n",
+                    in->vd, in->neon_size, in->vfp_unsigned ? 1u : 0u, in->neon_size * 2, in->imm);
+            fprintf(f, "      vita_d_set(%d, vita_neon_shl(vita_neon_widen((uint32_t)(_m >> 32), %u, %u), %u, %u)); }\n",
+                    in->vd + 1, in->neon_size, in->vfp_unsigned ? 1u : 0u, in->neon_size * 2, in->imm);
+            break;
+
+        case OP_NEON_MOVN: case OP_NEON_SHRN: case OP_NEON_RSHRN:
+            fprintf(f, "    vita_d_set(%d, vita_neon_narrow(vita_d_get(%d), vita_d_get(%d), %u, %u, %d));\n",
+                    in->vd, in->vm, in->vm + 1, in->neon_size, in->imm, in->op == OP_NEON_RSHRN ? 1 : 0);
+            break;
+
+        case OP_NEON_MUL_SCALAR: case OP_NEON_MLA_SCALAR: case OP_NEON_MLS_SCALAR:
+            /* The lane is broadcast once, then it is the vector operation. */
+            fprintf(f, "    { uint64_t _s = vita_neon_dup((uint32_t)vita_neon_lane(vita_d_get(%d), %u, %u), %u);\n",
+                    in->vm, in->imm, in->neon_size, in->neon_size);
+            for (int q = 0; q <= in->neon_q; q++) {
+                int d = in->vd + q, n = in->vn + q;
+                if (in->neon_f) {
+                    if (in->op == OP_NEON_MUL_SCALAR)
+                        fprintf(f, "      vita_d_set(%d, vita_neon_fmul(vita_d_get(%d), _s));\n", d, n);
+                    else
+                        fprintf(f, "      vita_d_set(%d, vita_neon_%s(vita_d_get(%d), vita_d_get(%d), _s));\n",
+                                d, in->op == OP_NEON_MLA_SCALAR ? "fmla" : "fmls", d, n);
+                } else {
+                    if (in->op == OP_NEON_MUL_SCALAR)
+                        fprintf(f, "      vita_d_set(%d, vita_neon_mul(vita_d_get(%d), _s, %u));\n", d, n, in->neon_size);
+                    else
+                        fprintf(f, "      vita_d_set(%d, vita_neon_%s(vita_d_get(%d), vita_d_get(%d), _s, %u));\n",
+                                d, in->op == OP_NEON_MLA_SCALAR ? "mla" : "mls", d, n, in->neon_size);
+                }
+            }
+            fprintf(f, "    }\n");
+            break;
+
+        case OP_MRC_TLS:
+            if (in->rt == ARM_NO_REG || in->rt == 15) { ok = 0; break; }
+            fprintf(f, "    %s = vita_tls_base();\n", reg_name(in->rt));
+            break;
+
+        case OP_VNMLA: case OP_VNMLS: {
+            if (in->vd == ARM_NO_REG || in->vn == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            char c = (in->op == OP_VNMLS) ? '+' : '-';
+            if (in->vfp_dp)
+                fprintf(f, "    vfp_setd(%d, -vfp_getd(%d) %c (vfp_getd(%d) * vfp_getd(%d)));\n",
+                        in->vd, in->vd, c, in->vn, in->vm);
+            else
+                fprintf(f, "    vfp_setf(%d, -vfp_getf(%d) %c (vfp_getf(%d) * vfp_getf(%d)));\n",
+                        in->vd, in->vd, c, in->vn, in->vm);
+            break;
+        }
+
+        case OP_LDREX: case OP_STREX: {
+            if (in->rn == ARM_NO_REG || in->rn == 15 || in->rt == ARM_NO_REG || in->rt == 15) { ok = 0; break; }
+            const uint32_t size = in->mem_size / 8u;
+            if (in->op == OP_LDREX) {
+                fprintf(f, "    %s = (uint32_t)vita_ldrex(%s + %u, %u);\n",
+                        reg_name(in->rt), reg_name(in->rn), in->imm, size);
+            } else {
+                if (in->rd == ARM_NO_REG || in->rd == 15) { ok = 0; break; }
+                fprintf(f, "    %s = vita_strex(%s + %u, %s, %u);\n",
+                        reg_name(in->rd), reg_name(in->rn), in->imm,
+                        reg_name(in->rt), size);
+            }
+            break;
+        }
+
+        case OP_CLREX:
+            fprintf(f, "    vita_clrex();\n");
+            break;
+
+        case OP_DMB:
+            fprintf(f, "    vita_barrier();\n");
+            break;
+
+        case OP_VMOV_IMM:
+            if (in->vd == ARM_NO_REG) { ok = 0; break; }
+            if (in->vfp_dp) fprintf(f, "    vita_d_set(%d, 0x%016llXull);\n", in->vd, (unsigned long long)in->imm64);
+            else            fprintf(f, "    vfp_setu(%d, 0x%08Xu);\n", in->vd, in->imm);
+            break;
+
+        case OP_VMOV_D_TO_C: case OP_VMOV_C_TO_D: {
+            if (in->vm == ARM_NO_REG || in->rt == ARM_NO_REG || in->rt2 == ARM_NO_REG) { ok = 0; break; }
+            if (in->rt == 15 || in->rt2 == 15) { ok = 0; break; }
+            const char *lo = reg_name(in->rt), *hi = reg_name(in->rt2);
+            if (in->op == OP_VMOV_D_TO_C) {
+                if (in->vfp_dp)
+                    fprintf(f, "    %s = (uint32_t)vita_d_get(%d); %s = (uint32_t)(vita_d_get(%d) >> 32);\n", lo, in->vm, hi, in->vm);
+                else
+                    fprintf(f, "    %s = vfp_getu(%d); %s = vfp_getu(%d);\n", lo, in->vm, hi, in->vm + 1);
+            } else {
+                if (in->vfp_dp)
+                    fprintf(f, "    vita_d_set(%d, ((uint64_t)%s << 32) | %s);\n", in->vm, hi, lo);
+                else
+                    fprintf(f, "    vfp_setu(%d, %s); vfp_setu(%d, %s);\n", in->vm, lo, in->vm + 1, hi);
+            }
+            break;
+        }
+
+        case OP_VCVT_F16_F32:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            fprintf(f, "    vfp_setf(%d, vita_f16_to_f32((uint16_t)(vfp_getu(%d) >> %u)));\n",
+                    in->vd, in->vm, in->imm ? 16u : 0u);
+            break;
+
+        case OP_VCVT_F32_F16:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            if (in->imm)
+                fprintf(f, "    vfp_setu(%d, (vfp_getu(%d) & 0x0000FFFFu) | ((uint32_t)vita_f32_to_f16(vfp_getf(%d)) << 16));\n",
+                        in->vd, in->vd, in->vm);
+            else
+                fprintf(f, "    vfp_setu(%d, (vfp_getu(%d) & 0xFFFF0000u) | vita_f32_to_f16(vfp_getf(%d)));\n",
+                        in->vd, in->vd, in->vm);
+            break;
+
+        case OP_VCVT_FF:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            if (in->vfp_dp) fprintf(f, "    vfp_setf(%d, (float)vfp_getd(%d));\n", in->vd, in->vm);
+            else            fprintf(f, "    vfp_setd(%d, (double)vfp_getf(%d));\n", in->vd, in->vm);
+            break;
+
+        case OP_CMP: case OP_CMN:
+            operand2(o2, sizeof(o2), in);
+            fprintf(f, "    { uint32_t _a = %s, _b = %s;\n",
+                    rn_s, o2);
+            fprintf(f, "      vita_flags_%s(_a, _b, _a %c _b); }\n",
+                    in->op == OP_CMP ? "sub" : "add",
+                    in->op == OP_CMP ? '-' : '+');
+            break;
+
+        case OP_TST:
+            operand2(o2, sizeof(o2), in);
+            fprintf(f, "    vita_flags_nz(%s & %s);\n",
+                    rn_s, o2);
+            break;
+
+        case OP_ADR:
+            fprintf(f, "    %s = 0x%08X;\n", reg_name(in->rd),
+                    (pc_of(in) & ~3u) + in->imm);
+            break;
+
+        case OP_LDR: case OP_LDRB: case OP_LDRH: case OP_LDRSB: case OP_LDRSH: {
+            if (!address(addr, sizeof(addr), in)) { ok = 0; trap(f, in, "load addr"); break; }
+            /* A literal-pool load has a fixed address, so the value is known at
+             * translation time and becomes a constant rather than a memory
+             * access. This is also what stops the pool from being mistaken for
+             * code later. */
+            if (in->rn == 15 && in->has_imm) {
+                uint32_t pc = pc_of(in) & ~3u;
+                /* The offset has a sign: the constant may sit before the
+                 * code that uses it. */
+                uint32_t at = in->mem_add ? pc + in->imm : pc - in->imm;
+                /* A literal word the loader fills with an imported variable's
+                 * address holds a placeholder in the image. */
+                const vsite *vs = in->op == OP_LDR ? vsite_find(at) : NULL;
+                if (vs && vs->code == 2) {
+                    char vsym[96];
+                    var_symbol(vsym, sizeof(vsym), db, &mod->vars[vs->var],
+                               module_id);
+                    fprintf(f, "    %s = %s;  /* imported variable */\n", reg_name(in->rt), vsym);
+                    st->var_refs++;
+                    break;
+                }
+                const uint8_t *p = vm_va(img, at, 4);
+                if (p) {
+                    uint32_t v = (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+                               | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+                    fprintf(f, "    %s = 0x%08X;  /* literal */\n", reg_name(in->rt), v);
+                    st->literals++;
+                    break;
+                }
+            }
+            const char *rd = in->op == OP_LDR   ? "vita_read32(%s)"
+                           : in->op == OP_LDRB  ? "vita_read8(%s)"
+                           : in->op == OP_LDRH  ? "vita_read16(%s)"
+                           : in->op == OP_LDRSB ? "vita_sxtb(vita_read8(%s))"
+                                                : "vita_sxth(vita_read16(%s))";
+            fprintf(f, "    %s = ", reg_name(in->rt));
+            fprintf(f, rd, addr);
+            fprintf(f, ";\n");
+            writeback(f, in);
+            break;
+        }
+
+        case OP_LDRD: case OP_STRD: {
+            if (in->rn == ARM_NO_REG || in->rt2 == ARM_NO_REG) { ok = 0; break; }
+            /* rt/rt2 are named as variables, so neither may be the PC — there
+             * is no `pc` in cpu.h to load into or store from, deliberately. */
+            if (in->rt == 15 || in->rt2 == 15) { ok = 0; trap(f, in, "ldrd/strd pc"); break; }
+            /* Two adjacent words. The offset is added or subtracted per the U
+             * bit, and the second register is always four bytes above the
+             * first regardless of direction.
+             *
+             * Through the shared address(), which is the only thing that knows
+             * how to resolve a PC-relative base. Building the string here is
+             * what put a bare `pc` in the output — the same mistake VLDR made,
+             * in the third place it could be made. */
+            char base[64];
+            if (!address(base, sizeof(base), in)) { ok = 0; trap(f, in, "ldrd/strd addr"); break; }
+
+            if (in->op == OP_LDRD) {
+                fprintf(f, "    %s = vita_read32(%s);\n", reg_name(in->rt), base);
+                fprintf(f, "    %s = vita_read32((%s) + 4);\n", reg_name(in->rt2), base);
+            } else {
+                fprintf(f, "    vita_write32(%s, %s);\n", base, reg_name(in->rt));
+                fprintf(f, "    vita_write32((%s) + 4, %s);\n", base, reg_name(in->rt2));
+            }
+            writeback(f, in);
+            break;
+        }
+
+        case OP_STR: case OP_STRB: case OP_STRH: {
+            if (!address(addr, sizeof(addr), in)) { ok = 0; trap(f, in, "store addr"); break; }
+            const char *w = in->op == OP_STR ? "vita_write32"
+                          : in->op == OP_STRB ? "vita_write8" : "vita_write16";
+            const char *cast = in->op == OP_STRB ? "uint8_t"
+                             : in->op == OP_STRH ? "uint16_t" : "uint32_t";
+            fprintf(f, "    %s(%s, (%s)%s);\n", w, addr, cast, reg_name(in->rt));
+            writeback(f, in);
+            break;
+        }
+
+        case OP_PUSH: {
+            /* ARM pushes in descending register order to descending addresses,
+             * so the lowest-numbered register ends up at the lowest address.
+             * Emitting the stores in ascending order with a pre-decremented sp
+             * gives the same layout without simulating the order. */
+            int count = 0;
+            for (int i = 0; i < 16; i++) if (in->reglist & (1u << i)) count++;
+            fprintf(f, "    sp -= %d;\n", count * 4);
+            int slot = 0;
+            for (int i = 0; i < 16; i++) {
+                if (!(in->reglist & (1u << i))) continue;
+                /* A register list can name the PC. Its stored value is this
+                 * instruction's own address plus four, which is known here —
+                 * the same rule as any other PC source, and the reason this
+                 * goes through reg_operand rather than reg_name. */
+                { char rv[64]; reg_operand(rv, sizeof(rv), i, in);
+                  fprintf(f, "    vita_write32(sp + %d, %s);\n", slot * 4, rv); }
+                slot++;
+            }
+            break;
+        }
+
+        /* General LDM/STM: n registers, ascending, at base (increment-after)
+         * or at base - 4n (decrement-before); write-back moves the base by
+         * 4n either way. A load that includes the PC is a jump, left as a
+         * trap so it is counted rather than mistranslated. */
+        case OP_LDM: case OP_STM: {
+            if (in->rn == ARM_NO_REG || in->rn == 15) { ok = 0; break; }
+            if (in->op == OP_LDM && (in->reglist & 0x8000)) { ok = 0; trap(f, in, "ldm with pc"); break; }
+            int count = 0;
+            for (int i = 0; i < 16; i++) if (in->reglist & (1u << i)) count++;
+            const char *rn = reg_name(in->rn);
+            /* The base is read once, before any register in the list is
+             * loaded over it, and the loads may include it. For the
+             * decrement-before forms the block starts 4n below the base. */
+            fprintf(f, "    { uint32_t _b = %s;\n", rn);
+            if (!in->mem_add) fprintf(f, "      _b -= %d;\n", count * 4);
+            int slot = 0;
+            for (int i = 0; i < 16; i++) {
+                if (!(in->reglist & (1u << i))) continue;
+                if (in->op == OP_LDM)
+                    fprintf(f, "      %s = vita_read32(_b + %d);\n", reg_name(i), slot * 4);
+                else
+                    fprintf(f, "      vita_write32(_b + %d, %s);\n", slot * 4, reg_name(i));
+                slot++;
+            }
+            /* Write-back lands the base after the block (IA) or at its
+             * start (DB), which is _b + 4n and _b respectively. */
+            if (in->writeback)
+                fprintf(f, "      %s = _b + %d; }\n", rn, in->mem_add ? count * 4 : 0);
+            else
+                fprintf(f, "    }\n");
+            break;
+        }
+
+        case OP_POP: {
+            int slot = 0;
+            for (int i = 0; i < 16; i++) {
+                if (!(in->reglist & (1u << i))) continue;
+                if (i == 15) { slot++; continue; }   /* PC: this is the return */
+                fprintf(f, "    %s = vita_read32(sp + %d);\n", reg_name(i), slot * 4);
+                slot++;
+            }
+            fprintf(f, "    sp += %d;\n", slot * 4);
+            if (in->reglist & 0x8000) fprintf(f, "    return;\n");
+            break;
+        }
+
+        case OP_SXTB: case OP_SXTH: case OP_UXTB: case OP_UXTH: case OP_SXTB16: case OP_UXTB16: {
+            const char *fn3 = in->op == OP_SXTB ? "vita_sxtb"
+                            : in->op == OP_SXTH ? "vita_sxth"
+                            : in->op == OP_UXTB ? "vita_uxtb"
+                            : in->op == OP_UXTH ? "vita_uxth"
+                            : in->op == OP_SXTB16 ? "vita_sxtb16" : "vita_uxtb16";
+            /* The source is rotated first, which is how a loop takes the
+             * second, third and fourth bytes of a word. */
+            char src[64];
+            if (in->shift_amt) snprintf(src, sizeof(src), "vita_ror(%s, %u)", src_name(in, in->rm), in->shift_amt);
+            else               snprintf(src, sizeof(src), "%s", src_name(in, in->rm));
+            if (in->rn == ARM_NO_REG)
+                fprintf(f, "    %s = %s(%s);\n", reg_name(in->rd), fn3, src);
+            else if (in->op == OP_SXTB16 || in->op == OP_UXTB16)
+                fprintf(f, "    %s = vita_add16(%s, %s(%s));\n", reg_name(in->rd), src_name(in, in->rn), fn3, src);
+            else
+                fprintf(f, "    %s = %s + %s(%s);\n", reg_name(in->rd), src_name(in, in->rn), fn3, src);
+            break;
+        }
+
+        case OP_REV:
+            fprintf(f, "    %s = vita_rev(%s);\n", reg_name(in->rd), src_name(in, in->rm));
+            break;
+
+        case OP_SBFX: case OP_UBFX:
+            fprintf(f, "    %s = %s(%s, %u, %u);\n", reg_name(in->rd),
+                    in->op == OP_SBFX ? "vita_sbfx" : "vita_ubfx",
+                    src_name(in, in->rn), in->bf_lsb, in->bf_width);
+            break;
+
+        case OP_BFI:
+            fprintf(f, "    %s = vita_bfi(%s, %s, %u, %u);\n", reg_name(in->rd),
+                    reg_name(in->rd), src_name(in, in->rn), in->bf_lsb, in->bf_width);
+            break;
+
+        case OP_BFC:
+            fprintf(f, "    %s = vita_bfi(%s, 0, %u, %u);\n", reg_name(in->rd),
+                    reg_name(in->rd), in->bf_lsb, in->bf_width);
+            break;
+
+        case OP_CBZ: case OP_CBNZ:
+            if (fb_has_label(b, in->target))
+                fprintf(f, "    if (%s %s 0) goto L_%08X;\n", src_name(in, in->rn),
+                        in->op == OP_CBZ ? "==" : "!=", in->target);
+            else if (fs_has(fs, target_key(in))) {
                 char sym[96];
                 function_symbol(sym, sizeof(sym), module_id, target_key(in));
-                if (in->cond == ARM_COND_AL)
-                    fprintf(f, "    vita_call(%s); return;\n", sym);
-                else
-                    fprintf(
-                        f,
-                        "    if (vita_cond(%u)) { vita_call(%s); return; }\n",
-                        in->cond, sym);
+                fprintf(f, "    if (%s %s 0) { vita_call(%s); return; }\n",
+                        src_name(in, in->rn),
+                        in->op == OP_CBZ ? "==" : "!=", sym);
             } else {
-                if (in->cond == ARM_COND_AL)
-                    fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n",
-                            in->addr, in->target);
-                else
-                    fprintf(f,
-                            "    if (vita_cond(%u)) vita_trap_indirect(0x%08X, "
-                            "0x%08X);\n",
-                            in->cond, in->addr, in->target);
-                note_trap(st, "branch: target not a function");
-                explicit_trap = 1;
+                fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n",
+                        in->addr, in->target);
                 ok = 0;
             }
-        }
-        break;
+            break;
 
-    case OP_TBB:
-    case OP_TBH: {
-        uint32_t tg[256];
-        uint32_t nt =
-            in->has_imm
-                ? arm_table_targets(img->data + img->seg_file, img->seg_vaddr,
-                                    img->seg_len, in, in->imm, tg, 256)
-                : 0;
-        if (!nt) {
-            ok = 0;
-            break;
-        } /* no count: a trap, below */
-        fprintf(f, "    switch (%s) {\n", reg_name(in->rm));
-        for (uint32_t i = 0; i < nt; i++) {
-            if (fb_has_label(b, tg[i]))
-                fprintf(f, "    case %u: goto L_%08X;\n", i, tg[i]);
-            else
-                fprintf(
-                    f,
-                    "    case %u: vita_trap_indirect(0x%08X, 0x%08X); break;\n",
-                    i, in->addr, tg[i]);
-        }
-        fprintf(f, "    default: vita_trap_indirect(0x%08X, %s); break;\n",
-                in->addr, reg_name(in->rm));
-        fprintf(f, "    }\n");
-        break;
-    }
-
-    case OP_BX:
-    case OP_BLX:
-        /* `bx lr` is a return, and a return in the generated C is
-         * `return`: the link register is not maintained across the C
-         * calls that replaced BL, so dispatching on it would look up a
-         * value nothing ever set. This was reached for every leaf
-         * function's return before the check existed; the first
-         * newlib-linked module found it in `_init`. */
-        if (in->cls == A_RETURN) {
-            fprintf(f, "    return;\n");
-            break;
-        }
-        /* An indirect transfer through a register. The destination is a
-         * value, so it can only be resolved while running — this is the one
-         * place a recompiler genuinely needs a lookup rather than a
-         * translation. BX is a tail transfer and does not come back; BLX is
-         * a call and does. */
-        if (in->rm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        /* Through reg_operand, not reg_name. `bx pc` is a real (if odd)
-         * instruction, and as a SOURCE the PC is a constant this pass
-         * knows — resolving it is correct where naming it would not
-         * compile. */
-        {
-            char rm[64];
-            reg_operand(rm, sizeof(rm), in->rm, in);
-            if (in->op == OP_BX) {
-                fprintf(f, "    vita_dispatch(0x%08X, %s); return;\n", in->addr,
-                        rm);
-            } else {
-                /* Capture before writing LR: BLX LR uses the old LR as its
-                 * destination, not the return address just created. */
-                fprintf(f,
-                        "    { uint32_t vita_blx_target = %s; lr = 0x%08Xu; "
-                        "vita_dispatch(0x%08X, vita_blx_target); }\n",
-                        rm, link_value(in), in->addr);
-            }
-        }
-        break;
-
-    /* --- scalar VFP ---------------------------------------------------
-     *
-     * Emitted through accessors rather than as direct array indexing, so
-     * the single/double aliasing lives in one place. `dp` selects between
-     * the float and double forms of everything.
-     */
-    case OP_VLDR:
-    case OP_VSTR: {
-        if (in->vd == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        /* Through the shared address(), not a local snprintf. VFP constants
-         * live in the same literal pools as integer ones, so `rn == 15` is
-         * common here — and building the expression locally emitted a bare
-         * `pc`, which does not compile. */
-        char a[64];
-        if (!address(a, sizeof(a), in)) {
-            ok = 0;
-            trap(f, in, "vldr addr");
-            break;
-        }
-
-        /* A VFP literal-pool load has a fixed address, so fold it to a
-         * constant exactly as the integer path does — same reason, too:
-         * it keeps the pool from being read back as code later. */
-        if (in->rn == 15) {
-            uint32_t pc = pc_of(in) & ~3u;
-            uint32_t at = in->mem_add ? pc + in->imm : pc - in->imm;
-            const uint8_t *p = vm_va(img, at, in->vfp_dp ? 8 : 4);
-            if (p && in->op == OP_VLDR) {
-                for (int w = 0; w < (in->vfp_dp ? 2 : 1); w++) {
-                    uint32_t v = (uint32_t)p[w * 4] |
-                                 ((uint32_t)p[w * 4 + 1] << 8) |
-                                 ((uint32_t)p[w * 4 + 2] << 16) |
-                                 ((uint32_t)p[w * 4 + 3] << 24);
-                    if (in->vfp_dp)
-                        fprintf(f,
-                                "    vfp_s[%d].u = 0x%08Xu;  /* literal */\n",
-                                in->vd * 2 + w, v);
+        case OP_B:
+            if (fb_has_label(b, in->target)) {
+                if (in->target > in->addr) {
+                    if (in->cond == ARM_COND_AL) fprintf(f, "    goto L_%08X;\n", in->target);
+                    else fprintf(f, "    if (vita_cond(%u)) goto L_%08X;\n",
+                                 in->cond, in->target);
+                } else if (fb_wait_loop(b, in)) {
+                    /* Only another thread can end this loop: let one run. */
+                    fprintf(f, "    if (vita_cond(%u)) { vita_spin_wait(0x%08Xu); goto L_%08X; }\n",
+                            in->cond, in->addr, in->target);
+                    st->back_edges++;
+                    st->wait_loops++;
+                } else {
+                    /* A backward branch is where a loop goes round, and where
+                     * the running thread's time slice is counted down. */
+                    if (in->cond == ARM_COND_AL)
+                        fprintf(f, "    { vita_back_edge(); goto L_%08X; }\n", in->target);
                     else
-                        fprintf(f,
-                                "    vfp_setu(%d, 0x%08Xu);  /* literal */\n",
-                                in->vd, v);
+                        fprintf(f, "    if (vita_cond(%u)) { vita_back_edge(); goto L_%08X; }\n",
+                                in->cond, in->target);
+                    st->back_edges++;
                 }
-                st->literals++;
-                break;
-            }
-        }
-        if (in->op == OP_VLDR) {
-            if (in->vfp_dp) {
-                fprintf(f, "    vfp_s[%d].u = vita_read32(%s);\n", in->vd * 2,
-                        a);
-                fprintf(f, "    vfp_s[%d].u = vita_read32((%s) + 4);\n",
-                        in->vd * 2 + 1, a);
+            } else if (in->target < img->seg_vaddr ||
+                       in->target >= img->seg_vaddr + img->seg_len) {
+                /* Outside the segment entirely. This is not a branch the
+                 * program makes — it is a linear sweep decoding data as code,
+                 * which happens wherever a literal pool or a table sits inside
+                 * .text. Naming it separately keeps it out of the count of
+                 * things worth implementing. */
+                if (in->cond == ARM_COND_AL)
+                    fprintf(f, "    vita_trap_unimpl(0x%08X, 0x%08X, \"branch out of segment\");\n",
+                            in->addr, in->raw);
+                else
+                    fprintf(f, "    if (vita_cond(%u)) vita_trap_unimpl(0x%08X, 0x%08X, \"branch out of segment\");\n",
+                            in->cond, in->addr, in->raw);
+                note_trap(st, "branch: target off-segment");
+                explicit_trap = 1;
+                ok = 0;
             } else {
-                fprintf(f, "    vfp_setu(%d, vita_read32(%s));\n", in->vd, a);
+                /* A branch out of this function's extent is a tail call. */
+                if (fs_has(fs, target_key(in))) {
+                    char sym[96];
+                    function_symbol(sym, sizeof(sym), module_id,
+                                    target_key(in));
+                    if (in->cond == ARM_COND_AL)
+                        fprintf(f, "    vita_call(%s); return;\n", sym);
+                    else
+                        fprintf(f, "    if (vita_cond(%u)) { vita_call(%s); return; }\n",
+                                in->cond, sym);
+                } else {
+                    if (in->cond == ARM_COND_AL)
+                        fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n",
+                                in->addr, in->target);
+                    else
+                        fprintf(f, "    if (vita_cond(%u)) vita_trap_indirect(0x%08X, 0x%08X);\n",
+                                in->cond, in->addr, in->target);
+                    note_trap(st, "branch: target not a function");
+                    explicit_trap = 1;
+                    ok = 0;
+                }
             }
-        } else {
-            if (in->vfp_dp) {
-                fprintf(f, "    vita_write32(%s, vfp_s[%d].u);\n", a,
-                        in->vd * 2);
-                fprintf(f, "    vita_write32((%s) + 4, vfp_s[%d].u);\n", a,
-                        in->vd * 2 + 1);
+            break;
+
+        case OP_TBB: case OP_TBH: {
+            uint32_t tg[256];
+            uint32_t nt = in->has_imm
+                        ? arm_table_targets(img->data + img->seg_file, img->seg_vaddr, img->seg_len,
+                                            in, in->imm, tg, 256)
+                        : 0;
+            if (!nt) { ok = 0; break; }                /* no count: a trap, below */
+            fprintf(f, "    switch (%s) {\n", reg_name(in->rm));
+            for (uint32_t i = 0; i < nt; i++) {
+                if (fb_has_label(b, tg[i]))
+                    fprintf(f, "    case %u: goto L_%08X;\n", i, tg[i]);
+                else
+                    fprintf(f, "    case %u: vita_trap_indirect(0x%08X, 0x%08X); break;\n", i, in->addr, tg[i]);
+            }
+            fprintf(f, "    default: vita_trap_indirect(0x%08X, %s); break;\n", in->addr, reg_name(in->rm));
+            fprintf(f, "    }\n");
+            break;
+        }
+
+        case OP_BX: case OP_BLX:
+            /* `bx lr` is a return, and a return in the generated C is
+             * `return`: the link register is not maintained across the C
+             * calls that replaced BL, so dispatching on it would look up a
+             * value nothing ever set. This was reached for every leaf
+             * function's return before the check existed; the first
+             * newlib-linked module found it in `_init`. */
+            if (in->cls == A_RETURN) { fprintf(f, "    return;\n"); break; }
+            /* An indirect transfer through a register. The destination is a
+             * value, so it can only be resolved while running — this is the one
+             * place a recompiler genuinely needs a lookup rather than a
+             * translation. BX is a tail transfer and does not come back; BLX is
+             * a call and does. */
+            if (in->rm == ARM_NO_REG) { ok = 0; break; }
+            /* Through reg_operand, not reg_name. `bx pc` is a real (if odd)
+             * instruction, and as a SOURCE the PC is a constant this pass
+             * knows — resolving it is correct where naming it would not
+             * compile. */
+            { char rm[64]; reg_operand(rm, sizeof(rm), in->rm, in);
+              if (in->op == OP_BX) {
+                  fprintf(f, "    vita_dispatch(0x%08X, %s); return;\n", in->addr, rm);
+              } else {
+                  /* Capture before writing LR: BLX LR uses the old LR as its
+                   * destination, not the return address just created. */
+                  fprintf(f, "    { uint32_t vita_blx_target = %s; lr = 0x%08Xu; vita_dispatch(0x%08X, vita_blx_target); }\n",
+                          rm, link_value(in), in->addr);
+              } }
+            break;
+
+        /* --- scalar VFP ---------------------------------------------------
+         *
+         * Emitted through accessors rather than as direct array indexing, so
+         * the single/double aliasing lives in one place. `dp` selects between
+         * the float and double forms of everything.
+         */
+        case OP_VLDR: case OP_VSTR: {
+            if (in->vd == ARM_NO_REG) { ok = 0; break; }
+            /* Through the shared address(), not a local snprintf. VFP constants
+             * live in the same literal pools as integer ones, so `rn == 15` is
+             * common here — and building the expression locally emitted a bare
+             * `pc`, which does not compile. */
+            char a[64];
+            if (!address(a, sizeof(a), in)) { ok = 0; trap(f, in, "vldr addr"); break; }
+
+            /* A VFP literal-pool load has a fixed address, so fold it to a
+             * constant exactly as the integer path does — same reason, too:
+             * it keeps the pool from being read back as code later. */
+            if (in->rn == 15) {
+                uint32_t pc = pc_of(in) & ~3u;
+                uint32_t at = in->mem_add ? pc + in->imm : pc - in->imm;
+                const uint8_t *p = vm_va(img, at, in->vfp_dp ? 8 : 4);
+                if (p && in->op == OP_VLDR) {
+                    for (int w = 0; w < (in->vfp_dp ? 2 : 1); w++) {
+                        uint32_t v = (uint32_t)p[w*4] | ((uint32_t)p[w*4+1] << 8)
+                                   | ((uint32_t)p[w*4+2] << 16) | ((uint32_t)p[w*4+3] << 24);
+                        if (in->vfp_dp)
+                            fprintf(f, "    vfp_s[%d].u = 0x%08Xu;  /* literal */\n",
+                                    in->vd * 2 + w, v);
+                        else
+                            fprintf(f, "    vfp_setu(%d, 0x%08Xu);  /* literal */\n",
+                                    in->vd, v);
+                    }
+                    st->literals++;
+                    break;
+                }
+            }
+            if (in->op == OP_VLDR) {
+                if (in->vfp_dp) {
+                    fprintf(f, "    vfp_s[%d].u = vita_read32(%s);\n", in->vd * 2, a);
+                    fprintf(f, "    vfp_s[%d].u = vita_read32((%s) + 4);\n", in->vd * 2 + 1, a);
+                } else {
+                    fprintf(f, "    vfp_setu(%d, vita_read32(%s));\n", in->vd, a);
+                }
             } else {
-                fprintf(f, "    vita_write32(%s, vfp_getu(%d));\n", a, in->vd);
+                if (in->vfp_dp) {
+                    fprintf(f, "    vita_write32(%s, vfp_s[%d].u);\n", a, in->vd * 2);
+                    fprintf(f, "    vita_write32((%s) + 4, vfp_s[%d].u);\n", a, in->vd * 2 + 1);
+                } else {
+                    fprintf(f, "    vita_write32(%s, vfp_getu(%d));\n", a, in->vd);
+                }
             }
-        }
-        break;
-    }
-
-    case OP_VADD:
-    case OP_VSUB:
-    case OP_VMUL:
-    case OP_VDIV: {
-        if (in->vd == ARM_NO_REG || in->vn == ARM_NO_REG ||
-            in->vm == ARM_NO_REG) {
-            ok = 0;
             break;
         }
-        char c = in->op == OP_VADD   ? '+'
-                 : in->op == OP_VSUB ? '-'
-                 : in->op == OP_VMUL ? '*'
-                                     : '/';
-        if (in->vfp_dp)
-            fprintf(f, "    vfp_setd(%d, vfp_getd(%d) %c vfp_getd(%d));\n",
-                    in->vd, in->vn, c, in->vm);
-        else
-            fprintf(f, "    vfp_setf(%d, vfp_getf(%d) %c vfp_getf(%d));\n",
-                    in->vd, in->vn, c, in->vm);
-        break;
-    }
 
-    case OP_VLDM:
-    case OP_VSTM: {
-        if (in->rn == ARM_NO_REG || in->vd == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        /* Registers occupy ascending addresses regardless of direction. A
-         * decrement-before form (VPUSH) moves the base down by the whole
-         * block first, then writes upward from there — the same shape as
-         * the integer PUSH, and for the same reason. */
-        uint32_t n = in->imm;
-        uint32_t words = in->vfp_dp ? n * 2 : n;
-        /* This base is written back, so it is an lvalue and not a
-         * source: resolving r15 to a constant here would emit an
-         * assignment to one. There is no such addressing mode. */
-        if (in->rn == 15) {
-            ok = 0;
-            trap(f, in, "vldm/vstm pc base");
-            break;
-        }
-        const char *rn = reg_name(in->rn);
-
-        if (!in->mem_add)
-            fprintf(f, "    %s -= %u;\n", rn, words * 4);
-        for (uint32_t k = 0; k < words; k++) {
-            int reg = (in->vfp_dp ? in->vd * 2 : in->vd) + (int)k;
-            if (in->op == OP_VLDM)
-                fprintf(f, "    vfp_s[%d].u = vita_read32(%s + %u);\n",
-                        reg & 63, rn, k * 4);
-            else
-                fprintf(f, "    vita_write32(%s + %u, vfp_s[%d].u);\n", rn,
-                        k * 4, reg & 63);
-        }
-        if (in->mem_add && in->writeback)
-            fprintf(f, "    %s += %u;\n", rn, words * 4);
-        break;
-    }
-
-    case OP_VMLA:
-    case OP_VMLS: {
-        if (in->vd == ARM_NO_REG || in->vn == ARM_NO_REG ||
-            in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        char c = (in->op == OP_VMLA) ? '+' : '-';
-        if (in->vfp_dp)
-            fprintf(f,
-                    "    vfp_setd(%d, vfp_getd(%d) %c (vfp_getd(%d) * "
-                    "vfp_getd(%d)));\n",
-                    in->vd, in->vd, c, in->vn, in->vm);
-        else
-            fprintf(f,
-                    "    vfp_setf(%d, vfp_getf(%d) %c (vfp_getf(%d) * "
-                    "vfp_getf(%d)));\n",
-                    in->vd, in->vd, c, in->vn, in->vm);
-        break;
-    }
-
-    case OP_VNMUL:
-        if (in->vd == ARM_NO_REG || in->vn == ARM_NO_REG ||
-            in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->vfp_dp)
-            fprintf(f, "    vfp_setd(%d, -(vfp_getd(%d) * vfp_getd(%d)));\n",
-                    in->vd, in->vn, in->vm);
-        else
-            fprintf(f, "    vfp_setf(%d, -(vfp_getf(%d) * vfp_getf(%d)));\n",
-                    in->vd, in->vn, in->vm);
-        break;
-
-    case OP_VMOV:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->vfp_dp)
-            fprintf(f, "    vfp_setd(%d, vfp_getd(%d));\n", in->vd, in->vm);
-        else
-            fprintf(f, "    vfp_setu(%d, vfp_getu(%d));\n", in->vd, in->vm);
-        break;
-
-    case OP_VABS:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        /* Clearing the sign bit rather than calling fabs: it is the
-         * architecture's definition, and it preserves NaN payloads where
-         * a library call need not. */
-        if (in->vfp_dp)
-            fprintf(f,
-                    "    vfp_setd(%d, vfp_getd(%d) < 0.0 ? -vfp_getd(%d) : "
-                    "vfp_getd(%d));\n",
-                    in->vd, in->vm, in->vm, in->vm);
-        else
-            fprintf(f, "    vfp_setu(%d, vfp_getu(%d) & 0x7FFFFFFFu);\n",
-                    in->vd, in->vm);
-        break;
-
-    case OP_VNEG:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->vfp_dp)
-            fprintf(f, "    vfp_setd(%d, -vfp_getd(%d));\n", in->vd, in->vm);
-        else
-            fprintf(f, "    vfp_setu(%d, vfp_getu(%d) ^ 0x80000000u);\n",
-                    in->vd, in->vm);
-        break;
-
-    case OP_VSQRT:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->vfp_dp)
-            fprintf(f, "    vfp_setd(%d, sqrt(vfp_getd(%d)));\n", in->vd,
-                    in->vm);
-        else
-            fprintf(f, "    vfp_setf(%d, (float)sqrt((double)vfp_getf(%d)));\n",
-                    in->vd, in->vm);
-        break;
-
-    case OP_VCMP:
-        if (in->vd == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        /* Writes FPSCR, not the integer flags. A later VMRS moves them. */
-        if (in->vm == ARM_NO_REG) {
+        case OP_VADD: case OP_VSUB: case OP_VMUL: case OP_VDIV: {
+            if (in->vd == ARM_NO_REG || in->vn == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            char c = in->op == OP_VADD ? '+' : in->op == OP_VSUB ? '-'
+                   : in->op == OP_VMUL ? '*' : '/';
             if (in->vfp_dp)
-                fprintf(f, "    vfp_cmp_f64(vfp_getd(%d), 0.0);\n", in->vd);
+                fprintf(f, "    vfp_setd(%d, vfp_getd(%d) %c vfp_getd(%d));\n",
+                        in->vd, in->vn, c, in->vm);
             else
-                fprintf(f, "    vfp_cmp_f32(vfp_getf(%d), 0.0f);\n", in->vd);
-        } else {
+                fprintf(f, "    vfp_setf(%d, vfp_getf(%d) %c vfp_getf(%d));\n",
+                        in->vd, in->vn, c, in->vm);
+            break;
+        }
+
+        case OP_VLDM: case OP_VSTM: {
+            if (in->rn == ARM_NO_REG || in->vd == ARM_NO_REG) { ok = 0; break; }
+            /* Registers occupy ascending addresses regardless of direction. A
+             * decrement-before form (VPUSH) moves the base down by the whole
+             * block first, then writes upward from there — the same shape as
+             * the integer PUSH, and for the same reason. */
+            uint32_t n     = in->imm;
+            uint32_t words = in->vfp_dp ? n * 2 : n;
+            /* This base is written back, so it is an lvalue and not a
+             * source: resolving r15 to a constant here would emit an
+             * assignment to one. There is no such addressing mode. */
+            if (in->rn == 15) { ok = 0; trap(f, in, "vldm/vstm pc base"); break; }
+            const char *rn = reg_name(in->rn);
+
+            if (!in->mem_add) fprintf(f, "    %s -= %u;\n", rn, words * 4);
+            for (uint32_t k = 0; k < words; k++) {
+                int reg = (in->vfp_dp ? in->vd * 2 : in->vd) + (int)k;
+                if (in->op == OP_VLDM)
+                    fprintf(f, "    vfp_s[%d].u = vita_read32(%s + %u);\n", reg & 63, rn, k * 4);
+                else
+                    fprintf(f, "    vita_write32(%s + %u, vfp_s[%d].u);\n", rn, k * 4, reg & 63);
+            }
+            if (in->mem_add && in->writeback)
+                fprintf(f, "    %s += %u;\n", rn, words * 4);
+            break;
+        }
+
+        case OP_VMLA: case OP_VMLS: {
+            if (in->vd == ARM_NO_REG || in->vn == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            char c = (in->op == OP_VMLA) ? '+' : '-';
             if (in->vfp_dp)
-                fprintf(f, "    vfp_cmp_f64(vfp_getd(%d), vfp_getd(%d));\n",
-                        in->vd, in->vm);
+                fprintf(f, "    vfp_setd(%d, vfp_getd(%d) %c (vfp_getd(%d) * vfp_getd(%d)));\n",
+                        in->vd, in->vd, c, in->vn, in->vm);
             else
-                fprintf(f, "    vfp_cmp_f32(vfp_getf(%d), vfp_getf(%d));\n",
-                        in->vd, in->vm);
-        }
-        break;
-
-    case OP_VMRS:
-        fprintf(f, "    vfp_mrs_apsr();\n");
-        break;
-
-    case OP_VMOV_TO_V:
-        if (in->rt == ARM_NO_REG || in->vn == ARM_NO_REG) {
-            ok = 0;
+                fprintf(f, "    vfp_setf(%d, vfp_getf(%d) %c (vfp_getf(%d) * vfp_getf(%d)));\n",
+                        in->vd, in->vd, c, in->vn, in->vm);
             break;
         }
-        fprintf(f, "    vfp_setu(%d, %s);\n", in->vn, reg_name(in->rt));
-        break;
 
-    case OP_VMOV_TO_C:
-        if (in->rt == ARM_NO_REG || in->vn == ARM_NO_REG) {
+        case OP_VNMUL:
+            if (in->vd == ARM_NO_REG || in->vn == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            if (in->vfp_dp)
+                fprintf(f, "    vfp_setd(%d, -(vfp_getd(%d) * vfp_getd(%d)));\n", in->vd, in->vn, in->vm);
+            else
+                fprintf(f, "    vfp_setf(%d, -(vfp_getf(%d) * vfp_getf(%d)));\n", in->vd, in->vn, in->vm);
+            break;
+
+        case OP_VMOV:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            if (in->vfp_dp) fprintf(f, "    vfp_setd(%d, vfp_getd(%d));\n", in->vd, in->vm);
+            else            fprintf(f, "    vfp_setu(%d, vfp_getu(%d));\n", in->vd, in->vm);
+            break;
+
+        case OP_VABS:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            /* Clearing the sign bit rather than calling fabs: it is the
+             * architecture's definition, and it preserves NaN payloads where
+             * a library call need not. */
+            if (in->vfp_dp) fprintf(f, "    vfp_setd(%d, vfp_getd(%d) < 0.0 ? -vfp_getd(%d) : vfp_getd(%d));\n",
+                                    in->vd, in->vm, in->vm, in->vm);
+            else            fprintf(f, "    vfp_setu(%d, vfp_getu(%d) & 0x7FFFFFFFu);\n", in->vd, in->vm);
+            break;
+
+        case OP_VNEG:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            if (in->vfp_dp) fprintf(f, "    vfp_setd(%d, -vfp_getd(%d));\n", in->vd, in->vm);
+            else            fprintf(f, "    vfp_setu(%d, vfp_getu(%d) ^ 0x80000000u);\n", in->vd, in->vm);
+            break;
+
+        case OP_VSQRT:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            if (in->vfp_dp) fprintf(f, "    vfp_setd(%d, sqrt(vfp_getd(%d)));\n", in->vd, in->vm);
+            else            fprintf(f, "    vfp_setf(%d, (float)sqrt((double)vfp_getf(%d)));\n", in->vd, in->vm);
+            break;
+
+        case OP_VCMP:
+            if (in->vd == ARM_NO_REG) { ok = 0; break; }
+            /* Writes FPSCR, not the integer flags. A later VMRS moves them. */
+            if (in->vm == ARM_NO_REG) {
+                if (in->vfp_dp) fprintf(f, "    vfp_cmp_f64(vfp_getd(%d), 0.0);\n", in->vd);
+                else            fprintf(f, "    vfp_cmp_f32(vfp_getf(%d), 0.0f);\n", in->vd);
+            } else {
+                if (in->vfp_dp) fprintf(f, "    vfp_cmp_f64(vfp_getd(%d), vfp_getd(%d));\n", in->vd, in->vm);
+                else            fprintf(f, "    vfp_cmp_f32(vfp_getf(%d), vfp_getf(%d));\n", in->vd, in->vm);
+            }
+            break;
+
+        case OP_VMRS:
+            fprintf(f, "    vfp_mrs_apsr();\n");
+            break;
+
+        case OP_VMOV_TO_V:
+            if (in->rt == ARM_NO_REG || in->vn == ARM_NO_REG) { ok = 0; break; }
+            fprintf(f, "    vfp_setu(%d, %s);\n", in->vn, reg_name(in->rt));
+            break;
+
+        case OP_VMOV_TO_C:
+            if (in->rt == ARM_NO_REG || in->vn == ARM_NO_REG) { ok = 0; break; }
+            fprintf(f, "    %s = vfp_getu(%d);\n", reg_name(in->rt), in->vn);
+            break;
+
+        case OP_VCVT_I2F:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            if (in->vfp_dp)
+                fprintf(f, "    vfp_setd(%d, (double)(%s)vfp_getu(%d));\n",
+                        in->vd, in->vfp_unsigned ? "uint32_t" : "int32_t", in->vm);
+            else
+                fprintf(f, "    vfp_setf(%d, (float)(%s)vfp_getu(%d));\n",
+                        in->vd, in->vfp_unsigned ? "uint32_t" : "int32_t", in->vm);
+            break;
+
+        case OP_VCVT_F2I:
+            if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) { ok = 0; break; }
+            /* Toward zero, which is what a C cast does — the only rounding
+             * mode claimed by the decoder for exactly that reason. */
+            /* The cast alone is not enough, though: out of range it is
+             * undefined in C and 0x80000000 on x86, where the architecture
+             * saturates, and NaN converts to zero. */
+            fprintf(f, "    vfp_setu(%d, (uint32_t)vita_%s_to_%s(vfp_get%s(%d)));\n",
+                    in->vd, in->vfp_dp ? "f64" : "f32", in->vfp_unsigned ? "u32" : "s32",
+                    in->vfp_dp ? "d" : "f", in->vm);
+            break;
+
+        case OP_NOP:
+            fprintf(f, "    /* nop */\n");
+            break;
+
+        case OP_IT:
+            /* The IT instruction itself emits nothing; its effect is that the
+             * following instructions carry a condition, which the decoder has
+             * already attached to them. */
+            fprintf(f, "    /* it %s */\n", arm_cond_name(in->cond));
+            break;
+
+        default:
             ok = 0;
             break;
-        }
-        fprintf(f, "    %s = vfp_getu(%d);\n", reg_name(in->rt), in->vn);
-        break;
-
-    case OP_VCVT_I2F:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        if (in->vfp_dp)
-            fprintf(f, "    vfp_setd(%d, (double)(%s)vfp_getu(%d));\n", in->vd,
-                    in->vfp_unsigned ? "uint32_t" : "int32_t", in->vm);
-        else
-            fprintf(f, "    vfp_setf(%d, (float)(%s)vfp_getu(%d));\n", in->vd,
-                    in->vfp_unsigned ? "uint32_t" : "int32_t", in->vm);
-        break;
-
-    case OP_VCVT_F2I:
-        if (in->vd == ARM_NO_REG || in->vm == ARM_NO_REG) {
-            ok = 0;
-            break;
-        }
-        /* Toward zero, which is what a C cast does — the only rounding
-         * mode claimed by the decoder for exactly that reason. */
-        /* The cast alone is not enough, though: out of range it is
-         * undefined in C and 0x80000000 on x86, where the architecture
-         * saturates, and NaN converts to zero. */
-        fprintf(
-            f, "    vfp_setu(%d, (uint32_t)vita_%s_to_%s(vfp_get%s(%d)));\n",
-            in->vd, in->vfp_dp ? "f64" : "f32",
-            in->vfp_unsigned ? "u32" : "s32", in->vfp_dp ? "d" : "f", in->vm);
-        break;
-
-    case OP_NOP:
-        fprintf(f, "    /* nop */\n");
-        break;
-
-    case OP_IT:
-        /* The IT instruction itself emits nothing; its effect is that the
-         * following instructions carry a condition, which the decoder has
-         * already attached to them. */
-        fprintf(f, "    /* it %s */\n", arm_cond_name(in->cond));
-        break;
-
-    default:
-        ok = 0;
-        break;
     }
 
     /* Control-flow classes the operand decoder does not cover are handled by
@@ -2603,12 +1862,11 @@ static int emit_insn(const vm_image *img, const vm_module *mod,
         if (in->cls == A_CALL && in->has_target && fs_has(fs, target_key(in))) {
             char sym[96];
             function_symbol(sym, sizeof(sym), module_id, target_key(in));
-            fprintf(f, "    lr = 0x%08Xu; vita_call(%s);\n", link_value(in),
-                    sym);
+            fprintf(f, "    lr = 0x%08Xu; vita_call(%s);\n",
+                    link_value(in), sym);
             ok = 1;
         } else if (in->cls == A_CALL && in->has_target) {
-            fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n", in->addr,
-                    in->target);
+            fprintf(f, "    vita_trap_indirect(0x%08X, 0x%08X);\n", in->addr, in->target);
             note_trap(st, "call: target not a function");
         } else if (in->cls == A_RETURN) {
             fprintf(f, "    return;\n");
@@ -2625,13 +1883,11 @@ static int emit_insn(const vm_image *img, const vm_module *mod,
         }
     }
 
-    if (guarded)
-        fprintf(f, "    }\n");
+    if (guarded) fprintf(f, "    }\n");
     return ok;
 }
 
-/* --- the whole module --------------------------------------------------------
- */
+/* --- the whole module -------------------------------------------------------- */
 
 /* --- which functions can run ------------------------------------------------
  *
@@ -2651,9 +1907,7 @@ static int emit_insn(const vm_image *img, const vm_module *mod,
  * announces itself as a miss rather than running a copy.
  */
 
-typedef struct {
-    uint32_t addr, idx;
-} addr_idx;
+typedef struct { uint32_t addr, idx; } addr_idx;
 
 static int ai_cmp(const void *a, const void *b) {
     uint32_t x = ((const addr_idx *)a)->addr, y = ((const addr_idx *)b)->addr;
@@ -2664,12 +1918,8 @@ static int ai_find(const addr_idx *v, uint32_t n, uint32_t addr) {
     uint32_t lo = 0, hi = n;
     while (lo < hi) {
         uint32_t mid = (lo + hi) / 2;
-        if (v[mid].addr == addr)
-            return (int)v[mid].idx;
-        if (v[mid].addr < addr)
-            lo = mid + 1;
-        else
-            hi = mid;
+        if (v[mid].addr == addr) return (int)v[mid].idx;
+        if (v[mid].addr <  addr) lo = mid + 1; else hi = mid;
     }
     return -1;
 }
@@ -2681,9 +1931,8 @@ static int ai_find(const addr_idx *v, uint32_t n, uint32_t addr) {
  * `clean` is set when the whole body would translate without a trap: every
  * instruction claimed, every branch a label, a function or an import, nothing
  * off the segment. Data read as code never manages that for long. */
-static uint32_t body_refs(const vm_image *img, const vm_module *mod,
-                          const vf_func *fn, const addr_idx *ai, uint32_t nai,
-                          uint32_t **out, uint32_t *cap, uint32_t at,
+static uint32_t body_refs(const vm_image *img, const vm_module *mod, const vf_func *fn,
+                          const addr_idx *ai, uint32_t nai, uint32_t **out, uint32_t *cap, uint32_t at,
                           int *clean) {
     fbody b;
     memset(&b, 0, sizeof(b));
@@ -2692,27 +1941,16 @@ static uint32_t body_refs(const vm_image *img, const vm_module *mod,
     int ok = b.n > 0;
     for (uint32_t k = 0; k < b.n; k++) {
         const arm_insn *in = &b.v[k];
-        if (in->cls == A_UNKNOWN || in->cls == A_UNDEF)
-            ok = 0;
-        else if (in->op == OP_NONE && in->cls != A_CALL &&
-                 in->cls != A_BRANCH && in->cls != A_RETURN &&
-                 in->cls != A_INDIRECT && in->cls != A_NOP)
-            ok = 0;
-        else if (in->rd == 15)
-            ok = 0;
-        if (!in->has_target)
-            continue;
-        if (in->cls != A_CALL && in->cls != A_BRANCH)
-            continue;
-        if (in->cls == A_BRANCH && fb_has_label(&b, in->target))
-            continue;
-        if (vm_find_stub(mod, in->target))
-            continue;
+        if (in->cls == A_UNKNOWN || in->cls == A_UNDEF) ok = 0;
+        else if (in->op == OP_NONE && in->cls != A_CALL && in->cls != A_BRANCH &&
+                 in->cls != A_RETURN && in->cls != A_INDIRECT && in->cls != A_NOP) ok = 0;
+        else if (in->rd == 15) ok = 0;
+        if (!in->has_target) continue;
+        if (in->cls != A_CALL && in->cls != A_BRANCH) continue;
+        if (in->cls == A_BRANCH && fb_has_label(&b, in->target)) continue;
+        if (vm_find_stub(mod, in->target)) continue;
         int idx = ai_find(ai, nai, target_key(in));
-        if (idx < 0) {
-            ok = 0;
-            continue;
-        }
+        if (idx < 0) { ok = 0; continue; }
         if (at + n == *cap) {
             *cap = *cap ? *cap * 2 : 65536;
             *out = (uint32_t *)realloc(*out, *cap * sizeof(uint32_t));
@@ -2730,9 +1968,8 @@ static uint32_t body_refs(const vm_image *img, const vm_module *mod,
  * its target and no table around it) is a root only if its body is clean.
  * That keeps a prologue-less leaf that only a pointer names, and leaves out
  * the record table whose odd offsets a relocation happened to name. */
-static uint32_t reachable(const vm_image *img, const vm_module *mod,
-                          const vf_result *disc, uint8_t *keep,
-                          uint32_t *promoted) {
+static uint32_t reachable(const vm_image *img, const vm_module *mod, const vf_result *disc,
+                          uint8_t *keep, uint32_t *promoted) {
     uint32_t n = disc->count;
     addr_idx *ai = (addr_idx *)malloc((n ? n : 1) * sizeof(addr_idx));
     uint32_t *ref_start = (uint32_t *)malloc((n + 1) * sizeof(uint32_t));
@@ -2745,17 +1982,13 @@ static uint32_t reachable(const vm_image *img, const vm_module *mod,
         free(clean);
         return UINT32_MAX;
     }
-    for (uint32_t i = 0; i < n; i++) {
-        ai[i].addr = func_key(&disc->funcs[i]);
-        ai[i].idx = i;
-    }
+    for (uint32_t i = 0; i < n; i++) { ai[i].addr = func_key(&disc->funcs[i]); ai[i].idx = i; }
     qsort(ai, n, sizeof(addr_idx), ai_cmp);
 
     for (uint32_t i = 0; i < n; i++) {
         int c = 0;
         ref_start[i] = total;
-        total +=
-            body_refs(img, mod, &disc->funcs[i], ai, n, &refs, &cap, total, &c);
+        total += body_refs(img, mod, &disc->funcs[i], ai, n, &refs, &cap, total, &c);
         clean[i] = (uint8_t)c;
     }
     ref_start[n] = total;
@@ -2771,24 +2004,15 @@ static uint32_t reachable(const vm_image *img, const vm_module *mod,
     }
     for (uint32_t i = 0; i < n; i++) {
         int root = (disc->funcs[i].reasons & VF_R_ROOTS) != 0;
-        if (!root && (disc->funcs[i].reasons & VF_R_WEAK_PTR) && clean[i]) {
-            root = 1;
-            (*promoted)++;
-        }
-        if (root) {
-            keep[i] = 1;
-            queue[tail++] = i;
-        }
+        if (!root && (disc->funcs[i].reasons & VF_R_WEAK_PTR) && clean[i]) { root = 1; (*promoted)++; }
+        if (root) { keep[i] = 1; queue[tail++] = i; }
     }
     while (head < tail) {
         uint32_t i = queue[head++];
         kept++;
         for (uint32_t r = ref_start[i]; r < ref_start[i + 1]; r++) {
             uint32_t j = refs[r];
-            if (!keep[j]) {
-                keep[j] = 1;
-                queue[tail++] = j;
-            }
+            if (!keep[j]) { keep[j] = 1; queue[tail++] = j; }
         }
     }
     free(queue);
@@ -2803,54 +2027,42 @@ static uint32_t reachable(const vm_image *img, const vm_module *mod,
  * the include line each part carries. */
 static void base_name(char *dst, size_t cap, const char *outpath) {
     const char *s = outpath, *p;
-    for (p = outpath; *p; p++)
-        if (*p == '/' || *p == '\\')
-            s = p + 1;
+    for (p = outpath; *p; p++) if (*p == '/' || *p == '\\') s = p + 1;
     snprintf(dst, cap, "%s", s);
     char *dot = strrchr(dst, '.');
-    if (dot && dot != dst)
-        *dot = '\0';
+    if (dot && dot != dst) *dot = '\0';
 }
 
 /* Everything that every part has to see: the runtime, the imports, and
  * every function. One header rather than a copy per part, so the
  * declaration set stays one thing. */
-static int write_header(const char *outpath, const vm_module *mod,
-                        const nid_db *db, const vf_result *disc,
-                        const uint32_t *list, uint32_t nlist,
-                        const char *module_id) {
+static int write_header(const char *outpath, const vm_module *mod, const nid_db *db,
+                        const vf_result *disc, const uint32_t *list,
+                        uint32_t nlist, const char *module_id) {
     char path[1200], base[256], descriptor[128], register_fn[128];
     base_name(base, sizeof(base), outpath);
     snprintf(path, sizeof(path), "%s", outpath);
     char *dot = strrchr(path, '.');
     const char *slash = strrchr(path, '/');
     const char *bslash = strrchr(path, '\\');
-    if (dot && (!slash || dot > slash) && (!bslash || dot > bslash))
-        *dot = '\0';
+    if (dot && (!slash || dot > slash) && (!bslash || dot > bslash)) *dot = '\0';
     strncat(path, ".h", sizeof(path) - strlen(path) - 1);
     FILE *h = fopen(path, "w");
-    if (!h)
-        return 1;
+    if (!h) return 1;
     fprintf(h, "/* Generated by armrecomp. Do not edit.\n");
     fprintf(h, " *\n");
-    fprintf(h, " * module: %s -- what every part of the output declares.\n",
-            mod->info.name);
+    fprintf(h, " * module: %s -- what every part of the output declares.\n", mod->info.name);
     fprintf(h, " */\n\n");
     const char *guard = module_id ? module_id : base;
-    fprintf(h,
-            "#ifndef VITARECOMP_GENERATED_%s_H\n#define "
-            "VITARECOMP_GENERATED_%s_H\n\n",
+    fprintf(h, "#ifndef VITARECOMP_GENERATED_%s_H\n#define VITARECOMP_GENERATED_%s_H\n\n",
             guard, guard);
     fprintf(h, "#include \"vitarecomp/recomp_rt.h\"\n");
     fprintf(h, "#include \"vitarecomp/dispatch.h\"\n");
     fprintf(h, "#include \"vitarecomp/generated_module.h\"\n\n");
     fprintf(h, "#if defined(_MSC_VER)\n");
-    fprintf(h, "/* Address-sorted guest blocks and constant-folded inline ARM "
-               "helpers can\n");
-    fprintf(h, " * make MSVC report C4702 after proving one host path "
-               "unreachable. The guest\n");
-    fprintf(h, " * block is retained deliberately; every other /W4 diagnostic "
-               "remains live. */\n");
+    fprintf(h, "/* Address-sorted guest blocks and constant-folded inline ARM helpers can\n");
+    fprintf(h, " * make MSVC report C4702 after proving one host path unreachable. The guest\n");
+    fprintf(h, " * block is retained deliberately; every other /W4 diagnostic remains live. */\n");
     fprintf(h, "#pragma warning(disable: 4702)\n");
     fprintf(h, "#endif\n\n");
     fprintf(h, "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n");
@@ -2867,8 +2079,7 @@ static int write_header(const char *outpath, const vm_module *mod,
         fprintf(h, "\n");
     }
     if (mod->var_count) {
-        fprintf(h, "/* imported variables: the guest address of each, bound by "
-                   "the loader */\n");
+        fprintf(h, "/* imported variables: the guest address of each, bound by the loader */\n");
         for (uint32_t i = 0; i < mod->var_count; i++) {
             char sym[96];
             var_symbol(sym, sizeof(sym), db, &mod->vars[i], module_id);
@@ -2876,8 +2087,7 @@ static int write_header(const char *outpath, const vm_module *mod,
         }
         fprintf(h, "\n");
     }
-    fprintf(h, "/* functions: the call graph has cycles, so every one is "
-               "declared before any body */\n");
+    fprintf(h, "/* functions: the call graph has cycles, so every one is declared before any body */\n");
     for (uint32_t i = 0; i < nlist; i++) {
         char sym[96];
         function_symbol(sym, sizeof(sym), module_id,
@@ -2903,18 +2113,13 @@ static FILE *open_part(const char *outpath, uint32_t n, const char *base) {
     char *dot = strrchr(path, '.');
     const char *slash = strrchr(path, '/');
     const char *bslash = strrchr(path, '\\');
-    if (dot && (!slash || dot > slash) && (!bslash || dot > bslash))
-        *dot = '\0';
+    if (dot && (!slash || dot > slash) && (!bslash || dot > bslash)) *dot = '\0';
     char suffix[32];
     snprintf(suffix, sizeof(suffix), "_%03u.c", n);
     strncat(path, suffix, sizeof(path) - strlen(path) - 1);
     FILE *p = fopen(path, "w");
-    if (!p)
-        return NULL;
-    fprintf(p,
-            "/* Generated by armrecomp. Do not edit. Part %u of the functions. "
-            "*/\n\n",
-            n);
+    if (!p) return NULL;
+    fprintf(p, "/* Generated by armrecomp. Do not edit. Part %u of the functions. */\n\n", n);
     fprintf(p, "#include \"%s.h\"\n\n", base);
     return p;
 }
@@ -2922,8 +2127,7 @@ static FILE *open_part(const char *outpath, uint32_t n, const char *base) {
 static int report_path(char *path, size_t cap, const char *outpath,
                        const char *suffix) {
     int n = snprintf(path, cap, "%s", outpath);
-    if (n < 0 || (size_t)n >= cap)
-        return 1;
+    if (n < 0 || (size_t)n >= cap) return 1;
     char *dot = strrchr(path, '.');
     char *slash = strrchr(path, '/');
     char *bslash = strrchr(path, '\\');
@@ -2938,22 +2142,14 @@ static void json_string(FILE *f, const char *s) {
     fputc('"', f);
     for (; *s; s++) {
         unsigned char c = (unsigned char)*s;
-        if (c == '"' || c == '\\')
-            fprintf(f, "\\%c", c);
-        else if (c == '\b')
-            fputs("\\b", f);
-        else if (c == '\f')
-            fputs("\\f", f);
-        else if (c == '\n')
-            fputs("\\n", f);
-        else if (c == '\r')
-            fputs("\\r", f);
-        else if (c == '\t')
-            fputs("\\t", f);
-        else if (c < 0x20)
-            fprintf(f, "\\u%04X", c);
-        else
-            fputc(c, f);
+        if (c == '"' || c == '\\') fprintf(f, "\\%c", c);
+        else if (c == '\b') fputs("\\b", f);
+        else if (c == '\f') fputs("\\f", f);
+        else if (c == '\n') fputs("\\n", f);
+        else if (c == '\r') fputs("\\r", f);
+        else if (c == '\t') fputs("\\t", f);
+        else if (c < 0x20) fprintf(f, "\\u%04X", c);
+        else fputc(c, f);
     }
     fputc('"', f);
 }
@@ -2962,25 +2158,18 @@ static void c_string(FILE *f, const char *s) {
     fputc('"', f);
     for (; *s; s++) {
         unsigned char c = (unsigned char)*s;
-        if (c == '"' || c == '\\')
-            fprintf(f, "\\%c", c);
-        else if (c == '\n')
-            fputs("\\n", f);
-        else if (c == '\r')
-            fputs("\\r", f);
-        else if (c == '\t')
-            fputs("\\t", f);
-        else if (c < 0x20 || c >= 0x7F)
-            fprintf(f, "\\%03o", c);
-        else
-            fputc(c, f);
+        if (c == '"' || c == '\\') fprintf(f, "\\%c", c);
+        else if (c == '\n') fputs("\\n", f);
+        else if (c == '\r') fputs("\\r", f);
+        else if (c == '\t') fputs("\\t", f);
+        else if (c < 0x20 || c >= 0x7F) fprintf(f, "\\%03o", c);
+        else fputc(c, f);
     }
     fputc('"', f);
 }
 
 static void trap_order(const emit_stats *st, uint32_t *order) {
-    for (uint32_t i = 0; i < st->trap_kinds; i++)
-        order[i] = i;
+    for (uint32_t i = 0; i < st->trap_kinds; i++) order[i] = i;
     for (uint32_t i = 1; i < st->trap_kinds; i++) {
         uint32_t key = order[i];
         uint32_t j = i;
@@ -3012,17 +2201,13 @@ static int write_reports(const char *outpath, const vm_module *mod,
     uint64_t all_traps = trap_total + st->unclassified_traps;
 
     FILE *j = fopen(json_path, "wb");
-    if (!j)
-        return 1;
+    if (!j) return 1;
     fputs("{\n", j);
     fprintf(j, "  \"schemaVersion\": %u,\n",
             VITA_GENERATED_REPORT_SCHEMA_VERSION);
     fputs("  \"generator\": \"armrecomp\",\n", j);
     fputs("  \"module\": {\"id\": ", j);
-    if (module_id)
-        json_string(j, module_id);
-    else
-        fputs("null", j);
+    if (module_id) json_string(j, module_id); else fputs("null", j);
     fputs(", \"name\": ", j);
     json_string(j, mod->info.name);
     fputs("},\n", j);
@@ -3031,35 +2216,31 @@ static int write_reports(const char *outpath, const vm_module *mod,
             st->structural_ready ? "true" : "false");
     fprintf(j, "  \"productionReady\": %s,\n",
             st->production_ready ? "true" : "false");
-    fprintf(j,
-            "  \"instrumentation\": {\"functionEntry\": true, \"pc\": %s},\n",
+    fprintf(j, "  \"instrumentation\": {\"functionEntry\": true, \"pc\": %s},\n",
             st->pc_instrumented ? "true" : "false");
-    fprintf(j,
-            "  \"entry\": {\"present\": %s, "
-            "\"rawAddress\": \"0x%08X\", "
-            "\"dispatchKey\": \"0x%08X\", \"resolved\": %s},\n",
+    fprintf(j, "  \"entry\": {\"present\": %s, "
+               "\"rawAddress\": \"0x%08X\", "
+               "\"dispatchKey\": \"0x%08X\", \"resolved\": %s},\n",
             st->entry_present ? "true" : "false", st->entry_raw_address,
-            st->entry_dispatch_key, st->entry_resolved ? "true" : "false");
-    fprintf(j,
-            "  \"tls\": {\"present\": %s, \"resolved\": %s, "
-            "\"address\": \"0x%08X\", \"fileSize\": %u, "
-            "\"memorySize\": %u, \"alignment\": %u},\n",
+            st->entry_dispatch_key,
+            st->entry_resolved ? "true" : "false");
+    fprintf(j, "  \"tls\": {\"present\": %s, \"resolved\": %s, "
+               "\"address\": \"0x%08X\", \"fileSize\": %u, "
+               "\"memorySize\": %u, \"alignment\": %u},\n",
             st->tls_present ? "true" : "false",
             st->tls_resolved ? "true" : "false", st->tls_address,
             st->tls_filesz, st->tls_memsz, st->tls_alignment);
-    fprintf(j,
-            "  \"functions\": {\"emitted\": %u, \"discovered\": %u, "
-            "\"dropped\": %u, \"promotedWeakRoots\": %u},\n",
+    fprintf(j, "  \"functions\": {\"emitted\": %u, \"discovered\": %u, "
+               "\"dropped\": %u, \"promotedWeakRoots\": %u},\n",
             st->funcs, st->funcs_discovered, st->funcs_dropped,
             st->funcs_promoted);
-    fprintf(j,
-            "  \"instructions\": {\"total\": %u, \"translated\": %u, "
-            "\"trapped\": %u, \"bodyCuts\": %u},\n",
+    fprintf(j, "  \"instructions\": {\"total\": %u, \"translated\": %u, "
+               "\"trapped\": %u, \"bodyCuts\": %u},\n",
             st->insns, st->translated, st->trapped, st->bodies_cut);
-    fprintf(j,
-            "  \"traps\": {\"total\": %llu, \"classified\": %llu, "
-            "\"unclassified\": %u, \"other\": %u, \"kinds\": [\n",
-            (unsigned long long)all_traps, (unsigned long long)trap_total,
+    fprintf(j, "  \"traps\": {\"total\": %llu, \"classified\": %llu, "
+               "\"unclassified\": %u, \"other\": %u, \"kinds\": [\n",
+            (unsigned long long)all_traps,
+            (unsigned long long)trap_total,
             st->unclassified_traps, st->traps_other);
     for (uint32_t i = 0; i < st->trap_kinds; i++) {
         const em_trap_kind *t = &st->traps[order[i]];
@@ -3074,22 +2255,18 @@ static int write_reports(const char *outpath, const vm_module *mod,
     for (uint32_t i = 0; i < st->part_inventory_count; i++) {
         const em_part *p = &st->part_inventory[i];
         fprintf(j, "    {\"unit\": \"%s", p->auxiliary ? "part-" : "main");
-        if (p->auxiliary)
-            fprintf(j, "%03u", p->index);
-        fprintf(j,
-                "\", \"functions\": %u, \"instructions\": %u, "
-                "\"firstKey\": \"0x%08X\", \"lastKey\": \"0x%08X\"}%s\n",
+        if (p->auxiliary) fprintf(j, "%03u", p->index);
+        fprintf(j, "\", \"functions\": %u, \"instructions\": %u, "
+                   "\"firstKey\": \"0x%08X\", \"lastKey\": \"0x%08X\"}%s\n",
                 p->funcs, p->insns, p->first_key, p->last_key,
                 i + 1 == st->part_inventory_count ? "" : ",");
     }
     fputs("  ]}\n", j);
     fputs("}\n", j);
-    if (fclose(j) != 0)
-        return 1;
+    if (fclose(j) != 0) return 1;
 
     FILE *t = fopen(text_path, "wb");
-    if (!t)
-        return 1;
+    if (!t) return 1;
     fprintf(t, "armrecomp generation report v%u\n",
             VITA_GENERATED_REPORT_SCHEMA_VERSION);
     fprintf(t, "module.id=%s\n", module_id ? module_id : "");
@@ -3102,12 +2279,16 @@ static int write_reports(const char *outpath, const vm_module *mod,
     fputs("instrumentation.function_entry=true\n", t);
     fprintf(t, "instrumentation.pc=%s\n",
             st->pc_instrumented ? "true" : "false");
-    fprintf(t, "entry.present=%s\n", st->entry_present ? "true" : "false");
+    fprintf(t, "entry.present=%s\n",
+            st->entry_present ? "true" : "false");
     fprintf(t, "entry.raw_address=0x%08X\n", st->entry_raw_address);
     fprintf(t, "entry.dispatch_key=0x%08X\n", st->entry_dispatch_key);
-    fprintf(t, "entry.resolved=%s\n", st->entry_resolved ? "true" : "false");
-    fprintf(t, "tls.present=%s\n", st->tls_present ? "true" : "false");
-    fprintf(t, "tls.resolved=%s\n", st->tls_resolved ? "true" : "false");
+    fprintf(t, "entry.resolved=%s\n",
+            st->entry_resolved ? "true" : "false");
+    fprintf(t, "tls.present=%s\n",
+            st->tls_present ? "true" : "false");
+    fprintf(t, "tls.resolved=%s\n",
+            st->tls_resolved ? "true" : "false");
     fprintf(t, "tls.address=0x%08X\n", st->tls_address);
     fprintf(t, "tls.file_size=%u\n", st->tls_filesz);
     fprintf(t, "tls.memory_size=%u\n", st->tls_memsz);
@@ -3121,7 +2302,8 @@ static int write_reports(const char *outpath, const vm_module *mod,
     fprintf(t, "instructions.trapped=%u\n", st->trapped);
     fprintf(t, "instructions.body_cuts=%u\n", st->bodies_cut);
     fprintf(t, "traps.total=%llu\n", (unsigned long long)all_traps);
-    fprintf(t, "traps.classified=%llu\n", (unsigned long long)trap_total);
+    fprintf(t, "traps.classified=%llu\n",
+            (unsigned long long)trap_total);
     fprintf(t, "traps.unclassified=%u\n", st->unclassified_traps);
     fprintf(t, "traps.other=%u\n", st->traps_other);
     for (uint32_t i = 0; i < st->trap_kinds; i++) {
@@ -3155,17 +2337,19 @@ static uint64_t classified_trap_count(const emit_stats *st) {
 static void finalize_stats(const vm_module *mod, const char *module_id,
                            emit_stats *st) {
     uint64_t classified = classified_trap_count(st);
-    st->unclassified_traps =
-        st->trapped > classified ? st->trapped - (uint32_t)classified : 0;
-    st->production_ready = st->trapped == 0 && classified == 0 &&
-                           st->bodies_cut == 0 && st->traps_other == 0 &&
-                           st->parts_unreported == 0;
-    st->structural_ready = module_id != NULL && mod->have_info &&
-                           mod->metadata_complete && !mod->import_truncated &&
-                           mod->stub_count == mod->total_func_imports &&
-                           mod->var_count == mod->total_var_imports &&
-                           (!st->entry_present || st->entry_resolved) &&
-                           (!st->tls_present || st->tls_resolved);
+    st->unclassified_traps = st->trapped > classified
+        ? st->trapped - (uint32_t)classified
+        : 0;
+    st->production_ready =
+        st->trapped == 0 && classified == 0 && st->bodies_cut == 0 &&
+        st->traps_other == 0 && st->parts_unreported == 0;
+    st->structural_ready =
+        module_id != NULL && mod->have_info && mod->metadata_complete &&
+        !mod->import_truncated &&
+        mod->stub_count == mod->total_func_imports &&
+        mod->var_count == mod->total_var_imports &&
+        (!st->entry_present || st->entry_resolved) &&
+        (!st->tls_present || st->tls_resolved);
 }
 
 typedef struct {
@@ -3177,10 +2361,8 @@ typedef struct {
 static int load_range_cmp(const void *left, const void *right) {
     const em_load_range *a = (const em_load_range *)left;
     const em_load_range *b = (const em_load_range *)right;
-    if (a->begin != b->begin)
-        return a->begin < b->begin ? -1 : 1;
-    if (a->end != b->end)
-        return a->end < b->end ? -1 : 1;
+    if (a->begin != b->begin) return a->begin < b->begin ? -1 : 1;
+    if (a->end != b->end) return a->end < b->end ? -1 : 1;
     return (int)b->executable - (int)a->executable;
 }
 
@@ -3196,18 +2378,16 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
 
     uint32_t exec_size = img->seg_mem_len ? img->seg_mem_len : img->seg_len;
     uint64_t exec_end = (uint64_t)img->seg_vaddr + exec_size;
-    if (!exec_size || exec_end > UINT32_MAX)
-        return 1;
+    if (!exec_size || exec_end > UINT32_MAX) return 1;
     ranges[range_count].begin = img->seg_vaddr;
     ranges[range_count].end = (uint32_t)exec_end;
     ranges[range_count].executable = 1;
     range_count++;
     for (uint32_t i = 0; i < img->data_seg_count; i++) {
-        uint32_t size = img->data_segs[i].mem_len ? img->data_segs[i].mem_len
-                                                  : img->data_segs[i].len;
+        uint32_t size = img->data_segs[i].mem_len
+            ? img->data_segs[i].mem_len : img->data_segs[i].len;
         uint64_t end = (uint64_t)img->data_segs[i].vaddr + size;
-        if (!size || end > UINT32_MAX)
-            return 1;
+        if (!size || end > UINT32_MAX) return 1;
         ranges[range_count].begin = img->data_segs[i].vaddr;
         ranges[range_count].end = (uint32_t)end;
         ranges[range_count].executable = 0;
@@ -3216,21 +2396,18 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
     qsort(ranges, range_count, sizeof(ranges[0]), load_range_cmp);
 
     FILE *j = fopen(path, "wb");
-    if (!j)
-        return 1;
+    if (!j) return 1;
 
     module_symbol(descriptor, sizeof(descriptor), "vita_generated_module",
                   module_id);
     fputs("{\n", j);
     fprintf(j, "  \"schemaVersion\": %u,\n",
             VITA_GENERATED_REPORT_SCHEMA_VERSION);
-    fprintf(j, "  \"abiVersion\": %u,\n", VITA_GENERATED_MODULE_ABI_VERSION);
+    fprintf(j, "  \"abiVersion\": %u,\n",
+            VITA_GENERATED_MODULE_ABI_VERSION);
     fputs("  \"generator\": \"armrecomp\",\n", j);
     fputs("  \"module\": {\"id\": ", j);
-    if (module_id)
-        json_string(j, module_id);
-    else
-        fputs("null", j);
+    if (module_id) json_string(j, module_id); else fputs("null", j);
     fputs(", \"name\": ", j);
     json_string(j, mod->info.name);
     fputs(", \"descriptorSymbol\": ", j);
@@ -3239,21 +2416,19 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
 
     fprintf(j, "  \"ranges\": {\"load\": [\n");
     for (uint32_t i = 0; i < range_count; i++) {
-        fprintf(j,
-                "    {\"begin\": \"0x%08X\", "
-                "\"endExclusive\": \"0x%08X\"}%s\n",
+        fprintf(j, "    {\"begin\": \"0x%08X\", "
+                   "\"endExclusive\": \"0x%08X\"}%s\n",
                 ranges[i].begin, ranges[i].end,
                 i + 1 == range_count ? "" : ",");
     }
     fputs("  ], \"executable\": [\n", j);
     for (uint32_t i = 0, written = 0; i < range_count; i++) {
-        if (!ranges[i].executable)
-            continue;
+        if (!ranges[i].executable) continue;
         written++;
-        fprintf(j,
-                "    {\"begin\": \"0x%08X\", "
-                "\"endExclusive\": \"0x%08X\"}%s\n",
-                ranges[i].begin, ranges[i].end, written == 1 ? "" : ",");
+        fprintf(j, "    {\"begin\": \"0x%08X\", "
+                   "\"endExclusive\": \"0x%08X\"}%s\n",
+                ranges[i].begin, ranges[i].end,
+                written == 1 ? "" : ",");
     }
     fputs("  ]},\n", j);
 
@@ -3262,16 +2437,13 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
     uint32_t fi = 0, si = 0, di = 0;
     while (fi < fs->n || si < mod->stub_count) {
         int take_stub;
-        uint32_t stub_key =
-            si < mod->stub_count ? mod->stubs[si].dispatch_key : 0u;
-        if (fi >= fs->n)
-            take_stub = 1;
-        else if (si >= mod->stub_count)
-            take_stub = 0;
-        else if (stub_key < fs->v[fi])
-            take_stub = 1;
-        else if (stub_key > fs->v[fi])
-            take_stub = 0;
+        uint32_t stub_key = si < mod->stub_count
+            ? mod->stubs[si].dispatch_key
+            : 0u;
+        if (fi >= fs->n) take_stub = 1;
+        else if (si >= mod->stub_count) take_stub = 0;
+        else if (stub_key < fs->v[fi]) take_stub = 1;
+        else if (stub_key > fs->v[fi]) take_stub = 0;
         else {
             take_stub = 1;
             fi++;
@@ -3285,9 +2457,8 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
             hle_symbol(sym, sizeof(sym), db, s);
             fputs("\", \"kind\": \"functionImport\", \"symbol\": ", j);
             json_string(j, sym);
-            fprintf(j,
-                    ", \"libraryNid\": \"0x%08X\", "
-                    "\"functionNid\": \"0x%08X\"}",
+            fprintf(j, ", \"libraryNid\": \"0x%08X\", "
+                       "\"functionNid\": \"0x%08X\"}",
                     s->lib_nid, s->func_nid);
         } else {
             char sym[96];
@@ -3302,23 +2473,23 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
 
     fputs("  \"entry\": {\"present\": ", j);
     fputs(st->entry_present ? "true" : "false", j);
-    fprintf(j,
-            ", \"rawAddress\": \"0x%08X\", "
-            "\"dispatchKey\": \"0x%08X\", \"function\": ",
+    fprintf(j, ", \"rawAddress\": \"0x%08X\", "
+               "\"dispatchKey\": \"0x%08X\", \"function\": ",
             st->entry_raw_address, st->entry_dispatch_key);
     if (st->entry_resolved) {
         char sym[96];
-        function_symbol(sym, sizeof(sym), module_id, st->entry_dispatch_key);
+        function_symbol(sym, sizeof(sym), module_id,
+                        st->entry_dispatch_key);
         json_string(j, sym);
     } else {
         fputs("null", j);
     }
-    fprintf(j, ", \"resolved\": %s},\n", st->entry_resolved ? "true" : "false");
+    fprintf(j, ", \"resolved\": %s},\n",
+            st->entry_resolved ? "true" : "false");
 
-    fprintf(j,
-            "  \"tls\": {\"present\": %s, \"resolved\": %s, "
-            "\"address\": \"0x%08X\", \"fileSize\": %u, "
-            "\"memorySize\": %u, \"alignment\": %u},\n",
+    fprintf(j, "  \"tls\": {\"present\": %s, \"resolved\": %s, "
+               "\"address\": \"0x%08X\", \"fileSize\": %u, "
+               "\"memorySize\": %u, \"alignment\": %u},\n",
             st->tls_present ? "true" : "false",
             st->tls_resolved ? "true" : "false", st->tls_address,
             st->tls_filesz, st->tls_memsz, st->tls_alignment);
@@ -3331,13 +2502,12 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
         hle_symbol(sym, sizeof(sym), db, s);
         import_display_name(full_name, sizeof(full_name), db, s);
         import_target_symbol(target, sizeof(target), s, module_id);
-        fprintf(j,
-                "    {\"key\": \"0x%08X\", \"stubAddress\": "
-                "\"0x%08X\", \"targetSite\": \"0x%08X\", "
-                "\"libraryNid\": \"0x%08X\", "
-                "\"functionNid\": \"0x%08X\", \"name\": ",
-                s->dispatch_key, s->addr, s->target_site, s->lib_nid,
-                s->func_nid);
+        fprintf(j, "    {\"key\": \"0x%08X\", \"stubAddress\": "
+                   "\"0x%08X\", \"targetSite\": \"0x%08X\", "
+                   "\"libraryNid\": \"0x%08X\", "
+                   "\"functionNid\": \"0x%08X\", \"name\": ",
+                s->dispatch_key, s->addr, s->target_site,
+                s->lib_nid, s->func_nid);
         json_string(j, full_name);
         fputs(", \"symbol\": ", j);
         json_string(j, sym);
@@ -3348,23 +2518,21 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
     }
     fputs("  ]},\n", j);
 
-    fprintf(j,
-            "  \"exports\": {\"count\": %u, \"functions\": %u, "
-            "\"variables\": %u, \"tlsVariables\": %u, \"items\": [\n",
+    fprintf(j, "  \"exports\": {\"count\": %u, \"functions\": %u, "
+               "\"variables\": %u, \"tlsVariables\": %u, \"items\": [\n",
             mod->export_count, mod->function_export_count,
             mod->variable_export_count, mod->tls_variable_export_count);
     for (uint32_t i = 0; i < mod->export_count; i++) {
         const vm_export *item = &mod->exports[i];
-        const char *kind = item->kind == VM_EXPORT_FUNCTION   ? "function"
-                           : item->kind == VM_EXPORT_VARIABLE ? "variable"
-                                                              : "tlsVariable";
-        fprintf(j,
-                "    {\"kind\": \"%s\", \"libraryNid\": "
-                "\"0x%08X\", \"nid\": \"0x%08X\", "
-                "\"address\": \"0x%08X\", \"dispatchKey\": ",
+        const char *kind = item->kind == VM_EXPORT_FUNCTION ? "function"
+            : item->kind == VM_EXPORT_VARIABLE ? "variable"
+            : "tlsVariable";
+        fprintf(j, "    {\"kind\": \"%s\", \"libraryNid\": "
+                   "\"0x%08X\", \"nid\": \"0x%08X\", "
+                   "\"address\": \"0x%08X\", \"dispatchKey\": ",
                 kind, item->library_nid, item->nid,
-                item->kind == VM_EXPORT_FUNCTION ? item->address & ~1u
-                                                 : item->address);
+                item->kind == VM_EXPORT_FUNCTION
+                    ? item->address & ~1u : item->address);
         if (item->kind == VM_EXPORT_FUNCTION)
             fprintf(j, "\"0x%08X\"", item->address);
         else
@@ -3381,14 +2549,13 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
         const char *name = nid_var_name(db, v->lib_nid, v->var_nid);
         char sym[96], full_name[192];
         var_symbol(sym, sizeof(sym), db, v, module_id);
-        fprintf(j,
-                "    {\"libraryNid\": \"0x%08X\", "
-                "\"variableNid\": \"0x%08X\", "
-                "\"stubAddress\": \"0x%08X\", \"name\": ",
+        fprintf(j, "    {\"libraryNid\": \"0x%08X\", "
+                   "\"variableNid\": \"0x%08X\", "
+                   "\"stubAddress\": \"0x%08X\", \"name\": ",
                 v->lib_nid, v->var_nid, v->stub);
         if (name) {
-            snprintf(full_name, sizeof(full_name), "%s::%s", lib ? lib : "?",
-                     name);
+            snprintf(full_name, sizeof(full_name), "%s::%s",
+                     lib ? lib : "?", name);
             json_string(j, full_name);
         } else {
             fputs("null", j);
@@ -3398,23 +2565,22 @@ static int write_module_sidecar(const char *outpath, const vm_image *img,
         fprintf(j, ", \"sites\": [");
         for (uint32_t s = 0; s < v->site_count; s++) {
             const vm_var_site *site = &v->sites[s];
-            fprintf(j,
-                    "%s{\"address\": \"0x%08X\", \"addend\": %u, "
-                    "\"relocationCode\": %u}",
+            fprintf(j, "%s{\"address\": \"0x%08X\", \"addend\": %u, "
+                       "\"relocationCode\": %u}",
                     s ? ", " : "", site->addr, site->addend, site->code);
         }
         fprintf(j, "]}%s\n", i + 1 == mod->var_count ? "" : ",");
     }
     fputs("  ]},\n", j);
-    fprintf(j,
-            "  \"report\": {\"schemaVersion\": %u, "
-            "\"structuralReady\": %s, \"productionReady\": %s, "
-            "\"strictUnsupported\": true, \"pcInstrumentation\": %s, "
-            "\"unclassifiedTrapCount\": %u}\n",
+    fprintf(j, "  \"report\": {\"schemaVersion\": %u, "
+               "\"structuralReady\": %s, \"productionReady\": %s, "
+               "\"strictUnsupported\": true, \"pcInstrumentation\": %s, "
+               "\"unclassifiedTrapCount\": %u}\n",
             VITA_GENERATED_REPORT_SCHEMA_VERSION,
             st->structural_ready ? "true" : "false",
             st->production_ready ? "true" : "false",
-            st->pc_instrumented ? "true" : "false", st->unclassified_traps);
+            st->pc_instrumented ? "true" : "false",
+            st->unclassified_traps);
     fputs("}\n", j);
     return fclose(j) != 0;
 }
@@ -3433,7 +2599,8 @@ static void write_generated_descriptor(FILE *f, const vm_module *mod,
                         st->entry_dispatch_key);
 
     fprintf(f, "\n/* versioned generated-module ABI */\n");
-    fprintf(f, "const vita_generated_module_descriptor %s = {\n", descriptor);
+    fprintf(f, "const vita_generated_module_descriptor %s = {\n",
+            descriptor);
     fprintf(f, "    VITA_GENERATED_MODULE_ABI_VERSION,\n");
     fprintf(f, "    (uint32_t)sizeof(vita_generated_module_descriptor),\n");
     if (module_id) {
@@ -3453,16 +2620,15 @@ static void write_generated_descriptor(FILE *f, const vm_module *mod,
     fprintf(f, "    0x%08Xu,\n", st->entry_dispatch_key);
     fprintf(f, "    %s,\n", st->entry_resolved ? entry : "0");
     fprintf(f, "    %uu,\n", st->entry_resolved);
-    fprintf(f, "    { %uu, %uu, 0x%08Xu, %uu, %uu, %uu },\n", st->tls_present,
-            st->tls_resolved, st->tls_address, st->tls_filesz, st->tls_memsz,
-            st->tls_alignment);
+    fprintf(f, "    { %uu, %uu, 0x%08Xu, %uu, %uu, %uu },\n",
+            st->tls_present, st->tls_resolved, st->tls_address,
+            st->tls_filesz, st->tls_memsz, st->tls_alignment);
     fprintf(f, "    %s,\n", mod->stub_count ? imports : "0");
     fprintf(f, "    %uu,\n", mod->stub_count);
     fprintf(f, "    %s,\n", mod->var_count ? vars : "0");
     fprintf(f, "    %uu,\n", mod->var_count);
-    fprintf(f,
-            "    { VITA_GENERATED_REPORT_SCHEMA_VERSION, %uu, %uu, 1u, "
-            "%uu, %uu, %uu, %uu, %uu }\n",
+    fprintf(f, "    { VITA_GENERATED_REPORT_SCHEMA_VERSION, %uu, %uu, 1u, "
+               "%uu, %uu, %uu, %uu, %uu }\n",
             st->structural_ready, st->production_ready,
             VITA_GENERATED_INSTRUMENT_FUNCTION_ENTRY |
                 (st->pc_instrumented ? VITA_GENERATED_INSTRUMENT_PC : 0u),
@@ -3475,11 +2641,9 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
                    const vf_result *disc, FILE *f, const char *outpath,
                    const char *impdir, const char *module_id, uint32_t limit,
                    emit_stats *st) {
-    if (module_id && !em_module_id_valid(module_id))
-        return 1;
+    if (module_id && !em_module_id_valid(module_id)) return 1;
     memset(st, 0, sizeof(*st));
-    if (vsites_build(mod))
-        return 1;
+    if (vsites_build(mod)) return 1;
     st->var_imports = mod->var_count;
 
     /* Functions per part. One translation unit per module was fine at a
@@ -3489,8 +2653,7 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
     uint32_t split = 2000;
     {
         const char *e = getenv("VITARECOMP_EMIT_SPLIT");
-        if (e && *e)
-            split = (uint32_t)strtoul(e, NULL, 10);
+        if (e && *e) split = (uint32_t)strtoul(e, NULL, 10);
     }
     /* And instructions per part, because functions are not of a size: of a
      * title's thirteen parts of 2,000 functions the largest was five times
@@ -3499,8 +2662,7 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
     uint32_t split_insns = 120000;
     {
         const char *e = getenv("VITARECOMP_EMIT_SPLIT_INSNS");
-        if (e && *e)
-            split_insns = (uint32_t)strtoul(e, NULL, 10);
+        if (e && *e) split_insns = (uint32_t)strtoul(e, NULL, 10);
     }
     {
         const char *e = getenv("VITARECOMP_EMIT_PC");
@@ -3511,8 +2673,7 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
 
     /* The functions to emit, in discovery order. */
     uint8_t *keep = (uint8_t *)calloc(disc->count ? disc->count : 1, 1);
-    uint32_t *list =
-        (uint32_t *)malloc((disc->count ? disc->count : 1) * sizeof(uint32_t));
+    uint32_t *list = (uint32_t *)malloc((disc->count ? disc->count : 1) * sizeof(uint32_t));
     if (!keep || !list) {
         free(keep);
         free(list);
@@ -3532,17 +2693,14 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
         return 1;
     }
     uint32_t nlist = 0;
-    for (uint32_t i = 0; i < disc->count; i++)
-        if (keep[i])
-            list[nlist++] = i;
+    for (uint32_t i = 0; i < disc->count; i++) if (keep[i]) list[nlist++] = i;
     (void)kept;
     st->funcs_discovered = disc->count;
-    st->funcs_dropped = disc->count - nlist;
-    st->funcs_promoted = promoted;
+    st->funcs_dropped    = disc->count - nlist;
+    st->funcs_promoted   = promoted;
 
     uint32_t n_funcs = nlist;
-    if (limit && limit < n_funcs)
-        n_funcs = limit;
+    if (limit && limit < n_funcs) n_funcs = limit;
 
     /* Every address that is a defined symbol in this output, sorted for lookup.
      * Under --limit the un-emitted ones still get trapping stubs, so they are
@@ -3558,16 +2716,13 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
         g_nvsites = 0;
         return 1;
     }
-    for (uint32_t i = 0; i < nlist; i++)
-        fs.v[i] = func_key(&disc->funcs[list[i]]);
+    for (uint32_t i = 0; i < nlist; i++) fs.v[i] = func_key(&disc->funcs[list[i]]);
     qsort(fs.v, fs.n, sizeof(uint32_t), fs_cmp);
 
     fprintf(f, "/* Generated by armrecomp. Do not edit.\n");
     fprintf(f, " *\n");
     fprintf(f, " * module: %s\n", mod->info.name);
-    fprintf(
-        f, " * %u functions emitted of %u discovered; the rest are reachable\n",
-        nlist, disc->count);
+    fprintf(f, " * %u functions emitted of %u discovered; the rest are reachable\n", nlist, disc->count);
     fprintf(f, " * from no entry point, export or stored pointer\n");
     fprintf(f, " */\n\n");
     /* Every import the module could call and every function, declared in one
@@ -3576,9 +2731,7 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
      * the declaration set stable: adding functions to the emit does not
      * change which symbols exist. */
     if (write_header(outpath, mod, db, disc, list, nlist, module_id)) {
-        free(fs.v);
-        free(keep);
-        free(list);
+        free(fs.v); free(keep); free(list);
         free(g_vsites);
         g_vsites = NULL;
         g_nvsites = 0;
@@ -3606,16 +2759,13 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
      * a stub that traps. Without this the output would not link, and a silently
      * missing function is exactly the failure this project refuses. */
     if (n_funcs < nlist) {
-        fprintf(
-            f,
-            "/* Not emitted under --limit; present so the output links. */\n");
+        fprintf(f, "/* Not emitted under --limit; present so the output links. */\n");
         for (uint32_t i = n_funcs; i < nlist; i++) {
             char sym[96];
             function_symbol(sym, sizeof(sym), module_id,
                             func_key(&disc->funcs[list[i]]));
-            fprintf(f,
-                    "void %s(void) { vita_trap_unimpl(0x%08X, 0, "
-                    "\"not emitted\"); }\n",
+            fprintf(f, "void %s(void) { vita_trap_unimpl(0x%08X, 0, "
+                       "\"not emitted\"); }\n",
                     sym, disc->funcs[list[i]].addr);
         }
         fprintf(f, "\n");
@@ -3623,17 +2773,15 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
 
     /* The bodies, into parts. The main file keeps everything else. */
     FILE *part = NULL;
-    FILE *out = f;
+    FILE *out  = f;
     st->parts = 0;
     uint32_t in_part = 0, insns_in_part = 0;
     uint32_t inventory = UINT32_MAX;
     uint32_t main_inventory = UINT32_MAX;
     for (uint32_t li = 0; li < n_funcs; li++) {
         const vf_func *fn = &disc->funcs[list[li]];
-        if (split && (li == 0 || in_part >= split ||
-                      (split_insns && insns_in_part >= split_insns))) {
-            if (part && fclose(part) != 0)
-                generation_error = 1;
+        if (split && (li == 0 || in_part >= split || (split_insns && insns_in_part >= split_insns))) {
+            if (part && fclose(part) != 0) generation_error = 1;
             part = open_part(outpath, st->parts, base);
             if (part) {
                 uint32_t part_index = st->parts++;
@@ -3672,19 +2820,13 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
         char fn_symbol[96];
         function_symbol(fn_symbol, sizeof(fn_symbol), module_id, func_key(fn));
 
-        fprintf(pf, "/* "
-                    "----------------------------------------------------------"
-                    "-----\n");
-        fprintf(pf, " * %s  --  %u instructions, %u bytes, %s%s\n", fn_symbol,
-                b.n, fn->end - fn->addr, fn->mode == ARM_T32 ? "Thumb" : "ARM",
-                fn->from_heuristic == VF_SHAPE
-                    ? ", discovered by shape (heuristic)"
-                : fn->from_heuristic == VF_RELOC ? ", discovered by relocation"
-                                                 : "");
-        fprintf(
-            pf,
-            " * ------------------------------------------------------------- "
-            "*/\n");
+        fprintf(pf, "/* ---------------------------------------------------------------\n");
+        fprintf(pf, " * %s  --  %u instructions, %u bytes, %s%s\n",
+                fn_symbol, b.n, fn->end - fn->addr,
+                fn->mode == ARM_T32 ? "Thumb" : "ARM",
+                fn->from_heuristic == VF_SHAPE ? ", discovered by shape (heuristic)"
+              : fn->from_heuristic == VF_RELOC ? ", discovered by relocation" : "");
+        fprintf(pf, " * ------------------------------------------------------------- */\n");
         fprintf(pf, "void %s(void) {\n", fn_symbol);
         /* The function-entry trace: a global test and a branch while off. */
         fprintf(pf, "    vita_trace_fn(0x%08Xu);\n", func_key(fn));
@@ -3699,10 +2841,9 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
                 fprintf(pf, "    vita_trace_pc(0x%08Xu);\n", in->addr);
 
             fprintf(pf, "    /* %08X  %-16s */\n", in->addr, in->mnemonic);
-            if (emit_insn(img, mod, db, &fs, &b, in, pf, st, module_id))
-                st->translated++;
-            else
-                st->trapped++;
+            if (emit_insn(img, mod, db, &fs, &b, in, pf, st,
+                          module_id)) st->translated++;
+            else                               st->trapped++;
             st->insns++;
         }
 
@@ -3710,10 +2851,7 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
          * flow with nowhere to go. Silence here is a return from the middle
          * of a function; a trap names the place. */
         if (b.cut_at) {
-            fprintf(pf,
-                    "    vita_trap_unimpl(0x%08X, 0, \"body cut short: no "
-                    "return reached\");\n",
-                    b.cut_at);
+            fprintf(pf, "    vita_trap_unimpl(0x%08X, 0, \"body cut short: no return reached\");\n", b.cut_at);
             st->bodies_cut++;
         }
         fprintf(pf, "}\n\n");
@@ -3727,24 +2865,19 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
                 inv->first_key = key;
                 inv->last_key = key;
             } else {
-                if (key < inv->first_key)
-                    inv->first_key = key;
-                if (key > inv->last_key)
-                    inv->last_key = key;
+                if (key < inv->first_key) inv->first_key = key;
+                if (key > inv->last_key) inv->last_key = key;
             }
             inv->funcs++;
             inv->insns += b.n;
         }
-        if (split && in_part > st->part_funcs)
-            st->part_funcs = in_part;
+        if (split && in_part > st->part_funcs) st->part_funcs = in_part;
 
         free(b.v);
         free(b.labels);
     }
-    if (part && fclose(part) != 0)
-        generation_error = 1;
-    if (!split)
-        st->part_funcs = n_funcs;
+    if (part && fclose(part) != 0) generation_error = 1;
+    if (!split) st->part_funcs = n_funcs;
 
     /* --- the HLE defaults ----------------------------------------------------
      *
@@ -3765,7 +2898,7 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
             char sym[96], full_name[192];
             hle_symbol(sym, sizeof(sym), db, s);
             const char *lib = nid_lib_name(db, s->lib_nid);
-            const char *fn = nid_func_name(db, s->lib_nid, s->func_nid);
+            const char *fn  = nid_func_name(db, s->lib_nid, s->func_nid);
             import_display_name(full_name, sizeof(full_name), db, s);
 
             char path[1200];
@@ -3782,20 +2915,17 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
                     lib ? lib : "?", fn ? fn : "(unresolved)", s->addr,
                     mod->info.name);
             fprintf(one, " *\n");
-            fprintf(one, " * The default: trap by name. To implement it, "
-                         "define this symbol\n");
-            fprintf(one, " * in the runtime and relink -- this file is one "
-                         "member of a static\n");
-            fprintf(one, " * library, so the linker stops extracting it. "
-                         "Nothing to delete.\n");
+            fprintf(one, " * The default: trap by name. To implement it, define this symbol\n");
+            fprintf(one, " * in the runtime and relink -- this file is one member of a static\n");
+            fprintf(one, " * library, so the linker stops extracting it. Nothing to delete.\n");
             fprintf(one, " */\n\n");
             fprintf(one, "#include \"vitarecomp/recomp_rt.h\"\n\n");
-            fprintf(one, "void %s(void) { vita_trap_import(0x%08X, 0x%08X, ",
+            fprintf(one,
+                    "void %s(void) { vita_trap_import(0x%08X, 0x%08X, ",
                     sym, s->addr, s->func_nid);
             c_string(one, full_name);
             fputs("); }\n", one);
-            if (fclose(one) != 0)
-                generation_error = 1;
+            if (fclose(one) != 0) generation_error = 1;
             st->imports_used++;
         }
     }
@@ -3815,35 +2945,29 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
      * shape already (guest address -> void(void)), both lists arrive sorted,
      * and merging keeps vita_dispatch a single binary search.
      */
-    fprintf(
-        f,
-        "/* ---------------------------------------------------------------\n");
+    fprintf(f, "/* ---------------------------------------------------------------\n");
     fprintf(f, " * dispatch table -- %u functions + %u import stubs,\n",
             disc->count, mod->stub_count);
     fprintf(f, " * sorted by guest address\n");
-    fprintf(f,
-            " * ------------------------------------------------------------- "
-            "*/\n");
+    fprintf(f, " * ------------------------------------------------------------- */\n");
     char dispatch_sym[128], register_sym[128];
     module_symbol(dispatch_sym, sizeof(dispatch_sym), "vita_functions",
                   module_id);
-    module_symbol(register_sym, sizeof(register_sym), "vita_register_functions",
-                  module_id);
-    fprintf(f, "static const vita_dispatch_entry %s[] = {\n", dispatch_sym);
+    module_symbol(register_sym, sizeof(register_sym),
+                  "vita_register_functions", module_id);
+    fprintf(f, "static const vita_dispatch_entry %s[] = {\n",
+            dispatch_sym);
     {
         uint32_t fi = 0, si = 0;
         while (fi < fs.n || si < mod->stub_count) {
             int take_stub;
-            uint32_t stub_key =
-                si < mod->stub_count ? mod->stubs[si].dispatch_key : 0u;
-            if (fi >= fs.n)
-                take_stub = 1;
-            else if (si >= mod->stub_count)
-                take_stub = 0;
-            else if (stub_key < fs.v[fi])
-                take_stub = 1;
-            else if (stub_key > fs.v[fi])
-                take_stub = 0;
+            uint32_t stub_key = si < mod->stub_count
+                ? mod->stubs[si].dispatch_key
+                : 0u;
+            if (fi >= fs.n)                            take_stub = 1;
+            else if (si >= mod->stub_count)            take_stub = 0;
+            else if (stub_key < fs.v[fi])              take_stub = 1;
+            else if (stub_key > fs.v[fi])              take_stub = 0;
             else {
                 /* Both lists claim this address. The stub wins: being in the
                  * import table is what the address MEANS, and the bytes
@@ -3870,12 +2994,11 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
             st->dispatch_entries++;
         }
     }
-    if (!st->dispatch_entries)
-        fprintf(f, "    { 0u, 0 }\n");
+    if (!st->dispatch_entries) fprintf(f, "    { 0u, 0 }\n");
     fprintf(f, "};\n\n");
     fprintf(f, "void %s(void) {\n", register_sym);
-    fprintf(f, "    vita_dispatch_init(%s, %uu);\n", dispatch_sym,
-            st->dispatch_entries);
+    fprintf(f, "    vita_dispatch_init(%s, %uu);\n",
+            dispatch_sym, st->dispatch_entries);
     fprintf(f, "}\n");
 
     {
@@ -3889,8 +3012,10 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
             char target[128], full_name[192];
             import_display_name(full_name, sizeof(full_name), db, s);
             import_target_symbol(target, sizeof(target), s, module_id);
-            fprintf(f, "    { 0x%08Xu, 0x%08Xu, 0x%08Xu, 0x%08Xu, ", s->lib_nid,
-                    s->func_nid, s->dispatch_key, s->target_site);
+            fprintf(f,
+                    "    { 0x%08Xu, 0x%08Xu, 0x%08Xu, 0x%08Xu, ",
+                    s->lib_nid, s->func_nid, s->dispatch_key,
+                    s->target_site);
             c_string(f, full_name);
             fprintf(f, ", 1u, &%s },\n", target);
         }
@@ -3912,15 +3037,12 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
         fprintf(f, "uint32_t %s;\n", sym);
         uint32_t nabs = 0;
         for (uint32_t s = 0; s < mod->vars[i].site_count; s++)
-            if (mod->vars[i].sites[s].code == 2)
-                nabs++;
-        if (!nabs)
-            continue;
+            if (mod->vars[i].sites[s].code == 2) nabs++;
+        if (!nabs) continue;
         fprintf(f, "static const vita_var_site %s_words[] = {", sym);
         uint32_t k = 0;
         for (uint32_t s = 0; s < mod->vars[i].site_count; s++) {
-            if (mod->vars[i].sites[s].code != 2)
-                continue;
+            if (mod->vars[i].sites[s].code != 2) continue;
             fprintf(f, "%s{ 0x%08Xu, %uu },", (k % 4) ? " " : "\n    ",
                     mod->vars[i].sites[s].addr, mod->vars[i].sites[s].addend);
             k++;
@@ -3936,48 +3058,43 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
         char sym[96];
         var_symbol(sym, sizeof(sym), db, &mod->vars[i], module_id);
         const char *lib = nid_lib_name(db, mod->vars[i].lib_nid);
-        const char *vn =
-            nid_var_name(db, mod->vars[i].lib_nid, mod->vars[i].var_nid);
+        const char *vn  = nid_var_name(db, mod->vars[i].lib_nid, mod->vars[i].var_nid);
         uint32_t nabs = 0;
         for (uint32_t s = 0; s < mod->vars[i].site_count; s++)
-            if (mod->vars[i].sites[s].code == 2)
-                nabs++;
-        fprintf(f, "    { 0x%08Xu, 0x%08Xu, ", mod->vars[i].lib_nid,
-                mod->vars[i].var_nid);
-        if (vn)
-            fprintf(f, "\"%s::%s\", ", lib ? lib : "?", vn);
-        else
-            fprintf(f, "0, ");
+            if (mod->vars[i].sites[s].code == 2) nabs++;
+        fprintf(f, "    { 0x%08Xu, 0x%08Xu, ", mod->vars[i].lib_nid, mod->vars[i].var_nid);
+        if (vn) fprintf(f, "\"%s::%s\", ", lib ? lib : "?", vn);
+        else    fprintf(f, "0, ");
         fprintf(f, "&%s, ", sym);
-        if (nabs)
-            fprintf(f, "%s_words, %uu },\n", sym, nabs);
-        else
-            fprintf(f, "0, 0u },\n");
+        if (nabs) fprintf(f, "%s_words, %uu },\n", sym, nabs);
+        else      fprintf(f, "0, 0u },\n");
     }
-    if (!mod->var_count)
-        fprintf(f, "    { 0u, 0u, 0, 0, 0, 0u }\n");
+    if (!mod->var_count) fprintf(f, "    { 0u, 0u, 0, 0, 0, 0u }\n");
     fprintf(f, "};\n");
-    fprintf(f, "const uint32_t %s = %uu;\n", vars_count_sym, mod->var_count);
+    fprintf(f, "const uint32_t %s = %uu;\n",
+            vars_count_sym, mod->var_count);
 
     /* Preserve the module_start metadata address while using the normalized
      * Thumb dispatch key that discovery seeded for symbols and calls. */
     if (mod->have_info && mod->info.module_start != 0xFFFFFFFFu) {
-        uint32_t raw = img->seg_vaddr + (mod->info.module_start & 0x3FFFFFFFu);
+        uint32_t raw = img->seg_vaddr +
+                       (mod->info.module_start & 0x3FFFFFFFu);
         uint32_t key = vita_module_start_dispatch_key(raw);
         char addr_sym[128], start_sym[128], fn_sym[96];
         st->entry_present = 1;
         st->entry_raw_address = raw;
         st->entry_dispatch_key = key;
         st->entry_resolved = fs_has(&fs, key) && !vm_find_stub(mod, key);
-        module_symbol(addr_sym, sizeof(addr_sym), "vita_module_start_addr",
-                      module_id);
+        module_symbol(addr_sym, sizeof(addr_sym),
+                      "vita_module_start_addr", module_id);
         module_symbol(start_sym, sizeof(start_sym), "vita_module_start",
                       module_id);
         fprintf(f, "\n/* module_start */\n");
         fprintf(f, "const uint32_t %s = 0x%08Xu;\n", addr_sym, raw);
         if (st->entry_resolved) {
             function_symbol(fn_sym, sizeof(fn_sym), module_id, key);
-            fprintf(f, "void %s(void) { vita_call(%s); }\n", start_sym, fn_sym);
+            fprintf(f, "void %s(void) { vita_call(%s); }\n",
+                    start_sym, fn_sym);
         }
     }
 
@@ -4005,8 +3122,8 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
             }
             if (tls_base && off <= tls_len &&
                 mod->info.tls_filesz <= tls_len - off &&
-                mod->info.tls_filesz <= mod->info.tls_memsz && tls_align &&
-                (tls_align & (tls_align - 1u)) == 0 &&
+                mod->info.tls_filesz <= mod->info.tls_memsz &&
+                tls_align && (tls_align & (tls_align - 1u)) == 0 &&
                 tls_base <= UINT32_MAX - off) {
                 taddr = tls_base + off;
                 tfile = mod->info.tls_filesz;
@@ -4024,27 +3141,27 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
                       "vita_module_tls_addr", module_id);
         module_symbol(tls_file_sym, sizeof(tls_file_sym),
                       "vita_module_tls_filesz", module_id);
-        module_symbol(tls_mem_sym, sizeof(tls_mem_sym), "vita_module_tls_memsz",
-                      module_id);
+        module_symbol(tls_mem_sym, sizeof(tls_mem_sym),
+                      "vita_module_tls_memsz", module_id);
         fprintf(f, "\n/* thread-local image */\n");
-        fprintf(f, "const uint32_t %s = 0x%08Xu;\n", tls_addr_sym, taddr);
-        fprintf(f, "const uint32_t %s = %uu;\n", tls_file_sym, tfile);
-        fprintf(f, "const uint32_t %s = %uu;\n", tls_mem_sym, tmem);
+        fprintf(f, "const uint32_t %s = 0x%08Xu;\n",
+                tls_addr_sym, taddr);
+        fprintf(f, "const uint32_t %s = %uu;\n",
+                tls_file_sym, tfile);
+        fprintf(f, "const uint32_t %s = %uu;\n",
+                tls_mem_sym, tmem);
     }
 
-    if (ferror(f))
-        generation_error = 1;
+    if (ferror(f)) generation_error = 1;
     finalize_stats(mod, module_id, st);
-    if (generation_error)
-        st->structural_ready = 0;
+    if (generation_error) st->structural_ready = 0;
     write_generated_descriptor(f, mod, module_id, st);
 
     if (write_reports(outpath, mod, module_id, st))
         generation_error = 1;
     if (write_module_sidecar(outpath, img, mod, db, &fs, module_id, st))
         generation_error = 1;
-    if (ferror(f))
-        generation_error = 1;
+    if (ferror(f)) generation_error = 1;
 
     free(fs.v);
     free(list);
@@ -4058,6 +3175,6 @@ int em_emit_module(const vm_image *img, const vm_module *mod, const nid_db *db,
 int em_emit(const vm_image *img, const vm_module *mod, const nid_db *db,
             const vf_result *disc, FILE *f, const char *outpath,
             const char *impdir, uint32_t limit, emit_stats *st) {
-    return em_emit_module(img, mod, db, disc, f, outpath, impdir, NULL, limit,
-                          st);
+    return em_emit_module(img, mod, db, disc, f, outpath, impdir, NULL,
+                          limit, st);
 }

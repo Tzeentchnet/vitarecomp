@@ -198,7 +198,8 @@ static void test_variable_relocation_segments(void) {
     put32(bytes, 0xC0, 0x55667788u);
     put32(bytes, 0xC4, BASE + 0xD0);
     put32(bytes, 0xD0, 24u << 4);
-    put32(bytes, 0xD4, 1u | (2u << 4) | (2u << 8) | (0xABCDu << 16));
+    put32(bytes, 0xD4,
+          1u | (2u << 4) | (2u << 8) | (0xABCDu << 16));
     put32(bytes, 0xD8, 0);
     put32(bytes, 0xDC, 2u | (2u << 4) | (2u << 8));
     put32(bytes, 0xE0, 4);
@@ -302,12 +303,12 @@ int main(void) {
     assert(strstr(text, "void vita_func_00001060(void)"));
     assert(strstr(text, "void vita_func_00001061(void)"));
     assert(count_text(text, "if (vita_cond(1)) {") >= 4);
-    assert(strstr(text, "{ uint32_t vita_blx_target = lr; lr = 0x00001024u; "
-                        "vita_dispatch(0x00001020, vita_blx_target); }"));
+    assert(strstr(text,
+        "{ uint32_t vita_blx_target = lr; lr = 0x00001024u; "
+        "vita_dispatch(0x00001020, vita_blx_target); }"));
     assert(strstr(text, "vita_dispatch(0x00001040, r3); return;"));
     assert(strstr(text, "vita_trap_unimpl(0x00001050, 0x1F000007"));
-    assert(strstr(
-        text,
+    assert(strstr(text,
         "vita_write8(r0 + 0, (uint8_t)vita_neon_lane(vita_d_get(0), 0, 8));"));
     assert(!strstr(text, "vita_write16(r0 + 0"));
     assert(!strstr(text, "vita_write32(r0 + 0"));
@@ -357,8 +358,8 @@ int main(void) {
     const char *repeat_path = "test_emit_repeat.c";
     FILE *repeat = fopen(repeat_path, "wb");
     assert(repeat);
-    assert(em_emit(&img, &mod, NULL, &disc, repeat, repeat_path, ".", 0,
-                   &repeat_stats) == 0);
+    assert(em_emit(&img, &mod, NULL, &disc, repeat, repeat_path, ".",
+                   0, &repeat_stats) == 0);
     fclose(repeat);
     char *repeat_json = read_all("test_emit_repeat.report.json");
     char *repeat_report = read_all("test_emit_repeat.report.txt");
@@ -430,7 +431,8 @@ int main(void) {
     char *module_report = read_all("test_emit_module.report.json");
     char *module_report_text = read_all("test_emit_module.report.txt");
     char *versioned_sidecar = read_all("test_emit_module.module.json");
-    assert(strstr(module_text, "void vita_func_synthetic_mod_00001060(void)"));
+    assert(strstr(module_text,
+                  "void vita_func_synthetic_mod_00001060(void)"));
     assert(!strstr(module_text, "void vita_func_00001060(void)"));
     assert(strstr(module_text,
                   "void vita_register_functions_synthetic_mod(void)"));
@@ -440,13 +442,17 @@ int main(void) {
     assert(strstr(module_text,
                   "vita_fn vita_import_target_synthetic_mod_000010A4 = "
                   "vita_hle_nid_AABBCCDD;"));
-    assert(strstr(module_text, "const vita_fn_import "
-                               "vita_fn_imports_synthetic_mod[]"));
-    assert(strstr(module_text, "\"nid_10203040::nid_AABBCCDD\", 1u"));
+    assert(strstr(module_text,
+                  "const vita_fn_import "
+                  "vita_fn_imports_synthetic_mod[]"));
+    assert(strstr(module_text,
+                  "\"nid_10203040::nid_AABBCCDD\", 1u"));
     assert(!strstr(module_text, "vita_hle_synthetic_mod"));
-    assert(strstr(module_text, "const vita_generated_module_descriptor "
-                               "vita_generated_module_synthetic_mod"));
-    assert(strstr(module_text, "vita_func_synthetic_mod_00001061"));
+    assert(strstr(module_text,
+                  "const vita_generated_module_descriptor "
+                  "vita_generated_module_synthetic_mod"));
+    assert(strstr(module_text,
+                  "vita_func_synthetic_mod_00001061"));
     assert(strstr(module_text, "vita_trace_pc(0x00001000u);"));
     assert(strstr(module_header,
                   "extern const vita_generated_module_descriptor "
@@ -456,42 +462,52 @@ int main(void) {
     assert(strstr(module_report,
                   "\"instrumentation\": {\"functionEntry\": true, "
                   "\"pc\": true}"));
-    assert(strstr(module_report, "\"entry\": {\"present\": true, "
-                                 "\"rawAddress\": \"0x00001060\", "
-                                 "\"dispatchKey\": \"0x00001061\", "
-                                 "\"resolved\": true}"));
+    assert(strstr(module_report,
+                  "\"entry\": {\"present\": true, "
+                  "\"rawAddress\": \"0x00001060\", "
+                  "\"dispatchKey\": \"0x00001061\", "
+                  "\"resolved\": true}"));
     assert(strstr(module_report,
                   "\"tls\": {\"present\": true, \"resolved\": true, "
                   "\"address\": \"0x00001080\", \"fileSize\": 4, "
                   "\"memorySize\": 8, \"alignment\": 64}"));
-    assert(strstr(versioned_sidecar, "\"entry\": {\"present\": true, "
-                                     "\"rawAddress\": \"0x00001060\", "
-                                     "\"dispatchKey\": \"0x00001061\""));
-    assert(strstr(versioned_sidecar, "\"memorySize\": 8, \"alignment\": 64"));
+    assert(strstr(versioned_sidecar,
+                  "\"entry\": {\"present\": true, "
+                  "\"rawAddress\": \"0x00001060\", "
+                  "\"dispatchKey\": \"0x00001061\""));
+    assert(strstr(versioned_sidecar,
+                  "\"memorySize\": 8, \"alignment\": 64"));
     assert(strstr(versioned_sidecar, "\"id\": \"synthetic_mod\""));
-    assert(strstr(versioned_sidecar, "\"ranges\": {\"load\": ["));
-    assert(strstr(versioned_sidecar, "\"exports\": {\"count\": 0"));
+    assert(strstr(versioned_sidecar,
+                  "\"ranges\": {\"load\": ["));
+    assert(strstr(versioned_sidecar,
+                  "\"exports\": {\"count\": 0"));
     assert(strstr(versioned_sidecar, "\"key\": \"0x00001061\""));
     assert(strstr(versioned_sidecar, "\"key\": \"0x00001090\""));
     assert(strstr(versioned_sidecar,
                   "\"key\": \"0x00001090\", \"stubAddress\": "
                   "\"0x00001090\""));
     assert(strstr(versioned_sidecar, "\"kind\": \"functionImport\""));
-    assert(strstr(versioned_sidecar, "\"targetSite\": \"0x000010A4\""));
+    assert(strstr(versioned_sidecar,
+                  "\"targetSite\": \"0x000010A4\""));
     assert(strstr(versioned_sidecar,
                   "\"targetSlot\": "
                   "\"vita_import_target_synthetic_mod_000010A4\""));
-    assert(
-        strstr(versioned_sidecar, "\"name\": \"nid_10203040::nid_AABBCCDD\""));
-    assert(strstr(versioned_sidecar, "\"strictUnsupported\": true"));
+    assert(strstr(versioned_sidecar,
+                  "\"name\": \"nid_10203040::nid_AABBCCDD\""));
+    assert(strstr(versioned_sidecar,
+                  "\"strictUnsupported\": true"));
     assert(count_text(versioned_sidecar, "\"kind\": ") ==
            module_stats.dispatch_entries);
-    assert(strstr(versioned_sidecar, "\"libraryNid\": \"0x11223344\""));
-    assert(strstr(versioned_sidecar, "\"variableNid\": \"0x55667788\""));
+    assert(strstr(versioned_sidecar,
+                  "\"libraryNid\": \"0x11223344\""));
+    assert(strstr(versioned_sidecar,
+                  "\"variableNid\": \"0x55667788\""));
     assert(strstr(versioned_sidecar,
                   "\"address\": \"0x00001090\", \"addend\": 8, "
                   "\"relocationCode\": 2"));
-    assert(strstr(versioned_sidecar, "\"pcInstrumentation\": true"));
+    assert(strstr(versioned_sidecar,
+                  "\"pcInstrumentation\": true"));
     assert(!strstr(versioned_sidecar, "\"path\""));
     assert(!strstr(versioned_sidecar, "\"contentHash\""));
 
@@ -504,9 +520,12 @@ int main(void) {
     fclose(module_repeat_out);
     char *module_repeat_text = read_all(module_path);
     char *module_repeat_header = read_all("test_emit_module.h");
-    char *module_repeat_report = read_all("test_emit_module.report.json");
-    char *module_repeat_report_text = read_all("test_emit_module.report.txt");
-    char *module_repeat_sidecar = read_all("test_emit_module.module.json");
+    char *module_repeat_report =
+        read_all("test_emit_module.report.json");
+    char *module_repeat_report_text =
+        read_all("test_emit_module.report.txt");
+    char *module_repeat_sidecar =
+        read_all("test_emit_module.module.json");
     assert(strcmp(module_text, module_repeat_text) == 0);
     assert(strcmp(module_header, module_repeat_header) == 0);
     assert(strcmp(module_report, module_repeat_report) == 0);
@@ -521,8 +540,10 @@ int main(void) {
     assert(module_repeat_stats.trapped == module_stats.trapped);
 
     {
-        const char *compose_inputs[] = {"test_emit_module.report.json",
-                                        "test_emit_module.module.json"};
+        const char *compose_inputs[] = {
+            "test_emit_module.report.json",
+            "test_emit_module.module.json"
+        };
         char compose_error[512];
         char *aggregate;
         assert(ac_compose("test_emit_registry.c", "synthetic_mod",
